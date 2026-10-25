@@ -55,9 +55,9 @@ class CommandHeaderComposeTest {
     private val hero = hasTestTag("monitor.command.hero")
     private val iso = hasContentDescription("ISO:", substring = true)
 
-    @Test fun portraitCommandShowsOnlyTheHeroTimecode() = onlyTheHero(portrait = true)
+    @Test fun portraitCommandShowsOnlyTheHeroTimecode(): Unit = onlyTheHero(portrait = true)
 
-    @Test fun landscapeCommandShowsOnlyTheHeroTimecode() = onlyTheHero(portrait = false)
+    @Test fun landscapeCommandShowsOnlyTheHeroTimecode(): Unit = onlyTheHero(portrait = false)
 
     private fun onlyTheHero(portrait: Boolean) {
         show(portrait)

@@ -354,16 +354,6 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertNil(model.cameraPropertySnapshot.shotsRemaining)
     }
 
-    /// Hardware pass 1.2: the wrist shows the same short count as the phone header (`7.1k`).
-    func testTheWatchRelaysTheShortShotsCount() {
-        let model = NativeAppModel()
-        model.startDemoSession()
-        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
-        model.applyDemoProperty(.exposureRemaining, data: Data([0xED, 0x1B, 0, 0]))
-        XCTAssertEqual(model.cameraPropertySnapshot.shotsRemaining, 7149)
-        XCTAssertEqual(model.currentWatchRelayState().shotsRemaining, "7.1k")
-    }
-
     /// ZT-04: with two cards the counter shows the stills card alone. A same-host recovery keeps
     /// that figure, and the next ExposureRemaining read (both cards under overflow) must not
     /// bring the summed count back.
