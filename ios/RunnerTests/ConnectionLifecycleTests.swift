@@ -23,6 +23,34 @@ struct ConnectionLifecycleTests {
         return model
     }
 
+    /// Hardware pass 2026-10-25 (1.11): the wait for a dozing body ran under "Establishing a
+    /// secure link" with no waiting step.
+    @Test("The body wake shows its waiting step and hands back to the handshake on an answer")
+    func bodyWakeShowsTheWaitingStep() {
+        let model = model()
+        model.noteBodyWake(.waiting)
+        #expect(model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: ""))
+        model.noteBodyWake(.answered)
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+    }
+
+    @Test("A late wake step from a superseded attempt never touches the current one")
+    func staleWakeProgressIsDropped() async {
+        let model = model()
+        struct Superseded: Error {}
+        let stale = model.bodyWakeProgressHandler(requireCurrent: { throw Superseded() })
+        stale(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+        let current = model.bodyWakeProgressHandler(requireCurrent: {})
+        current(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.isAwaitingBodyWake)
+    }
+
     @Test("Cancel retires an unanswered take-over before a late confirmation")
     func cancelledTakeOverCannotStartConnection() {
         let model = model()
@@ -350,6 +378,8 @@ struct SessionRecoveryPictureTests {
         var establishing = false
         var picture: (sourceAt: TimeInterval?, presentedAt: TimeInterval?) = (nil, nil)
         var onConnect: () -> Void = {}
+        /// The device a presence sweep names as holding the camera.
+        var holder: String?
         private var sleepers: [Sleeper] = []
 
         var peers: NativeAppModel.SessionRecoveryPeers {
@@ -362,7 +392,8 @@ struct SessionRecoveryPictureTests {
                 hasControlSession: { [unowned self] in controlReady },
                 picture: { [unowned self] in picture },
                 now: { [unowned self] in time },
-                sleep: { [unowned self] in try await pause($0) })
+                sleep: { [unowned self] in try await pause($0) },
+                holder: holder == nil ? nil : { @MainActor [unowned self] _ in holder })
         }
 
         private func pause(_ duration: Duration) async throws {
@@ -490,6 +521,34 @@ struct SessionRecoveryPictureTests {
         #expect(handedOver)
         #expect(peer.time <= 180.001, "automatic recovery ran \(peer.time) s")
         #expect(peer.connects > 1, "a control-only attempt is retried, not accepted")
+        model.exitMonitorToOperatorMenu()
+    }
+
+    /// OpenCine #253: before the first attempt dials, presence is asked three times, one second
+    /// apart. Those pauses run on the episode's clock; on a wall-clock sleep the first attempt
+    /// never dialed inside a virtual drive (Core 238bb3a pin, run 40171934283).
+    @Test("The first attempt's presence asks run on the episode clock, then it dials")
+    func firstAttemptPresenceAsksUseTheEpisodeClock() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        var asks: [TimeInterval] = []
+        var peers = peer.peers
+        peers.holder = { _ in
+            asks.append(peer.time)
+            return nil
+        }
+        let model = NativeAppModel()
+        model.cameraHost = "192.168.1.30"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peers
+
+        model.debugSimulateTransportDetach()
+        let dialed = await peer.drive(until: 10) { peer.connects == 1 }
+
+        #expect(dialed)
+        #expect(asks.count == 3, "asks: \(asks)")
+        #expect(
+            zip(asks, asks.dropFirst()).allSatisfy { abs($1 - $0 - 1) < 0.001 }, "asks: \(asks)")
         model.exitMonitorToOperatorMenu()
     }
 }
@@ -1119,4 +1178,66 @@ struct RefusedCameraWiFiJoinTests {
             return
         }
     }
+}
+
+/// Hardware pass 4.1 (iPhone and Galaxy S25 on one Nikon ZR): after the Galaxy took the camera,
+/// the iPhone showed "Camera taken over" while its old live-view pumps kept running on the dropped
+/// link, and an in-place reconnect from them took the camera back three seconds later. The ZR hung
+/// after the repeated hand-overs. A taken-over monitor retires its old link without a word to the
+/// body and never dials. SIMULATED transport and virtual clock (`SessionRecoveryPeers`).
+@MainActor
+@Suite("Take-over recovery")
+struct TakeOverRecoveryTests {
+    @Test("A taken-over monitor retires the old link's pumps and never dials")
+    func takenOverRetiresTheOldLinkAndNeverDials() async {
+        let peer = SessionRecoveryPictureTests.Peer()
+        peer.holder = "Galaxy S25"
+        let model = NativeAppModel()
+        model.cameraHost = "192.168.1.30"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peer.peers
+        let runtime = NikonMonitorRuntime(link: ParkedMonitorLink())
+        model.debugAttachMonitorRuntime(runtime)
+        defer { model.debugAttachMonitorRuntime(nil) }
+        runtime.startKeepAlive(isBusy: { false }, failures: { _ in }, recover: {})
+        runtime.startEventDrain(receive: { _ in }, unexpectedEnd: {})
+        #expect(runtime.hasBackgroundPumps)
+
+        model.debugSimulateTransportDetach()
+        let stopped = await peer.drive(until: 30) {
+            model.sessionRecovery == .takenOver(holder: "Galaxy S25")
+        }
+
+        #expect(stopped)
+        #expect(peer.connects == 0, "a taken-over monitor never dials the camera")
+        #expect(!runtime.hasBackgroundPumps, "nothing more goes over the dropped link")
+        #expect(!model.sessionRecovery.claimsCamera)
+        model.exitMonitorToOperatorMenu()
+    }
+}
+
+/// A link whose pushed-event read parks until the runtime retires it.
+@MainActor
+private final class ParkedMonitorLink: NikonMonitorLink {
+    let serialNumber = "SIMULATED"
+
+    func supportsProperty(_ property: PTPPropertyCode) -> Bool { true }
+    func configureLiveView(size: UInt8, compression: UInt8) async {}
+    func startLiveView() async throws {}
+    func stopLiveView() async {}
+    func liveViewFrame(deadline: Duration?) async throws -> PTPLiveViewFrame {
+        throw NativeCameraSessionError.connectionClosed
+    }
+    func readLastCommandRoundTripMilliseconds() -> Double? { nil }
+    func sendKeepAlive() async throws {}
+    func nextEvent() async throws -> PTPEvent {
+        try await Task.sleep(for: .seconds(3_600))
+        throw NativeCameraSessionError.connectionClosed
+    }
+    func pollStillReleaseReadiness() async throws -> StillReleaseReadiness { .complete }
+    func shutdown() async {}
+    func writeCameraProperty(_ write: PTPCameraPropertyWrite) async throws {}
+    func readCameraProperty(_ property: PTPPropertyCode) async throws -> Data { Data() }
+    func startRecording() async throws {}
+    func stopRecording() async throws {}
 }
