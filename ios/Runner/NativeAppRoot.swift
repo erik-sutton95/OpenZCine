@@ -1362,10 +1362,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1385,6 +1386,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -4614,6 +4616,8 @@ final class NativeAppModel {
             var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
             var now: @MainActor () -> TimeInterval
             var sleep: @MainActor (Duration) async throws -> Void
+            /// The device a presence sweep would name as holding the camera; `nil` means nobody.
+            var holder: (@MainActor (String) async -> String?)? = nil
         }
         @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
             didSet { recoveryEpisode = makeRecoveryEpisode() }
@@ -7042,6 +7046,7 @@ final class NativeAppModel {
                     sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
             }
         #endif
+        let pause = timing.sleep
         return SessionRecoveryEpisode(
             port: .init(
                 observe: { [weak self] in self?.recoveryObservation() ?? .init() },
@@ -7055,9 +7060,21 @@ final class NativeAppModel {
                 },
                 holder: { [weak self] attempt, number in
                     guard self?.isDemoSession == false else { return nil }
-                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
-                        await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
-                    }
+                    #if DEBUG
+                        if let peers = self?.sessionRecoveryPeers {
+                            guard let holder = peers.holder else { return nil }
+                            return await NikonTakeOverRecovery.holder(
+                                beforeAttempt: number, pause: { try? await pause($0) },
+                                lookup: { await holder(attempt.targetID) })
+                        }
+                    #endif
+                    // A cable has no network holder to ask, so no presence window either.
+                    guard !DiscoveredCamera.isUSBHostKey(attempt.targetID) else { return nil }
+                    return await NikonTakeOverRecovery.holder(
+                        beforeAttempt: number, pause: { try? await pause($0) },
+                        lookup: {
+                            await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
+                        })
                 }),
             attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
             changed: { [weak self] snapshot, episode in
@@ -7176,9 +7193,21 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it.
+        if previous.claimsCamera, !snapshot.state.claimsCamera { updateCameraInUseBeacon() }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7432,6 +7461,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
