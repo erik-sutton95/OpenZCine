@@ -72,6 +72,8 @@ class FocusRackControllerTest {
         var calibrationJSON: String? = null
         var nudgeProgress: JSONObject? = null
         var calibration: JSONObject? = null
+        var preparationRecommended: Boolean? = null
+        var preparingLens: Boolean? = null
         var unavailable = false
         var focusMode = "timedRack"
         var focusModeSwitchPending = false
@@ -86,6 +88,7 @@ class FocusRackControllerTest {
         var afAdmission = true
         var nativeAF = JSONObject()
         var timingWarning: String? = null
+        var timingWarningIsEstimate: Boolean? = null
         var nativeAFChange: JSONObject? = null
         var nativeAdmission = true
         var nativeCheckpointJSON: String? = null
@@ -120,7 +123,10 @@ class FocusRackControllerTest {
                     .put("enabled", busy)).put("minimumDuration", 16.6)
             nudgeProgress?.let { state.put("nudgeProgress", it) }
             timingWarning?.let { state.put("timingWarning", it) }
+            timingWarningIsEstimate?.let { state.put("timingWarningIsEstimate", it) }
             calibration?.let { state.put("calibration", it) }
+            preparationRecommended?.let { state.put("preparationRecommended", it) }
+            preparingLens?.let { state.put("preparingLens", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates)
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
@@ -132,6 +138,35 @@ class FocusRackControllerTest {
                 .put("afSettingsRestoring", afSettingsRestoring).put("afSettingsReady", afSettingsReady)
                 .put("afSettingsFailure", afSettingsFailure).toString()
         }
+    }
+
+    @Test fun `preparation metadata projects shared values and defaults older payloads to false`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        try {
+            rack.observe(JSONObject())
+            assertFalse(rack.state.value.preparationRecommended)
+            assertFalse(rack.state.value.preparingLens)
+            assertFalse(rack.state.value.timingWarningIsEstimate)
+            wire.preparationRecommended = true
+            wire.preparingLens = true
+            wire.timingWarningIsEstimate = true
+            rack.observe(JSONObject())
+            assertTrue(rack.state.value.preparationRecommended)
+            assertTrue(rack.state.value.preparingLens)
+            assertTrue(rack.state.value.timingWarningIsEstimate)
+            assertFalse(rack.state.value.primaryEnabled)
+            wire.preparationRecommended = false
+            wire.preparingLens = false
+            wire.timingWarningIsEstimate = false
+            rack.observe(JSONObject())
+            assertFalse(rack.state.value.preparationRecommended)
+            assertFalse(rack.state.value.preparingLens)
+            assertFalse(rack.state.value.timingWarningIsEstimate)
+            assertFalse(wire.requests.any { it.getString("kind") in setOf("run", "goTo", "calibrate", "nudge") })
+        } finally { rack.close() }
     }
 
     @Test fun `timing warnings project independently without disabling admitted actions`() = runTest {

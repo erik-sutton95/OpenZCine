@@ -97,9 +97,7 @@ class FocusRackEntrySmokeTest {
     @Test fun cleanCompactSetupOpensInOneTapWithoutResettingTheRack() {
         for (expanded in listOf(true, false)) {
             withDemoRack(portrait = false) {
-                val positions = device.wait(Until.findObject(By.descStartsWith("Relative focus steps:")), 5_000)
-                    ?: throw AssertionError("No relative position before opening setup")
-                val originalPositions = positions.contentDescription
+                val originalPositions = rackPositions()
                 if (!expanded) {
                     clickableControl(requireNotNull(device.findObject(By.desc("Collapse focus rack")))).click()
                 }
@@ -113,12 +111,11 @@ class FocusRackEntrySmokeTest {
                     device.wait(Until.hasObject(By.desc("Collapse focus rack")), 5_000))
                 assertTrue("One tap must return to Live display",
                     device.wait(Until.hasObject(By.descStartsWith("FOCUS ")), 5_000))
-                val currentPositions = device.wait(Until.findObject(By.descStartsWith("Relative focus steps:")), 5_000)
-                    ?: throw AssertionError("No position after opening setup")
-                assertEquals(originalPositions, currentPositions.contentDescription)
+                assertEquals(originalPositions, rackPositions())
                 for (mark in listOf("A", "B")) assertTrue(device.hasObject(By.text("Set $mark")))
                 for (mode in listOf("Native AF", "Timed Rack")) assertTrue(device.hasObject(By.text(mode)))
-                rackText("Duration")
+                scrollSetupToTop()
+                rackText("Target duration")
                 saveDisplay("focus-rack-clean-open-${if (expanded) "expanded" else "collapsed"}-landscape")
             }
         }
@@ -255,8 +252,30 @@ class FocusRackEntrySmokeTest {
         throw AssertionError("Rack control is missing: $prefix")
     }
 
+    private fun scrollSetupToTop() {
+        val viewport = device.findObject(By.desc("Focus rack setup"))?.visibleBounds
+            ?: throw AssertionError("No focus rack setup scroller")
+        repeat(3) {
+            device.swipe(viewport.centerX(), viewport.top + viewport.height() / 8,
+                viewport.centerX(), viewport.bottom - viewport.height() / 8, 40)
+        }
+        refreshAccessibilityCache()
+    }
+
+    private fun rackPositions(): String {
+        repeat(12) {
+            refreshAccessibilityCache()
+            device.findObject(By.descStartsWith("Relative focus steps:"))?.contentDescription?.let { return it }
+            val viewport = device.findObject(By.desc("Focus rack setup"))?.visibleBounds
+                ?: throw AssertionError("No focus rack setup scroller")
+            device.swipe(viewport.centerX(), viewport.bottom - viewport.height() / 8,
+                viewport.centerX(), viewport.top + viewport.height() / 8, 40)
+        }
+        throw AssertionError("Relative position is missing from mark editing")
+    }
+
     private fun verifySharedMoveEditor(portrait: Boolean) {
-        val durationLabel = rackText("Duration")
+        val durationLabel = rackText("Target duration")
         val duration = clickableControl(durationLabel)
         saveDisplay("focus-rack-production-demo-move-${if (portrait) "portrait" else "landscape"}")
         assertTrue("Offline shared controller must enable timing edits", duration.isEnabled)
