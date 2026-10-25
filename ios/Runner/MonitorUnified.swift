@@ -305,7 +305,7 @@ struct NikonMonitorShell: View {
             $0.token == model.cameraState.resolutionFrameRate
         }?.imageArea
         let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
-        let recording = model.headerStatusPresentation
+        let header = model.headerLiveStatus
         var format: [Readout] = []
         if model.chromeSectionMounts(.format) {
             format.append(
@@ -360,7 +360,7 @@ struct NikonMonitorShell: View {
                 accessibilityIdentifier: "monitor.capture.color")
             : nil
         return .init(
-            recording: recording, showsTimecode: !photo && model.chromeSectionMounts(.timecode),
+            recording: header.status, showsTimecode: !photo && model.chromeSectionMounts(.timecode),
             showsRecording: !photo && model.chromeSectionMounts(.recReadout), storage: storage,
             format: format, fps: fps ? model.liveFPS : nil,
             signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps,
@@ -372,7 +372,7 @@ struct NikonMonitorShell: View {
                     section: .format) : nil,
             color: color,
             // A Z body has no shooting-mode readout; its profile declares the codec accent.
-            headerAccent: NikonCameraSession.captureProfile.headerAccent)
+            headerAccent: NikonCameraSession.captureProfile.headerAccent, liveClock: header.clock)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
@@ -627,6 +627,19 @@ extension NativeAppModel {
             recording: forwardedRecording,
             timecode: cameraReportsTimecode ? liveTimecode.monitorLabel : nil,
             timecodePlaceholder: Timecode.placeholder)
+    }
+
+    /// The live header: `headerStatusPresentation` with the clock as a width template and a reader
+    /// that only the clock readout calls. The timecode advances every live view frame; carried in
+    /// the status it re-evaluated the whole live surface each frame (lane media-perf 2026-10-25).
+    var headerLiveStatus: (status: MonitorStatusPresentation, clock: () -> String?) {
+        guard pictureOnlyMonitor else { return shell.control.liveStatusPresentation() }
+        let status = MonitorStatusPresentation(
+            recording: forwardedRecording,
+            timecode: cameraReportsTimecode
+                ? MonitorTimecodeFormat.label(hours: 0, minutes: 0, seconds: 0, frames: 0) : nil,
+            timecodePlaceholder: Timecode.placeholder)
+        return (status, { [weak self] in self?.headerStatusPresentation.timecode })
     }
 
     /// DISP 3 hero: the header's status, with no hero digits when nothing feeds timecode (a body

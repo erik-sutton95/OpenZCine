@@ -1,11 +1,15 @@
 import Foundation
 import MonitorPresentation
+import Observation
 import OpenCineAppKit
 import OpenCineCameraControls
+import OpenCineNikon
 import OpenZCineCore
 import Testing
 
 @testable import Runner
+
+@MainActor private final class HeaderInvalidation { var changed = false }
 
 /// DISP 3 through the shared command dashboard: the order store keeps an operator's existing
 /// arrangement, a move on the visible grid leaves hidden tiles in place, and the Nikon projection
@@ -302,6 +306,32 @@ import Testing
         #expect(!model.monitorAvailableSections.contains(.timecode))
         #expect(hero.timecode == nil)
         #expect(hero.commandHeroTimecode == nil)
+    }
+
+    @Test func aRunningTimecodeAdvancesTheClockWithoutInvalidatingTheLiveHeader() {
+        // A picture-only monitor's timecode advances every live view frame. The header the live
+        // surface lays out must stay put; only the clock reader follows the frames.
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        #expect(model.pictureOnlyMonitor)
+        model.cameraReportsTimecode = true
+        let live = model.headerLiveStatus
+        #expect(live.status.timecode == "00:00:00:00")
+        let header = HeaderInvalidation()
+        withObservationTracking {
+            _ = model.headerLiveStatus.status
+        } onChange: {
+            MainActor.assumeIsolated { header.changed = true }
+        }
+        for frame in 1...25 {
+            model.liveTimecode = Timecode(
+                on: true, hour: 1, minute: 0, second: 0, frame: frame % 25)
+            #expect(live.clock() == model.liveTimecode.monitorLabel)
+        }
+        #expect(!header.changed, "a per-frame timecode must not re-evaluate the live surface")
+        model.cameraReportsTimecode = false
+        #expect(header.changed)
+        #expect(live.clock() == nil)
     }
 }
 
