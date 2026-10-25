@@ -45,9 +45,9 @@ data class RedLutDownloadConfiguration(
 enum class RedLutNetworkAvailability(val operatorMessage: String) {
     AVAILABLE("Internet is available for an authorized RED workflow."),
     ON_CAMERA_ACCESS_POINT(
-        "Connect to the internet before downloading RED LUTs — the camera Wi-Fi access point has no internet.",
+        "Connect to the internet before downloading RED LUTs. The camera Wi-Fi access point has no internet.",
     ),
-    NO_INTERNET("Connect to the internet before downloading RED LUTs — no usable internet path is available."),
+    NO_INTERNET("Connect to the internet before downloading RED LUTs. No usable internet path is available."),
     SWIFT_CORE_UNAVAILABLE("The shared RED network policy is unavailable in this build."),
 }
 

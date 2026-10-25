@@ -48,3 +48,9 @@ import Testing
     )
     #expect(availability == .blockedOnCameraAccessPoint)
 }
+
+@Test func redLUTDownloadBlockedReasonsNeverUseTheEmDash() {
+    for availability in [RedLUTDownloadAvailability.blockedOnCameraAccessPoint, .blockedNoInternet] {
+        #expect(availability.blockedReason?.contains("\u{2014}") == false, "Operator copy never uses the em dash")
+    }
+}

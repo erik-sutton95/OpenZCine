@@ -21,7 +21,7 @@ extension UVCVideoSourceState {
     var message: String {
         switch self {
         case .unsupportedDevice:
-            "HDMI capture needs an iPad — iOS doesn't expose USB capture devices to apps."
+            "HDMI capture needs an iPad. iOS doesn't expose USB capture devices to apps."
         case .permissionDenied:
             "Allow camera access in Settings so the app can read the capture device."
         case .waitingForDevice:

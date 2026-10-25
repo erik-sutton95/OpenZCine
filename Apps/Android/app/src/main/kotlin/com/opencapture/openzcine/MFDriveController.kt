@@ -190,10 +190,10 @@ internal class MFDriveController(
                     pendingPulses = 0
                     onRefusalExhausted?.invoke(
                         if (outcome.rawResponseCode == INVALID_STATUS_RESPONSE) {
-                            "Can't drive focus in MF — set the camera to an AF focus mode to " +
+                            "Can't drive focus in MF. Set the camera to an AF focus mode to " +
                                 "scrub focus from the app."
                         } else {
-                            "Couldn't drive focus just now — try again (0x%04X)."
+                            "Couldn't drive focus just now. Try again (0x%04X)."
                                 .format(outcome.rawResponseCode)
                         },
                     )
