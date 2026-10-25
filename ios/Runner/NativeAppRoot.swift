@@ -5735,6 +5735,9 @@ final class NativeAppModel {
         pendingShutterLockState = nil
         pendingBaseISOHigh = nil
         pendingISOAuto = nil
+        if let id = pendingFocusPoint?.nativeRequestID {
+            focusRack?.nativeTargetFailed(id, message: "Live view restarted before focusing.")
+        }
         pendingFocusPoint = nil
         focusResetStep = nil
         focusAFSettlePolls = 0
@@ -9445,6 +9448,7 @@ final class NativeAppModel {
                 } else {
                     focusRack?.failsAFChange(
                         change, message: "Camera AF setup failed: \(error.localizedDescription)")
+                    if error is FocusAFSettingsError { return true }
                 }
             }
             if case NativeCameraSessionError.commandAuthorityExpired = error {
@@ -9454,7 +9458,7 @@ final class NativeAppModel {
                     + pendingCameraWrites.filter {
                         $0.admission.map { !$0.admits(session.commandOwner) } == true
                     }
-                pendingCameraWrites.removeAll {
+                dropPendingCameraWrites {
                     $0.admission.map { !$0.admits(session.commandOwner) } == true
                 }
                 for refusedWrite in refused {

@@ -75,6 +75,7 @@ class FocusRackControllerTest {
         var preparationRecommended: Boolean? = null
         var preparingLens: Boolean? = null
         var unavailable = false
+        var mutateReply: (JSONObject) -> Unit = {}
         var focusMode = "timedRack"
         var focusModeSwitchPending = false
         var canChangeFocusMode = true
@@ -125,7 +126,7 @@ class FocusRackControllerTest {
             calibration?.let { state.put("calibration", it) }
             preparationRecommended?.let { state.put("preparationRecommended", it) }
             preparingLens?.let { state.put("preparingLens", it) }
-            return JSONObject().put("state", state).put("templates", JSONArray(templates))
+            val reply = JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates)
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
                 .put("focusModeSwitchPending", focusModeSwitchPending)
@@ -134,7 +135,9 @@ class FocusRackControllerTest {
                 .put("nativeAFChange", nativeAFChange).put("nativeAFCheckpointJSON", nativeCheckpointJSON)
                 .put("afSettingsChange", afSettingsChange).put("afSettingsPending", afSettingsPending)
                 .put("afSettingsRestoring", afSettingsRestoring)
-                .put("afSettingsFailure", afSettingsFailure).toString()
+                .put("afSettingsFailure", afSettingsFailure)
+            mutateReply(reply)
+            return reply.toString()
         }
     }
 
@@ -690,6 +693,138 @@ class FocusRackControllerTest {
         rack.resumeAFSettings()
         assertEquals("resumeAFSettings", wire.requests.last().getString("kind"))
         rack.close()
+    }
+
+    @Test fun `malformed snapshots stop safely without committing a partial mode`() = runTest {
+        for (field in listOf("canPause", "totalSteps")) {
+            val wire = Wire()
+            val selectedMode = AtomicReference<String?>(null)
+            val rack = FocusRackController(42, TestSharedPreferences(),
+                CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire,
+                selectedFocusMode = selectedMode)
+            rack.activate()
+            try {
+                rack.observe(JSONObject())
+                assertEquals("timedRack", selectedMode.get())
+                wire.focusMode = "nativeAF"
+                wire.mutateReply = { reply ->
+                    val snapshot = reply.getJSONObject("state")
+                    if (field == "canPause") snapshot.getJSONObject("capabilities").remove(field)
+                    else snapshot.remove(field)
+                }
+                rack.observe(JSONObject())
+                assertEquals("stop", wire.requests.last().getString("kind"))
+                assertNotNull(rack.state.value.error)
+                assertEquals("timedRack", selectedMode.get())
+                assertFalse(rack.state.value.canPause)
+                assertFalse(rack.state.value.canNudge)
+                assertFalse(rack.state.value.canCaptureA)
+                assertFalse(rack.state.value.canCaptureB)
+                assertFalse(rack.state.value.canGoToA)
+                assertFalse(rack.state.value.canGoToB)
+                assertFalse(rack.state.value.canEdit)
+                assertFalse(rack.state.value.canReset)
+                assertFalse(rack.state.value.canNativeAutofocus)
+                assertTrue(rack.state.value.canStop)
+            } finally { rack.close() }
+        }
+    }
+
+    @Test fun `malformed effect IDs dispatch neither writer even with another valid effect`() = runTest {
+        for (kind in listOf("afSettingsChange", "nativeAFChange", "both")) {
+            val wire = Wire()
+            val rack = FocusRackController(42, TestSharedPreferences(),
+                CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+            var writes = 0
+            rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+            rack.configureNativeAF { _, _ -> writes += 1; true }
+            rack.activate()
+            try {
+                wire.mutateReply = { reply ->
+                    if (kind == "both") reply.put("afSettingsChange", JSONObject().put("id", 1))
+                    reply.put(if (kind == "both") "nativeAFChange" else kind,
+                        JSONObject().put("id", "invalid"))
+                }
+                rack.observe(JSONObject().put("afSettings", JSONObject()))
+                testScheduler.runCurrent()
+                assertEquals(0, writes)
+                assertEquals("stop", wire.requests.last().getString("kind"))
+                assertNotNull(rack.state.value.error)
+            } finally { rack.close() }
+        }
+    }
+
+    @Test fun `late malformed templates preserve stored settings and the native checkpoint`() = runTest {
+        val prefs = TestSharedPreferences()
+        prefs.edit().putString("focusRack.timingTemplates.v1", "[]")
+            .putString("focusRack.calibration.v1", "original").apply()
+        val checkpoint = AtomicReference<String?>("original")
+        val wire = Wire()
+        val rack = FocusRackController(42, prefs,
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire,
+            nativeCheckpoint = checkpoint)
+        var writes = 0
+        rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+        rack.activate()
+        try {
+            wire.mutateReply = { reply ->
+                reply.put("templatesJSON", "replacement")
+                    .put("calibrationJSON", "replacement")
+                    .put("nativeAFCheckpointJSON", "replacement")
+                    .put("afSettingsChange", JSONObject().put("id", 1))
+                    .put("templates", JSONArray().put(JSONObject()))
+            }
+            rack.observe(JSONObject().put("afSettings", JSONObject()))
+            testScheduler.runCurrent()
+            assertEquals(0, writes)
+            assertEquals("[]", prefs.getString("focusRack.timingTemplates.v1", null))
+            assertEquals("original", prefs.getString("focusRack.calibration.v1", null))
+            assertEquals("original", checkpoint.get())
+            assertEquals("stop", wire.requests.last().getString("kind"))
+        } finally { rack.close() }
+    }
+
+    @Test fun `an optional absent snapshot still accepts ancillary template data`() = runTest {
+        val wire = Wire().apply {
+            mutateReply = { reply -> reply.put("state", JSONObject.NULL)
+                .put("templates", JSONArray().put(JSONObject().put("name", "Slow"))) }
+        }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        try {
+            rack.observe(JSONObject())
+            assertEquals("Slow", rack.templates.value.single().name)
+            assertNull(rack.state.value.error)
+            assertFalse(wire.requests.any { it.optString("kind") == "stop" })
+        } finally { rack.close() }
+    }
+
+    @Test fun `fresh valid observations recover reply failures without releasing lifecycle suspension`() = runTest {
+        for (effect in listOf("afSettingsChange", "nativeAFChange")) {
+            val wire = Wire()
+            val rack = FocusRackController(42, TestSharedPreferences(),
+                CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+            var writes = 0
+            rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+            rack.configureNativeAF { _, _ -> writes += 1; true }
+            rack.activate()
+            try {
+                wire.unavailable = true
+                rack.observe(JSONObject())
+                assertNotNull(rack.state.value.error)
+                wire.unavailable = false
+                wire.mutateReply = { it.put(effect, JSONObject().put("id", 1)) }
+                rack.observe(JSONObject().put("afSettings", JSONObject()))
+                testScheduler.runCurrent()
+                assertEquals(1, writes)
+                rack.interrupt()
+                wire.mutateReply = { it.put(effect, JSONObject().put("id", 2)) }
+                rack.observe(JSONObject().put("afSettings", JSONObject()))
+                testScheduler.runCurrent()
+                assertEquals(1, writes)
+            } finally { rack.close() }
+        }
     }
 
 }

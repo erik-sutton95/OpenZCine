@@ -1084,6 +1084,75 @@ struct FocusAFSettingsAdapterTests {
         #expect(await wire.writeCount == 3)
     }
 
+    @Test("A preview restart releases a queued Native AF target and permits another selection")
+    func previewRestartReleasesNativeTarget() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        let originalBias = model.preferences.qualityBias
+        defer {
+            model.setQualityBias(originalBias)
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack)
+        rack.armNativeTarget(.a)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.25, y: 0.2)))
+        #expect(rack.nativeRack.dispatchedRequest != nil)
+        model.setQualityBias(originalBias == .latency ? .balanced : .latency)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.notice != nil)
+        #expect(await wire.targetCommands.isEmpty)
+        model.debugSeedFocusAF(recording: false)
+        rack.armNativeTarget(.b)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.8, y: 0.6)))
+        #expect(rack.nativeRack.dispatchedRequest?.mark == .b)
+    }
+
+    @Test("A short AF pre-write read fails setup without inventing a camera control lock")
+    func shortAFPrewriteReadDoesNotLockFocusControl() async throws {
+        let (model, native, wire, rack) = try await fixture()
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        #expect(await model.debugServiceFocusAFSettings())
+        let change = try #require(rack.afSettings.pending)
+        let write = try #require(change.property.write(change.value))
+        await wire.shortNextRead(write.property)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writeCount == 0)
+        #expect(rack.afSettingsFailure != nil)
+        #expect(!model.lockedControls.contains(.focus))
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack)
+        #expect(await wire.values() == .target(.nativeAF))
+        #expect(await wire.writeCount == 3)
+    }
+
+    @Test("Authority-expiry queue pruning defers an unsent AF change so setup can resume")
+    func authorityExpiryDefersQueuedAFChange() async throws {
+        let (model, native, wire, rack) = try await fixture()
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        model.debugEnqueueCameraWrite(.movieBaseISO)
+        rack.selectMode(.nativeAF)
+        #expect(await model.debugServiceFocusAFSettings())
+        #expect(model.debugPendingCameraWriteCount == 2)
+        #expect(rack.afSettings.pending != nil)
+        rack.revokeAFWrite()
+        await wire.expireNextWrite(.movieBaseISO)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(model.debugPendingCameraWriteCount == 0)
+        #expect(rack.afSettings.pending == nil)
+        #expect(rack.afSettingsPending)
+        #expect(await wire.writeCount == 0)
+        try await drain(model, rack: rack)
+        #expect(await wire.values() == .target(.nativeAF))
+    }
+
     private func drain(
         _ model: NativeAppModel, rack: FocusRackModel,
         result: PTPLiveViewFocusInfo.FocusResult = .focused
@@ -1131,6 +1200,8 @@ private actor FocusAFQueueTransport: CameraTransport {
     private var properties: [UInt32: Data] = [PTPPropertyCode.liveViewSelector.rawValue: Data([1])]
     private var readiness = PTPResponseCode.ok
     private var ignoreWrites = false
+    private var shortRead: PTPPropertyCode?
+    private var expiredWrite: PTPPropertyCode?
     private var holdRead = false
     private var readCompletion: CheckedContinuation<Void, Never>?
     private var holdTarget = false
@@ -1157,6 +1228,8 @@ private actor FocusAFQueueTransport: CameraTransport {
     }
     func setReadiness(_ value: PTPResponseCode) { readiness = value }
     func setIgnoreWrites(_ value: Bool) { ignoreWrites = value }
+    func shortNextRead(_ property: PTPPropertyCode) { shortRead = property }
+    func expireNextWrite(_ property: PTPPropertyCode) { expiredWrite = property }
     func holdNextTargetResponse() { holdTarget = true }
     func releaseTargetResponse() {
         targetCompletion?.resume()
@@ -1207,6 +1280,10 @@ private actor FocusAFQueueTransport: CameraTransport {
         }
         let property = parameters.first ?? 0
         if operation == .setDevicePropValue || operation == .setDevicePropValueEx {
+            if expiredWrite?.rawValue == property {
+                expiredWrite = nil
+                throw NativeCameraSessionError.commandAuthorityExpired
+            }
             if !ignoreWrites { properties[property] = output }
             if Self.afProperties.contains(property) { writeCount += 1 }
         }
@@ -1228,10 +1305,16 @@ private actor FocusAFQueueTransport: CameraTransport {
         }
         let code = operation == .deviceReady ? readiness : .ok
         let response = ByteCoding.uint16LE(code.rawValue) + ByteCoding.uint32LE(transaction ?? 1)
-        return .init(
-            operationResponse: try .init(payloadBytes: response),
-            data: operation == .getDevicePropValue || operation == .getDevicePropValueEx
-                ? properties[property] ?? Data() : Data())
+        var data =
+            operation == .getDevicePropValue || operation == .getDevicePropValueEx
+            ? properties[property] ?? Data() : Data()
+        if shortRead?.rawValue == property,
+            operation == .getDevicePropValue || operation == .getDevicePropValueEx
+        {
+            shortRead = nil
+            data = Data()
+        }
+        return .init(operationResponse: try .init(payloadBytes: response), data: data)
     }
     func nextEvent() async throws -> PTPEvent { throw NativeCameraSessionError.connectionClosed }
     nonisolated func close() {}

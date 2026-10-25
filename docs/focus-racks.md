@@ -244,7 +244,9 @@ Portable and fake-camera tests cover capture identities, direction, timing warni
 completion, safety-read placement, pause/resume, cancellation, stale callbacks, template and
 calibration restoration, AF ownership and native failures. Simulator/emulator tests cover both
 modes, saved targets, the setup controls, accessibility, compact transport and screen edges.
-Canonical gates are `just native-check`, `just android-check` and `just check`.
+Run `just focus-rack-test` for the shared focus regressions, including Native AF, automatic AF
+settings and mode policy. Canonical gates are `just native-check`, `just android-check` and
+`just check`.
 
 Software checks do not close the remaining optical qualification in the
 [qualification summary](investigations/focus-rack-qualification.md).

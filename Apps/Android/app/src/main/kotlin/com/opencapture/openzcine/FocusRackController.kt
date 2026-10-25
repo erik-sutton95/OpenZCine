@@ -239,18 +239,57 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             request.put("nativeAFCoordinateSpaceAvailable", it.optBoolean("nativeAFCoordinateSpaceAvailable"))
             request.put("nativeAFUnrelatedCommandPending", it.optBoolean("nativeAFUnrelatedCommandPending"))
         }
-        val reply = runCatching { wire.step(handle, request.toString())?.let(::JSONObject) }.getOrNull()
+        val reply = runCatching {
+            wire.step(handle, request.toString())?.let { decodeReply(JSONObject(it)) }
+        }.getOrNull()
         if (reply == null) {
-            // Cancellation remains a synchronous JNI intent even if state decoding failed.
-            runCatching { wire.step(handle, "{\"kind\":\"stop\"}") }
-            mutableState.value = state.value.copy(error = "Focus Rack is unavailable; stop requested.", primaryEnabled = false,
-                canChangeFocusMode = false, canAutofocus = false, canNativeAutofocus = false,
-                nativeAF = state.value.nativeAF.copy(canSet = false, canRun = false, canGoToA = false, canGoToB = false),
-                pullAToB = state.value.pullAToB?.copy(enabled = false), pullBToA = state.value.pullBToA?.copy(enabled = false),
-                calibration = state.value.calibration?.copy(enabled = false))
+            unavailableReply(handle)
             return
         }
-        reply.optJSONObject("state")?.let { snapshot ->
+        reply.state?.let { state ->
+            val validCaptures = state.marks.associate { it.id to it.revision }
+            mutableThumbnails.value = mutableThumbnails.value.filterKeys { validCaptures[it] == captures[it] }
+            pendingCapture?.let { (id, sequence, image) ->
+                state.marks.firstOrNull { it.id == id && it.frameSequence == sequence && captures[id] != it.revision }?.let {
+                    mutableThumbnails.value = mutableThumbnails.value + (id to image)
+                    pendingCapture = null
+                }
+            }
+            captures = validCaptures
+            stopPending = reply.stopPending
+            pendingFocusMode = reply.pendingFocusMode
+            selectedFocusMode.set(state.focusMode)
+            mutableState.value = state
+        }
+        reply.nativeCheckpoint?.let(nativeCheckpoint::set)
+        reply.afChange?.let(::executeAFSetting)
+        reply.nativeChange?.let(::executeNativeTarget)
+        reply.savedTemplates?.let { saved ->
+            if (saved != persistedTemplates) {
+                // Swift validates and emits this timing-only schema; store its bytes verbatim.
+                preferences.edit().putString(TEMPLATES_KEY, saved).apply()
+                persistedTemplates = saved
+            }
+        }
+        reply.calibration?.let { checkpoint ->
+            if (checkpoint != persistedCalibration) {
+                preferences.edit().putString(CALIBRATION_KEY, checkpoint).apply()
+                persistedCalibration = checkpoint
+            }
+        }
+        reply.templates?.let { mutableTemplates.value = it }
+    }
+
+    private data class DecodedReply(val state: FocusRackViewState?, val stopPending: Boolean,
+        val pendingFocusMode: String?, val nativeCheckpoint: String?, val afChange: JSONObject?,
+        val nativeChange: JSONObject?, val savedTemplates: String?, val calibration: String?,
+        val templates: List<FocusRackTimingViewState>?)
+
+    // A malformed late field must not accept partial state, persist settings or queue a writer.
+    private fun decodeReply(reply: JSONObject): DecodedReply {
+        var nextStopPending = stopPending
+        var nextPendingMode = pendingFocusMode
+        val state = reply.optJSONObject("state")?.let { snapshot ->
             val caps = snapshot.getJSONObject("capabilities")
             val primary = snapshot.getJSONObject("primary")
             val transition = snapshot.getJSONObject("transition")
@@ -265,26 +304,16 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 markPositions[id]?.let { position -> FocusRackMarkViewState(id, position,
                     mark.getLong("revision"), mark.getLong("frameSequence")) }
             }
-            val validCaptures = marks.associate { it.id to it.revision }
-            mutableThumbnails.value = mutableThumbnails.value.filterKeys { validCaptures[it] == captures[it] }
-            pendingCapture?.let { (id, sequence, image) ->
-                marks.firstOrNull { it.id == id && it.frameSequence == sequence && captures[id] != it.revision }?.let {
-                    mutableThumbnails.value = mutableThumbnails.value + (id to image)
-                    pendingCapture = null
-                }
-            }
-            captures = validCaptures
             val sharedBusy = snapshot.getBoolean("busy")
-            if (!sharedBusy) stopPending = false
+            nextStopPending = stopPending && sharedBusy
             val sharedMode = reply.optString("focusMode", "timedRack")
-            selectedFocusMode.set(sharedMode)
             val sharedModePending = reply.optBoolean("focusModeSwitchPending")
-            if (!sharedModePending && (sharedMode == pendingFocusMode || reply.nullableString("error") != null)) pendingFocusMode = null
-            val modePending = sharedModePending || pendingFocusMode != null
-            mutableState.value = FocusRackViewState(
+            if (!sharedModePending && (sharedMode == pendingFocusMode || reply.nullableString("error") != null)) nextPendingMode = null
+            val modePending = sharedModePending || nextPendingMode != null
+            FocusRackViewState(
                 focusMode = sharedMode,
                 focusModeSwitchPending = modePending,
-                canChangeFocusMode = reply.optBoolean("canChangeFocusMode") && !stopPending && !modePending,
+                canChangeFocusMode = reply.optBoolean("canChangeFocusMode") && !nextStopPending && !modePending,
                 afSettingsPending = reply.optBoolean("afSettingsPending"),
                 afSettingsRestoring = reply.optBoolean("afSettingsRestoring"),
                 afSettingsFailure = reply.nullableString("afSettingsFailure"),
@@ -299,8 +328,8 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                         canRun = native.optBoolean("canRun"), canCancel = native.optBoolean("canCancel"),
                         message = native.optString("message"), failure = native.nullableString("failure"))
                 } ?: NativeAFRackViewState(),
-                canNativeAutofocus = reply.optBoolean("canNativeAutofocus") && !stopPending && !modePending,
-                phase = if (stopPending) "stopping" else snapshot.getString("phase"),
+                canNativeAutofocus = reply.optBoolean("canNativeAutofocus") && !nextStopPending && !modePending,
+                phase = if (nextStopPending) "stopping" else snapshot.getString("phase"),
                 message = snapshot.getString("message"), recovery = snapshot.nullableString("recoveryInstruction"),
                 admissionMessage = snapshot.nullableString("admissionMessage"),
                 error = reply.nullableString("error") ?: snapshot.nullableString("admissionMessage"),
@@ -313,13 +342,13 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 timingWarning = snapshot.nullableString("timingWarning"),
                 timingWarningIsEstimate = snapshot.optBoolean("timingWarningIsEstimate"),
                 primaryTitle = primary.getString("title"), primaryDetail = primary.nullableString("detail"),
-                pullAToB = snapshot.optJSONObject("pullAToB")?.action(),
-                pullBToA = snapshot.optJSONObject("pullBToA")?.action(),
-                calibration = snapshot.optJSONObject("calibration")?.action(),
+                pullAToB = snapshot.optJSONObject("pullAToB")?.action(nextStopPending),
+                pullBToA = snapshot.optJSONObject("pullBToA")?.action(nextStopPending),
+                calibration = snapshot.optJSONObject("calibration")?.action(nextStopPending),
                 preparationRecommended = snapshot.optBoolean("preparationRecommended"),
                 preparingLens = snapshot.optBoolean("preparingLens"),
                 playbackInstruction = snapshot.nullableString("playbackInstruction"),
-                canGoToA = caps.optBoolean("canGoToA"), canGoToB = caps.optBoolean("canGoToB"), primaryEnabled = primary.getBoolean("enabled") && !stopPending,
+                canGoToA = caps.optBoolean("canGoToA"), canGoToB = caps.optBoolean("canGoToB"), primaryEnabled = primary.getBoolean("enabled") && !nextStopPending,
                 canCaptureA = caps.getBoolean("canCaptureA"), canCaptureB = caps.getBoolean("canCaptureB"),
                 canNudge = caps.getBoolean("canNudge"), canEdit = caps.getBoolean("canEditTiming"),
                 canReset = caps.getBoolean("canReset"), canAutofocus = caps.optBoolean("canAutofocus") && !modePending, canPause = caps.getBoolean("canPause"), canStop = caps.getBoolean("canStop"), active = snapshot.getBoolean("busy"),
@@ -329,30 +358,38 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                     FocusRackNudgeProgressViewState(it.getBoolean("towardNear"), it.getInt("steps"), it.getInt("percent"))
                 })
         }
-        reply.nullableString("nativeAFCheckpointJSON")?.let(nativeCheckpoint::set)
-        reply.optJSONObject("afSettingsChange")?.let { change ->
+        val afChange = reply.optJSONObject("afSettingsChange")?.also { change ->
+            change.getLong("id")
             reply.optJSONObject("afSettingsExpectedValues")?.let { change.put("expectedValues", it) }
-            executeAFSetting(change)
         }
-        reply.optJSONObject("nativeAFChange")?.let(::executeNativeTarget)
-        val saved = reply.optString("templatesJSON").takeIf { it.isNotEmpty() && it != "null" }
-        if (saved != null && saved != persistedTemplates) {
-            // Swift validates and emits this timing-only schema. The shell stores the bytes verbatim.
-            preferences.edit().putString(TEMPLATES_KEY, saved).apply()
-            persistedTemplates = saved
-        }
-        reply.nullableString("calibrationJSON")?.let { checkpoint ->
-            if (checkpoint != persistedCalibration) {
-                // Swift validates and scopes timing evidence; Kotlin stores its bytes unchanged.
-                preferences.edit().putString(CALIBRATION_KEY, checkpoint).apply()
-                persistedCalibration = checkpoint
-            }
-        }
-        reply.optJSONArray("templates")?.let { values ->
-            mutableTemplates.value = (0 until values.length()).map { index ->
+        val nativeChange = reply.optJSONObject("nativeAFChange")?.also { it.getLong("id") }
+        val templates = reply.optJSONArray("templates")?.let { values ->
+            (0 until values.length()).map { index ->
                 values.getJSONObject(index).let { FocusRackTimingViewState(it.getString("name"), it.toString()) }
             }
         }
+        return DecodedReply(state, nextStopPending, nextPendingMode,
+            reply.nullableString("nativeAFCheckpointJSON"), afChange, nativeChange,
+            reply.optString("templatesJSON").takeIf { it.isNotEmpty() && it != "null" },
+            reply.nullableString("calibrationJSON"), templates)
+    }
+
+    private fun unavailableReply(handle: String) {
+        // Fresh observations can restore reply admission; lifecycle suspension remains separate.
+        afInput.set(null)
+        nativeInput.set(null)
+        // Stop stays synchronous even when the reply cannot be decoded.
+        runCatching { wire.step(handle, "{\"kind\":\"stop\"}") }
+        mutableState.value = state.value.copy(error = "Focus Rack is unavailable; stop requested.",
+            primaryEnabled = false, canChangeFocusMode = false, canAutofocus = false,
+            canNativeAutofocus = false, canCaptureA = false, canCaptureB = false,
+            canNudge = false, canEdit = false, canReset = false, canGoToA = false,
+            canGoToB = false, canPause = false, canStop = true,
+            nativeAF = state.value.nativeAF.copy(canSet = false, canRun = false,
+                canGoToA = false, canGoToB = false, canCancel = true),
+            pullAToB = state.value.pullAToB?.copy(enabled = false),
+            pullBToA = state.value.pullBToA?.copy(enabled = false),
+            calibration = state.value.calibration?.copy(enabled = false))
     }
     private fun executeNativeTarget(change: JSONObject) {
         val id = change.getLong("id")
@@ -437,8 +474,8 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         }
     }
 
-    private fun JSONObject.action(): FocusRackActionViewState = FocusRackActionViewState(
-        getString("title"), nullableString("detail"), getBoolean("enabled") && !stopPending,
+    private fun JSONObject.action(stopping: Boolean): FocusRackActionViewState = FocusRackActionViewState(
+        getString("title"), nullableString("detail"), getBoolean("enabled") && !stopping,
         nullableString("disabledReason"))
     private fun JSONObject.nullableString(key: String): String? = if (!has(key) || isNull(key)) null else getString(key)
     private companion object {
