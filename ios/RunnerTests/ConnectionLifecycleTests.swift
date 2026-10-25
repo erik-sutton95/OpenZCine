@@ -23,6 +23,34 @@ struct ConnectionLifecycleTests {
         return model
     }
 
+    /// Hardware pass 2026-10-25 (1.11): the wait for a dozing body ran under "Establishing a
+    /// secure link" with no waiting step.
+    @Test("The body wake shows its waiting step and hands back to the handshake on an answer")
+    func bodyWakeShowsTheWaitingStep() {
+        let model = model()
+        model.noteBodyWake(.waiting)
+        #expect(model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: ""))
+        model.noteBodyWake(.answered)
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+    }
+
+    @Test("A late wake step from a superseded attempt never touches the current one")
+    func staleWakeProgressIsDropped() async {
+        let model = model()
+        struct Superseded: Error {}
+        let stale = model.bodyWakeProgressHandler(requireCurrent: { throw Superseded() })
+        stale(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+        let current = model.bodyWakeProgressHandler(requireCurrent: {})
+        current(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.isAwaitingBodyWake)
+    }
+
     @Test("Cancel retires an unanswered take-over before a late confirmation")
     func cancelledTakeOverCannotStartConnection() {
         let model = model()
