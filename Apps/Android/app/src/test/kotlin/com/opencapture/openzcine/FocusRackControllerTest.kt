@@ -7,7 +7,11 @@ import com.opencapture.opencine.nikon.LiveFocusResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
@@ -631,6 +635,83 @@ class FocusRackControllerTest {
         rack.observe(JSONObject().put("afSettings", reported))
         assertTrue(wire.requests.any { it.optString("kind") == "observe" })
         rack.close()
+    }
+
+    @Test fun `suspended AF writers propagate cancellation and complete with an unconfirmed outcome`() = runTest {
+        for (native in listOf(false, true)) {
+            val wire = Wire().apply { busy = false }
+            val rack = FocusRackController(42, TestSharedPreferences(),
+                CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+            val result = CompletableDeferred<Unit>()
+            lateinit var writerJob: Job
+            val reported = JSONObject().put("sessionID", "camera-owner")
+            rack.configureAFSettings { _, _ ->
+                writerJob = requireNotNull(currentCoroutineContext()[Job])
+                result.await()
+                reported
+            }
+            rack.configureNativeAF(completionInput = { reported }) { _, _ ->
+                writerJob = requireNotNull(currentCoroutineContext()[Job])
+                result.await()
+                true
+            }
+            rack.activate()
+            if (native) {
+                wire.nativeAFChange = JSONObject().put("id", 7).put("mark", "B")
+                    .put("point", JSONObject().put("x", 0.8).put("y", 0.5))
+            } else {
+                wire.afSettingsChange = JSONObject().put("id", 1).put("sessionID", "camera-owner")
+                    .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F")
+                    .put("restoring", false)
+            }
+            try {
+                rack.observe(JSONObject().put("afSettings", reported))
+                testScheduler.runCurrent()
+                assertFalse(writerJob.isCompleted)
+                // Cancel the suspended operation without cancelling the controller's parent scope.
+                result.cancel(CancellationException("Transport operation cancelled"))
+                testScheduler.runCurrent()
+                assertTrue(writerJob.isCancelled, "Cancellation must not become a normally completed write")
+                val kind = if (native) "nativeAFComplete" else "afSettingsComplete"
+                val completion = wire.requests.single { it.optString("kind") == kind }
+                val failure = if (native) "nativeAFFailure" else "afFailure"
+                val message = if (native) "Target selection was cancelled before confirmation."
+                    else "AF setting change was cancelled before confirmation."
+                assertEquals(message, completion.getString(failure))
+                assertFalse(wire.requests.any { it.optString("kind") == "afSettingsDeferred" },
+                    "A cancelled writer may already have changed the camera")
+                if (native) assertEquals("camera-owner", completion.getJSONObject("afSettings").getString("sessionID"))
+            } finally {
+                rack.close()
+            }
+        }
+    }
+
+    @Test fun `closing during a suspended AF write sends no completion to the retired owner`() = runTest {
+        for (native in listOf(false, true)) {
+            val wire = Wire().apply { busy = false }
+            val rack = FocusRackController(42, TestSharedPreferences(),
+                CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+            val result = CompletableDeferred<Unit>()
+            var writerStopped = false
+            rack.configureAFSettings { _, _ ->
+                try { result.await(); JSONObject() } finally { writerStopped = true }
+            }
+            rack.configureNativeAF { _, _ ->
+                try { result.await(); true } finally { writerStopped = true }
+            }
+            rack.activate()
+            if (native) wire.nativeAFChange = JSONObject().put("id", 7)
+            else wire.afSettingsChange = JSONObject().put("id", 1)
+            rack.observe(JSONObject().put("afSettings", JSONObject()))
+            testScheduler.runCurrent()
+            val before = wire.requests.size
+            rack.close()
+            testScheduler.runCurrent()
+            assertTrue(writerStopped)
+            assertTrue(wire.closed)
+            assertEquals(before, wire.requests.size)
+        }
     }
 
     @Test fun `same value manual AF choice revokes an unsent automatic effect`() = runTest {

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.openzcine.bridge.SwiftCore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -420,6 +421,9 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             try {
                 if (!admitted() || !writer(change, admitted))
                     completion.put("nativeAFFailure", "Target selection was cancelled before the camera accepted it.")
+            } catch (cancelled: CancellationException) {
+                completion.put("nativeAFFailure", "Target selection was cancelled before confirmation.")
+                throw cancelled
             } catch (error: Exception) {
                 completion.put("nativeAFFailure", error.message ?: "The camera did not accept the target.")
             } finally {
@@ -465,6 +469,11 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                     observation?.put("afSettings", confirmed)
                     send("afSettingsComplete", JSONObject().put("afChange", change).put("afSettings", confirmed))
                 }
+            } catch (cancelled: CancellationException) {
+                // The camera may have changed already; retire the effect without claiming a readback.
+                send("afSettingsComplete", JSONObject().put("afChange", change)
+                    .put("afFailure", "AF setting change was cancelled before confirmation."))
+                throw cancelled
             } catch (error: Exception) {
                 send("afSettingsComplete", JSONObject().put("afChange", change)
                     .put("afFailure", error.message ?: "The camera did not confirm the AF setting."))

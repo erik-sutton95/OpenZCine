@@ -21,7 +21,6 @@ internal fun friendlyCameraConnectionFailure(failure: CameraConnectionFailure?, 
         CameraConnectionFailure.REJECTED_INITIATOR ->
             "The camera didn't recognize this phone. On the camera, open Connect to PC and create or choose a profile for this phone, then try again."
         CameraConnectionFailure.TIMEOUT -> "The camera didn't respond in time. Check Wi‑Fi and try again."
-        CameraConnectionFailure.CAMERA_SILENT -> NikonBodyWake.silentMessage("")
         CameraConnectionFailure.CONNECTION_CLOSED -> "The camera ended the connection. Try again."
         CameraConnectionFailure.PAIRING_CHALLENGE_UNAVAILABLE ->
             "The camera did not provide a pairing code. Restart Connect to PC on the camera, then pair again."
