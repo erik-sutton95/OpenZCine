@@ -3072,7 +3072,8 @@ final class NativeAppModel {
             connectionStageDetail = NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
         case .answered:
             isAwaitingBodyWake = false
-            if connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName) {
+            if connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+            {
                 connectionStageDetail = ""
             }
         }
