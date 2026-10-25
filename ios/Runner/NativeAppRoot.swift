@@ -2652,6 +2652,8 @@ final class NativeAppModel {
     }
     /// The last grid pass owns its admitted group IDs; current payload lookup preserves native actions.
     @ObservationIgnored private var mediaProjectionSnapshot: NikonAppGalleryProjection?
+    /// The last projection pass and the inputs it was built from (see `mediaGalleryProjection`).
+    @ObservationIgnored private var mediaProjectionMemo: MediaProjectionMemo?
     var mediaFetchInProgress: Bool { mediaLibrary?.fetching ?? false }
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
     var mediaFetchListedCount: Int {
@@ -14466,10 +14468,37 @@ extension NativeAppModel {
         mediaClipStore.listAllCachedClips().contains { isClipDownloaded($0) }
     }
 
-    var mediaFilterOptions: NikonMediaFilterOptions { mediaProjectionPass.filterOptions }
+    var mediaFilterOptions: NikonMediaFilterOptions { memoizedMediaProjection.filterOptions }
+    /// Every gallery body reads this pass. It projects, filters, sorts and counts the whole card,
+    /// so it is rebuilt only when one of its inputs changes (build 304 watchdog kill: this pass and
+    /// its four category counts ran in every body update of a 3,000-photo card).
     var mediaGalleryProjection: NikonAppGalleryProjection {
-        let pass = mediaProjectionPass
+        let pass = memoizedMediaProjection
         mediaProjectionSnapshot = pass
+        return pass
+    }
+    private var memoizedMediaProjection: NikonAppGalleryProjection {
+        // Reading each input here also keeps the body's observation of all of them. The library's
+        // records revision changes only with its rows (not with progress, cache or selection).
+        let library = mediaLibrary
+        let rows = library == nil ? unopenedMediaRows : []
+        let requireLocal = !isConnected
+        let key = MediaProjectionMemo.Key(
+            library: library.map(ObjectIdentifier.init),
+            recordsRevision: library?.recordsRevision,
+            rows: MediaProjectionMemo.identity(rows),
+            category: mediaCategoryTab, sort: mediaSortOrder, formats: mediaFormatFilters,
+            resolutions: mediaResolutionFilters, photoSizes: mediaPhotoSizeFilters,
+            dateWindow: mediaDateWindow, storage: mediaStorageSlotFilter,
+            requireLocal: requireLocal,
+            cacheRevision: requireLocal ? mediaLibrary?.cacheRevision : nil,
+            day: Calendar.current.startOfDay(for: Date()))
+        if let memo = mediaProjectionMemo, memo.key == key { return memo.pass }
+        var pass = mediaProjectionPass
+        pass.precomputeCategoryCounts()
+        // The memo holds the exact unopened rows it keyed, so their storage cannot be reused by
+        // a successor while the identity comparison is in use.
+        mediaProjectionMemo = .init(key: key, rows: rows, pass: pass)
         return pass
     }
     var filteredMediaClips: [MediaClip] { mediaGalleryProjection.gridClips }
@@ -15159,4 +15188,37 @@ extension NativeAppModel {
             calibrationSourceID: eligible && videoSource == .cameraLiveView
                 ? connectionGeneration : nil)
     }
+}
+
+/// One projection pass with the inputs it was built from. Library rows are keyed by the library's
+/// records revision; rows shown before a library opens are compared by storage identity (O(1)),
+/// and the memo retains them, so an identity can only repeat for the same contents.
+struct MediaProjectionMemo {
+    struct Key: Equatable {
+        let library: ObjectIdentifier?
+        let recordsRevision: UInt64?
+        let rows: ArrayIdentity
+        let category: MediaCategoryTab
+        let sort: MediaSortOrder
+        let formats: Set<MediaFormatChip>
+        let resolutions: Set<NikonMediaResolutionBucket>
+        let photoSizes: Set<NikonMediaPhotoSizeClass>
+        let dateWindow: NikonMediaDateWindow?
+        let storage: UInt32?
+        let requireLocal: Bool
+        let cacheRevision: UInt64?
+        let day: Date
+    }
+    struct ArrayIdentity: Equatable {
+        let base: UnsafeRawPointer?
+        let count: Int
+    }
+    static func identity<Element>(_ values: [Element]) -> ArrayIdentity {
+        values.withUnsafeBufferPointer {
+            .init(base: UnsafeRawPointer($0.baseAddress), count: $0.count)
+        }
+    }
+    let key: Key
+    let rows: [MediaClip]
+    let pass: NikonAppGalleryProjection
 }
