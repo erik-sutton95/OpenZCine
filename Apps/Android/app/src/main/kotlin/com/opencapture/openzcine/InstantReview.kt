@@ -1,51 +1,37 @@
 package com.opencapture.openzcine
 
-import com.opencapture.opencine.nikon.LiveFocusResult
-import com.opencapture.opencine.nikon.LiveFocusInfo
-import com.opencapture.opencine.appkit.MonitorReviewOptions
-import com.opencapture.monitorui.MonitorRect
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.foundation.Canvas
 import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.ui.layout.ContentScale
-import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.opencine.cameracontrols.MonitorInstantReview
 import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.media.MediaExifOrientation
 import com.opencapture.openzcine.media.upright
+import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** One presented instant review (iOS `InstantReviewState`). */
 internal data class InstantReviewPresentation(
@@ -233,10 +219,9 @@ internal const val INSTANT_REVIEW_OBJECT_POLL_MILLIS = 150L
 internal const val INSTANT_REVIEW_FOCUS_TAG = "instantReview.focus"
 
 /**
- * The freshest captured still, full-screen until the review duration elapses
- * or the operator taps it away (iOS instant-review overlay): blurred thumb +
- * spinner until the full image lands, the captured settings line along the
- * bottom, and a single favorite star writing the one-star rating in place.
+ * The freshest captured still over the whole monitor until the review duration elapses or the
+ * operator taps it away: the shared [MonitorInstantReview] (iOS draws the same component), with
+ * the Nikon timing, the de-squeeze ratio and the captured AF boxes supplied here.
  */
 @Composable
 internal fun InstantReviewOverlay(
@@ -249,7 +234,7 @@ internal fun InstantReviewOverlay(
     options: MonitorReviewOptions = MonitorReviewOptions(),
 ) {
     // The countdown starts only once the full image (or its failure fallback)
-    // lands — the operator gets the whole duration with the real image.
+    // lands: the operator gets the whole duration with the real image.
     LaunchedEffect(review.countdownArmed, review.handle, options.duration) {
         if (review.countdownArmed) {
             options.duration.automaticDismissMillis?.let { duration ->
@@ -258,84 +243,30 @@ internal fun InstantReviewOverlay(
             }
         }
     }
-    val desqueezeAspectRatio =
-        desqueeze?.desqueezedAspectRatio(review.image.width, review.image.height)
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.94f))
-            .chromeClickable(onClick = onDismiss)
-            .semantics { contentDescription = "Instant playback" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            bitmap = review.image,
-            contentDescription = null,
-            // With a ratio the parent Box's max constraints make `aspectRatio` the fit, and
-            // FillBounds stretches the squeezed pixels into it; without one nothing changes.
-            contentScale =
-                if (desqueezeAspectRatio != null) ContentScale.FillBounds else ContentScale.Fit,
-            modifier =
-                (
-                    if (desqueezeAspectRatio != null) {
-                        Modifier.aspectRatio(desqueezeAspectRatio)
-                    } else {
-                        Modifier.fillMaxSize()
-                    }
-                ).blur(if (review.isFullResolution) 0.dp else 16.dp),
-        )
-        if (!review.isFullResolution) {
-            CircularProgressIndicator(
-                color = LiveDesign.accent,
-                modifier = Modifier.size(34.dp),
-            )
-        }
+    MonitorInstantReview(
+        image = review.image,
+        isFullResolution = review.isFullResolution,
+        onDismiss = onDismiss,
+        modifier = modifier,
+        displayAspect = desqueeze?.desqueezedAspectRatio(review.image.width, review.image.height),
+        favorited = review.starred,
+        onToggleFavorite = onToggleStar,
+        infoLine = review.infoLine?.takeIf { options.showsCaptureInfo },
+    ) { fitted ->
         if (options.showsFocusPoint) review.focus?.takeIf { it.coordinateWidth > 0 && it.coordinateHeight > 0 }?.let { focus ->
             Canvas(Modifier.fillMaxSize().testTag(INSTANT_REVIEW_FOCUS_TAG)) {
-                val aspect = desqueezeAspectRatio ?: (review.image.width.toFloat() / review.image.height)
-                val fitted = MonitorRect(0f, 0f, size.width, size.height).fittedContent(aspect)
+                val frame = MonitorRect(fitted.x.dp.toPx(), fitted.y.dp.toPx(), fitted.width.dp.toPx(), fitted.height.dp.toPx())
                 focus.boxes.forEach { box ->
-                    val width = (box.width.toFloat() / focus.coordinateWidth * fitted.width).coerceAtLeast(10f)
-                    val height = (box.height.toFloat() / focus.coordinateHeight * fitted.height).coerceAtLeast(10f)
+                    val width = (box.width.toFloat() / focus.coordinateWidth * frame.width).coerceAtLeast(10f)
+                    val height = (box.height.toFloat() / focus.coordinateHeight * frame.height).coerceAtLeast(10f)
                     drawRect(if (focus.result == LiveFocusResult.FOCUSED) Color.Green else Color.White,
                         topLeft = Offset(
-                            fitted.x + box.centerX.toFloat() / focus.coordinateWidth * fitted.width - width / 2,
-                            fitted.y + box.centerY.toFloat() / focus.coordinateHeight * fitted.height - height / 2),
+                            frame.x + box.centerX.toFloat() / focus.coordinateWidth * frame.width - width / 2,
+                            frame.y + box.centerY.toFloat() / focus.coordinateHeight * frame.height - height / 2),
                         size = Size(width, height),
                         style = Stroke(2.dp.toPx()))
                 }
             }
         }
-        review.infoLine?.takeIf { options.showsCaptureInfo }?.let { info ->
-            Text(
-                info,
-                style = chromeStyle(13f, FontWeight.Medium, mono = true),
-                color = Color.White.copy(alpha = 0.92f),
-                maxLines = 1,
-                modifier =
-                    Modifier.align(Alignment.BottomCenter)
-                        .padding(bottom = 18.dp)
-                        .background(
-                            Color.Black.copy(alpha = 0.45f),
-                            ChromeShape,
-                        )
-                        .padding(horizontal = 12.dp, vertical = 5.dp),
-            )
-        }
-        // Single favorite star — the culling decision before the next frame.
-        Text(
-            if (review.starred) "★" else "☆",
-            style = chromeStyle(24f, FontWeight.SemiBold),
-            color = if (review.starred) LiveDesign.accent else Color.White.copy(alpha = 0.85f),
-            modifier =
-                Modifier.align(Alignment.TopEnd)
-                    .padding(top = 14.dp, end = 18.dp)
-                    .chromeClickable { onToggleStar(!review.starred) }
-                    .padding(8.dp)
-                    .semantics {
-                        contentDescription =
-                            if (review.starred) "Remove favorite star" else "Favorite this shot"
-                    },
-        )
     }
 }

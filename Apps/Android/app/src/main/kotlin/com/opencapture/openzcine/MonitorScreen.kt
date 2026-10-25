@@ -2131,6 +2131,9 @@ internal fun MonitorScreen(
                     (scopeSource !== emptyScopes && (!isPortrait || isPortraitFill || tool.scopeKind in portraitScopes)))
         }.toSet()
         key(session) {
+            // The instant review covers the whole monitor (iOS): the floating assist palette moves
+            // into this window beneath it rather than staying in its popup window above it.
+            com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
                     { usage = it; usageStore.value = it }, nikonUsageSeed,
@@ -2433,6 +2436,7 @@ internal fun MonitorScreen(
                     capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
                     onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
             )
+            }
         }
 
         gyroState?.takeIf { state ->
