@@ -11837,7 +11837,9 @@ final class NativeAppModel {
             // chrome to show.
             isPhotography: StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector),
-            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(String.init) ?? "",
+            // The phone header's short count (`7.1k`), so the wrist never shows a longer figure.
+            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(
+                MonitorTextFormat.shotsRemainingCompactLabel) ?? "",
             // The still image area the phone itself frames at — carried as a ratio so a crop
             // change on the body reaches the wrist without a second mode-to-shape table.
             feedAspectRatio: StillCapturePolicy.prefersPhotographyChrome(
