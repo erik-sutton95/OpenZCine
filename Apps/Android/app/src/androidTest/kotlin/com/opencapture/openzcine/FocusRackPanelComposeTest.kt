@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
@@ -149,6 +148,7 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.nativeAF.run.bToA").assertIsDisplayed().insideFrame().performClick()
         assertEquals(listOf("B"), actions.nativeGoes)
         assertEquals(listOf("B", "A"), actions.nativeRuns)
+        openNativeOptions()
         compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithText("Transition speed: camera setting").performScrollTo().assertIsDisplayed()
         assertEquals(1, actions.focusSettings)
@@ -213,7 +213,7 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.capture.B").assertIsNotEnabled()
         assertEquals(listOf("A"), actions.captures)
         compose.runOnIdle { state.value = state.value.copy(marks = listOf(mark("A", 0)), position = 4, canCaptureB = true) }
-        compose.onNodeWithText("0 steps").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.go.A").assertTextContains("✓ Saved · Fast").assertIsDisplayed()
         compose.onNodeWithTag("focusRack.positions").assertTextEquals("A 0 · B — · Now 4").assertIsDisplayed().insideFrame()
         compose.onNodeWithTag("focusRack.capture.B").performClick()
         assertEquals(listOf("A", "B"), actions.captures)
@@ -252,14 +252,17 @@ class FocusRackPanelComposeTest {
     }
 
     @Test fun setupNudgesKeepBoundsAndIdentityThroughProgressStopAndSettlement() {
-        val resting = ready().copy(message = "")
+        val resting = ready().copy(message = "", preparationRecommended = true,
+            calibration = FocusRackActionViewState("Prepare lens", "One pass A→B · recording stopped", true))
         val state = mutableStateOf(resting)
         val actions = Actions()
         mount(state, actions)
+        openMarkEditor()
         val tags = listOf("focusRack.panel", "focusRack.marks", "focusRack.positions", "focusRack.nudges",
             "focusRack.go.A", "focusRack.go.B", "focusRack.direction.near", "focusRack.direction.far",
             "focusRack.nudge.1", "focusRack.nudge.10", "focusRack.nudge.100",
-            "focusRack.duration", "focusRack.delay", "focusRack.options")
+            "focusRack.duration", "focusRack.options", "focusRack.calibrate")
+        compose.onNodeWithTag("focusRack.nudge.100").performScrollTo()
         val restingBounds = tags.associateWith { compose.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot }
         fun assertStableSetup() {
             for (tag in tags) assertEquals("Setup bounds changed for $tag", restingBounds[tag],
@@ -270,8 +273,8 @@ class FocusRackPanelComposeTest {
             for (id in listOf("A", "B")) compose.onNodeWithTag("focusRack.go.$id")
                 .assertIsDisplayed().assertIsNotEnabled().insideFrame()
             compose.onNodeWithTag("focusRack.duration").assertIsNotEnabled()
-            compose.onNodeWithTag("focusRack.delay").assertIsNotEnabled()
             compose.onNodeWithTag("focusRack.options").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
             compose.onNodeWithTag("focusRack.primary").assertIsNotEnabled()
             compose.onNodeWithTag("focusRack.stopHint").assertDoesNotExist()
             compose.onNodeWithTag("focusRack.progress").assertDoesNotExist()
@@ -323,6 +326,7 @@ class FocusRackPanelComposeTest {
         val state = mutableStateOf(resting)
         val actions = Actions()
         mount(state, actions)
+        openMarkEditor()
         compose.onNodeWithTag("focusRack.direction.near").assertIsSelected()
         compose.onNodeWithTag("focusRack.direction.far").performClick()
         compose.runOnIdle { state.value = resting.copy(focusMode = "nativeAF") }
@@ -344,6 +348,7 @@ class FocusRackPanelComposeTest {
         val setup = mutableStateOf(false)
         val actions = Actions()
         mount(state, actions, setupEnabled = { setup.value })
+        openMarkEditor()
         fun assertDisabled() {
             for (id in listOf("direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100"))
                 compose.onNodeWithTag("focusRack.$id").performScrollTo().assertIsNotEnabled().performClick()
@@ -370,7 +375,7 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.editInput").performTextReplacement("10")
         compose.onNodeWithTag("focusRack.editInput").performImeAction()
         waitForKeyboardDismissed()
-        compose.onNodeWithTag("focusRack.pull.aToB.detail", useUnmergedTree = true).assertTextEquals("10 s pull")
+        compose.onNodeWithTag("focusRack.duration").performScrollTo().assertTextContains("10 s")
         compose.runOnIdle { state.value = state.value.copy(primaryEnabled = false,
             admissionMessage = "This move needs at least 19 seconds.", primaryDisabledReason = "Adjust timing",
             playbackInstruction = "Adjust timing", pullAToB = state.value.pullAToB?.copy(enabled = false),
@@ -421,7 +426,8 @@ class FocusRackPanelComposeTest {
         val actions = Actions()
         mount(state, actions, updateTiming = true)
         compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("focusRack.delay").assertIsDisplayed()
+        openOptions()
+        compose.onNodeWithTag("focusRack.delay").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("focusRack.mode.fastest").assertDoesNotExist()
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled().performClick()
         compose.onNodeWithTag("focusRack.pull.bToA").assertIsNotEnabled()
@@ -435,8 +441,9 @@ class FocusRackPanelComposeTest {
         val state = mutableStateOf(ready())
         mount(state, Actions())
         compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("focusRack.delay").assertIsDisplayed()
-        compose.onNodeWithTag("focusRack.pull.aToB.detail", useUnmergedTree = true).assertTextEquals("24 s pull")
+        openOptions()
+        compose.onNodeWithTag("focusRack.delay").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.duration").performScrollTo().assertTextContains("24 s")
         assertTransportInsideFrame()
         compose.savePortraitEvidence("focus-rack-direct-actions-portrait")
     }
@@ -451,13 +458,13 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.applyEdit").assertDoesNotExist()
         assertEquals(Timing("32", "2.0", "linear", false), actions.timings.single())
         waitForKeyboardDismissed()
+        openOptions()
         compose.onNodeWithTag("focusRack.delay").performScrollTo().performClick()
         compose.onNodeWithTag("focusRack.editInput").performClick().performTextReplacement("3")
         compose.onNodeWithTag("focusRack.applyEdit").assertIsDisplayed().performClick()
         compose.onNodeWithTag("focusRack.applyEdit").assertDoesNotExist()
         waitForKeyboardDismissed()
-        openOptions()
-        compose.onNodeWithText("Options · Linear").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Options").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Ease in-out").assertDoesNotExist()
         compose.onNodeWithText("Ease in-out starts and finishes gently; it may need a longer duration.").assertDoesNotExist()
         assertEquals(32.0, actions.timings.last().duration.toDouble(), 0.0)
@@ -572,14 +579,13 @@ class FocusRackPanelComposeTest {
 
     @Test fun plannedTimedDurationIsVisibleWithoutDisablingTheRequestedPull() {
         val state = mutableStateOf(ready().copy(duration = 3.0, estimatedDuration = 3.4,
-            timingWarning = "Camera cadence is slower; this pull may exceed 3 s.",
+            timingWarning = "Camera cadence is slower; this pull may exceed 3 s.", timingWarningIsEstimate = true,
             pullAToB = FocusRackActionViewState("Rehearse A→B", "3 s target · ~3.4 s estimated", true)))
         mount(state, Actions())
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled().assertIsDisplayed().insideFrame()
         compose.onNodeWithTag("focusRack.estimate").performScrollTo()
-            .assertTextEquals("3 s target · ~3.40 s estimated").assertIsDisplayed().insideFrame()
-        compose.onNodeWithTag("focusRack.timingWarning").performScrollTo()
-            .assertTextEquals("Camera cadence is slower; this pull may exceed 3 s.").assertIsDisplayed().insideFrame()
+            .assertTextEquals("~3.40 s expected").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.timingWarning").assertDoesNotExist()
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
         compose.saveLandscapeEvidence("timed-rack-planned-estimate-landscape")
     }
@@ -606,9 +612,9 @@ class FocusRackPanelComposeTest {
             canCaptureA = false, canCaptureB = false, canStop = true))
         val actions = Actions()
         mount(state, actions)
-        compose.onNodeWithTag("focusRack.recovery").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.recovery").performScrollTo().assertIsDisplayed().insideFrame()
         compose.onNodeWithTag("focusRack.primary").assertIsEnabled().performClick()
-        openOptions()
+        openMarkEditor()
         compose.onNodeWithTag("focusRack.reset").performScrollTo().assertIsEnabled().performClick()
         assertEquals(1, actions.primary)
         assertEquals(1, actions.resets)
@@ -718,9 +724,10 @@ class FocusRackPanelComposeTest {
         val state = mutableStateOf(ready().copy(phase = "paused", primaryTitle = "Resume",
             canStop = true, active = true, recovery = "Reset both marks after an external focus change."))
         mount(state, Actions(), maximumHeight = 300f)
-        compose.onNodeWithTag("focusRack.positions").assertTextEquals("A 0 · B 94 · Now 0")
+        openMarkEditor()
+        compose.onNodeWithTag("focusRack.positions").performScrollTo().assertTextEquals("A 0 · B 94 · Now 0")
             .assertIsDisplayed().insideFrame()
-        compose.onNodeWithTag("focusRack.recovery").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.recovery").performScrollTo().assertIsDisplayed().insideFrame()
         assertTransportInsideFrame()
         compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsDisplayed()
         assertTransportInsideFrame()
@@ -732,13 +739,14 @@ class FocusRackPanelComposeTest {
         val actions = Actions()
         val state = mutableStateOf(ready().copy(message = advisory))
         mount(state, actions)
+        openMarkEditor()
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
         compose.onNodeWithTag("focusRack.nudge.10").assertIsEnabled()
         compose.onNodeWithTag("focusRack.message").performScrollTo().assertTextEquals(advisory).assertIsDisplayed()
         assertTransportInsideFrame()
         compose.saveLandscapeEvidence("focus-rack-operator-owned-reset-landscape")
         assertEquals(0, actions.resets)
-        openOptions()
+        openMarkEditor()
         compose.onNodeWithTag("focusRack.reset").performScrollTo().assertIsEnabled().performClick()
         assertEquals(1, actions.resets)
     }
@@ -811,6 +819,134 @@ class FocusRackPanelComposeTest {
         compose.savePortraitEvidence("focus-rack-preparation-recording-portrait")
     }
 
+    @Test fun initialMarkSetupShowsAllNudgesWithoutScrollingAndClosesAfterSavingB() {
+        val initial = threeSecondReady().copy(marks = emptyList(), canGoToB = false,
+            primaryTitle = "Set A and B", primaryEnabled = false, pullAToB = null, pullBToA = null)
+        val state = mutableStateOf(initial)
+        val actions = Actions()
+        mount(state, actions)
+        for (id in listOf("direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100")) {
+            compose.onNodeWithTag("focusRack.$id").assertIsDisplayed().assertIsEnabled().insideFrame()
+            assertTouchTarget("focusRack.$id")
+        }
+        compose.saveLandscapeEvidence("focus-rack-guided-initial-nudges-landscape")
+        compose.onNodeWithTag("focusRack.capture.A").performClick()
+        compose.runOnIdle { state.value = initial.copy(marks = listOf(mark("A", 0))) }
+        compose.onNodeWithTag("focusRack.direction.far").performClick()
+        compose.onNodeWithTag("focusRack.nudge.10").performClick()
+        assertEquals(listOf(false to 10), actions.nudges)
+        compose.runOnIdle { state.value = state.value.copy(active = true, canStop = true,
+            nudgeProgress = FocusRackNudgeProgressViewState(false, 10, 50)) }
+        compose.onNodeWithTag("focusRack.nudge.10").assertIsDisplayed().assertIsNotEnabled().insideFrame()
+        compose.runOnIdle { state.value = initial.copy(position = 10, marks = listOf(mark("A", 0))) }
+        compose.onNodeWithTag("focusRack.capture.B").performClick()
+        compose.runOnIdle { state.value = threeSecondReady().copy(position = 10,
+            marks = listOf(mark("A", 0), mark("B", 10))) }
+        compose.onNodeWithTag("focusRack.nudges").assertDoesNotExist()
+        compose.onNodeWithTag("focusRack.editMarks").assertTextContains("Edit marks").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.duration").assertIsDisplayed().assertIsEnabled()
+        assertEquals(listOf("A", "B"), actions.captures)
+        compose.saveLandscapeEvidence("focus-rack-guided-initial-complete-landscape")
+    }
+
+    @Test fun interfaceLockDisablesTimingAndTemplateWritesAndDismissesAnOpenEditor() {
+        val state = mutableStateOf(threeSecondReady())
+        val setup = mutableStateOf(false)
+        val actions = Actions()
+        mount(state, actions, templates = listOf(FocusRackTimingViewState("Slow rack", "{}")),
+            setupEnabled = { setup.value })
+        compose.onNodeWithTag("focusRack.duration").assertIsNotEnabled().performClick()
+        compose.onNodeWithTag("focusRack.editInput").assertDoesNotExist()
+        openOptions()
+        for (tag in listOf("delay", "saveTemplate")) {
+            compose.onNodeWithTag("focusRack.$tag").performScrollTo().assertIsNotEnabled().performClick()
+        }
+        compose.onNodeWithText("Slow rack").performScrollTo().assertIsNotEnabled().performClick()
+        compose.onNodeWithContentDescription("Delete Slow rack timing template")
+            .performScrollTo().assertIsNotEnabled().performClick()
+        assertTrue(actions.timings.isEmpty())
+        assertTrue(actions.saved.isEmpty())
+        assertTrue(actions.loaded.isEmpty())
+        assertTrue(actions.deleted.isEmpty())
+        compose.saveLandscapeEvidence("focus-rack-guided-timing-locked-landscape")
+        compose.runOnIdle { setup.value = true }
+        compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithTag("focusRack.editInput").performTextReplacement("6")
+        compose.runOnIdle { setup.value = false }
+        compose.onNodeWithTag("focusRack.editInput").assertDoesNotExist()
+        waitForKeyboardDismissed()
+        assertTrue(actions.timings.isEmpty())
+    }
+
+    @Test fun preparedEverydayViewKeepsOnlyTargetsDurationAndPlaybackInLandscape() {
+        mount(mutableStateOf(threeSecondReady()), Actions())
+        compose.onNodeWithTag("focusRack.go.A").assertTextContains("✓ Saved · Fast").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.go.B").assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.duration").assertIsDisplayed().assertTextContains("3 s")
+        for (tag in listOf("positions", "nudges", "delay", "reset", "saveTemplate")) {
+            compose.onNodeWithTag("focusRack.$tag").assertDoesNotExist()
+        }
+        compose.onNodeWithTag("focusRack.editMarks").assertTextContains("Edit marks").assertIsDisplayed()
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-guided-prepared-landscape")
+        openMarkEditor()
+        compose.onNodeWithTag("focusRack.nudge.100").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("focusRack.positions").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun slowTargetShowsExpectedTimeAndExplicitPreparationWithoutBlockingPlayback() {
+        val action = FocusRackActionViewState("Prepare lens", "One pass A→B · recording stopped", true)
+        val state = mutableStateOf(threeSecondReady().copy(estimatedDuration = 13.88, marks = listOf(mark("A", 0), mark("B", 150)),
+            preparationRecommended = true, calibration = action,
+            primaryDetail = "3 s target · ~13.88 s", timingWarningIsEstimate = true,
+            pullAToB = ready().pullAToB?.copy(detail = "3 s target · ~13.88 s"),
+            pullBToA = ready().pullBToA?.copy(detail = "3 s target · ~13.88 s")))
+        val actions = Actions()
+        mount(state, actions)
+        compose.onNodeWithTag("focusRack.duration").assertTextContains("3 s").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.estimate").assertTextEquals("~13.88 s expected").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.calibrate").assertIsEnabled().assertTextContains("Prepare lens").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.nudges").assertDoesNotExist()
+        compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
+        assertEquals(0, actions.calibrations)
+        compose.saveLandscapeEvidence("focus-rack-guided-preparation-landscape")
+        compose.onNodeWithTag("focusRack.calibrate").performClick()
+        assertEquals(1, actions.calibrations)
+        compose.runOnIdle { state.value = state.value.copy(recording = true, calibration = action.copy(
+            enabled = false, detail = "Stop recording before preparing the lens")) }
+        compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
+            .assertTextContains("Stop recording before preparing the lens").insideFrame()
+        compose.saveLandscapeEvidence("focus-rack-guided-recording-landscape")
+    }
+
+    @Test fun untimedPreparationNamesPauseAndStopWithoutTimedPullSubtitle() {
+        val state = mutableStateOf(ready().copy(active = true, preparingLens = true, phase = "moving",
+            primaryTitle = "Pause", primaryEnabled = true, canStop = true, completed = 20, total = 94))
+        mount(state, Actions())
+        compose.onNodeWithTag("focusRack.go.A").assertIsDisplayed().assertIsNotEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.go.B").assertIsDisplayed().assertIsNotEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.preparing").assertTextEquals("Preparing lens…").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.duration").assertDoesNotExist()
+        compose.onNodeWithTag("focusRack.primaryDetail", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("focusRack.stop").assertIsEnabled().insideFrame()
+        compose.saveLandscapeEvidence("focus-rack-guided-preparing-landscape")
+        compose.runOnIdle { state.value = state.value.copy(phase = "paused", primaryTitle = "Resume") }
+        compose.onNodeWithTag("focusRack.preparing").assertTextEquals("Preparation paused")
+        compose.onNodeWithTag("focusRack.primary").assertTextContains("Resume")
+        compose.saveLandscapeEvidence("focus-rack-guided-preparation-paused-landscape")
+    }
+
+    @Test fun completionWarningRetainsActualDurationInsteadOfReplacingItWithFutureEstimate() {
+        val actual = "3 s target; completed in 15 s."
+        val state = mutableStateOf(threeSecondReady().copy(phase = "complete", timingWarning = actual,
+            estimatedDuration = 3.0, timingWarningIsEstimate = false))
+        mount(state, Actions())
+        compose.onNodeWithTag("focusRack.timingWarning").assertTextEquals(actual).assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.estimate").assertDoesNotExist()
+        compose.saveLandscapeEvidence("focus-rack-guided-completion-warning-landscape")
+    }
+
     private fun waitForKeyboardDismissed() {
         compose.waitUntil(5_000) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.windows.none {
@@ -826,7 +962,7 @@ class FocusRackPanelComposeTest {
         nativePointLocked: () -> Boolean = { false }, onUnlockNativeFocusPoint: () -> Unit = {},
     ) {
         compose.setContent {
-            MaterialTheme {
+            OpenZCineTheme {
                 Box(Modifier.fillMaxSize().background(Color(0xFF101216)).safeDrawingPadding().padding(12.dp),
                     contentAlignment = Alignment.CenterEnd) {
                     Box(Modifier.width(300.dp)) {
@@ -863,6 +999,17 @@ class FocusRackPanelComposeTest {
                 }
             }
         }
+    }
+
+    private fun openMarkEditor() {
+        if (compose.onAllNodesWithTag("focusRack.positions").fetchSemanticsNodes().isEmpty()) {
+            compose.onNodeWithTag("focusRack.editMarks").performScrollTo().performClick()
+        }
+        compose.onNodeWithTag("focusRack.nudge.100").performScrollTo()
+    }
+
+    private fun openNativeOptions() {
+        compose.onNodeWithTag("focusRack.nativeAF.options").performScrollTo().performClick()
     }
 
     private fun openOptions() {
@@ -906,6 +1053,10 @@ class FocusRackPanelComposeTest {
         pullBToA = FocusRackActionViewState("Rehearse B→A", "24 s pull", false, "Go to B first"),
         canGoToB = true, canCaptureA = true,
         canCaptureB = true, canNudge = true, canEdit = true, canReset = true)
+
+    private fun threeSecondReady() = ready().copy(duration = 3.0, delay = 0.0, message = "",
+        primaryDetail = "3 s pull", pullAToB = ready().pullAToB?.copy(detail = "3 s pull"),
+        pullBToA = ready().pullBToA?.copy(detail = "3 s pull"))
 
     private fun mark(id: String, position: Int) = FocusRackMarkViewState(id, position, 1, "fixture", 1)
     private data class Timing(val duration: String, val delay: String, val easing: String, val reverse: Boolean)
