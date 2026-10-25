@@ -23,6 +23,19 @@ struct ConnectionLifecycleTests {
         return model
     }
 
+    /// Hardware pass 2026-10-25 (1.11): the wait for a dozing body ran under "Establishing a
+    /// secure link" with no waiting step.
+    @Test("The body wake shows its waiting step and hands back to the handshake on an answer")
+    func bodyWakeShowsTheWaitingStep() {
+        let model = model()
+        model.noteBodyWake(.waiting)
+        #expect(model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: ""))
+        model.noteBodyWake(.answered)
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+    }
+
     @Test("Cancel retires an unanswered take-over before a late confirmation")
     func cancelledTakeOverCannotStartConnection() {
         let model = model()

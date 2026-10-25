@@ -968,6 +968,12 @@ final class NativeAppModel {
     /// written ONLY by the connect machinery — unlike `connectionMessage`, which the discovery loop
     /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
     var connectionStageDetail = ""
+    /// The body wake (`NikonBodyWake`) is waiting for a dozing camera to answer: the sheet shows
+    /// the waiting step instead of a handshake that is not running yet (hardware pass 2026-10-25).
+    private(set) var isAwaitingBodyWake = false
+    /// The camera name the wake's waiting and silent copy use: the saved setup's title, the name
+    /// Android shows, so both platforms say the same sentence.
+    @ObservationIgnored private var bodyWakeDeviceName = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
     /// Whether an established session dropped and is being recovered behind a preserved monitor.
     /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
@@ -3051,8 +3057,25 @@ final class NativeAppModel {
             }(),
             isPreparingLiveView: connection == .preparingLiveView,
             isConnected: connection == .connected,
-            showsFailure: connectionProgressShowsFailure
+            showsFailure: connectionProgressShowsFailure,
+            isAwaitingBody: isAwaitingBodyWake
         )
+    }
+
+    /// One step of the body wake. The waiting copy rides `connectionStageDetail`, the detail the
+    /// progress card reads; an answer hands the sheet back to the handshake.
+    func noteBodyWake(_ progress: NikonBodyWake.Progress) {
+        switch progress {
+        case .waiting:
+            guard connectionPhase != .failed else { return }
+            isAwaitingBodyWake = true
+            connectionStageDetail = NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+        case .answered:
+            isAwaitingBodyWake = false
+            if connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName) {
+                connectionStageDetail = ""
+            }
+        }
     }
 
     func prepareStartup() {
@@ -3896,6 +3919,7 @@ final class NativeAppModel {
         // frees the latch immediately, so the operator's next tap is never swallowed while an
         // abandoned attempt is still unwinding a blocking socket read.
         isEstablishingConnection = true
+        isAwaitingBodyWake = false
         // Bounded phase timeouts belong to operator-initiated connects: a recovery attempt behind a
         // preserved monitor is already bounded by its own loop, and failing it here could overlap a
         // second Init with a socket read the first attempt is still blocked in.
@@ -3992,6 +4016,11 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
                 return
             }
+            do {
+                guard let self, self.connectionGeneration == generation else { return }
+                let title = savedCamera?.displayTitle.trimmingCharacters(in: .whitespaces) ?? ""
+                bodyWakeDeviceName = title.isEmpty ? connectionProgressDeviceName : title
+            }
             // A router or hotspot setup the list does not see is dialled at its stored address
             // blind. Ask the network first (`NikonBodyWake`): a body that answers goes on, a
             // silent one ends here with copy naming the real cause, not a PTP timeout.
@@ -4001,21 +4030,22 @@ final class NativeAppModel {
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     connectionPhase = .discovering
-                    connectionMessage = NikonBodyWake.wakingMessage(
-                        deviceName: connectionProgressDeviceName)
+                    noteBodyWake(.waiting)
+                    connectionMessage = connectionStageDetail
                 }
                 let wake = await NikonBodyWake.awaitAnswer(
                     host: host, isAlive: { await NativeNikonDiscovery.dialer.isAlive($0) })
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     logConnection("wake host=\(host) \(wake)")
+                    noteBodyWake(.answered)
                     if !wake.answered {
                         AppDiagnostics.shared.record(.connectionPtpFailed)
                         connection = .disconnected
                         connectionPhase = .failed
                         connectionProgressShowsFailure = true
                         connectionMessage = NikonBodyWake.silentMessage(
-                            deviceName: connectionProgressDeviceName)
+                            deviceName: bodyWakeDeviceName)
                         connectionFailureDetail = connectionMessage
                         startDiscoveryLoop(resetResults: false)
                         return
@@ -4272,10 +4302,15 @@ final class NativeAppModel {
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
+                noteBodyWake(.answered)
                 let baseError: String
                 if Self.isRejectedInitiator(error) {
                     baseError =
                         "The camera didn't recognize this phone. On the camera, create or choose a Connect to PC profile for this iPhone, then try again."
+                } else if error is NikonBodyWake.SilentError {
+                    // The dial's own wake heard nothing: the shared copy, named like the card
+                    // and like Android.
+                    baseError = NikonBodyWake.silentMessage(deviceName: bodyWakeDeviceName)
                 } else {
                     baseError =
                         (error as? LocalizedError)?.errorDescription
@@ -6762,6 +6797,10 @@ final class NativeAppModel {
         #if DEBUG
             let peers = cameraNetworkJoinPeers
         #endif
+        // The dial's body wake (`NikonBodyWake`) reports its wait here so the sheet shows it.
+        let onWakeProgress: @Sendable (NikonBodyWake.Progress) -> Void = { [weak self] progress in
+            Task { @MainActor in self?.noteBodyWake(progress) }
+        }
         return { [weak self] requestPairing, onPairingChallenge in
             try requireCurrent()
             #if DEBUG
@@ -6783,6 +6822,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6807,6 +6847,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6831,6 +6872,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 }

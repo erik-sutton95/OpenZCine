@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.pairing
 
 import com.opencapture.opencine.nikon.CameraConnectionFailure
+import com.opencapture.opencine.nikon.NikonBodyWake
 
 /**
  * Operator copy for a failed camera connect, the Android counterpart of iOS
@@ -29,6 +30,8 @@ internal fun friendlyCameraConnectionFailure(failure: CameraConnectionFailure?, 
         // non-address key (#327); the operator's remedy is the rejoin/rediscover flow.
         CameraConnectionFailure.NON_NUMERIC_HOST ->
             "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again."
+        // The body wake asked the network and nothing answered: the shared copy iOS shows.
+        CameraConnectionFailure.CAMERA_SILENT -> NikonBodyWake.silentMessage("")
         // Never surface socket errors or PTP-IP packet dumps to the operator.
         CameraConnectionFailure.UNREACHABLE -> UNREACHABLE_COPY
         CameraConnectionFailure.BUSY, CameraConnectionFailure.OTHER, null ->

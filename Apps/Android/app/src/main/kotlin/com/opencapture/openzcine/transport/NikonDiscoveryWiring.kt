@@ -9,13 +9,8 @@ import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.openzcine.relay.RelayPresence
 import com.opencapture.openzcine.relay.parseRelayPresenceLine
 import java.io.IOException
-import java.net.ConnectException
 import java.net.InetSocketAddress
-import java.net.NoRouteToHostException
-import java.net.PortUnreachableException
 import java.net.Socket
-import java.net.SocketException
-import java.net.SocketTimeoutException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -53,7 +48,11 @@ internal object SocketNikonDialer : NikonDialer {
             }
         }
 
-    /** A dial a non-OpenZCine host refuses (kernel RST) still proves the address is occupied. */
+    /**
+     * A dial a non-OpenZCine host refuses (kernel RST) still proves the address is occupied. Only
+     * a refusal does: Android reports a late "No route to host" as a ConnectException too, and a
+     * dozing body must read as silent ([HostProbeVerdict.ofDialFailure]).
+     */
     override suspend fun isAlive(host: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -64,10 +63,8 @@ internal object SocketNikonDialer : NikonDialer {
                     )
                 }
                 true
-            } catch (_: ConnectException) {
-                true
-            } catch (_: IOException) {
-                false
+            } catch (error: IOException) {
+                HostProbeVerdict.ofDialFailure(error).isOccupied
             }
         }
 
@@ -82,20 +79,9 @@ internal object SocketNikonDialer : NikonDialer {
                     socket.connect(InetSocketAddress(host, CameraDiscovery.PTP_IP_PORT), timeoutMillis)
                 }
                 HostProbeVerdict.OPEN
-            } catch (_: SocketTimeoutException) {
-                HostProbeVerdict.TIMEOUT
-            } catch (_: NoRouteToHostException) {
-                HostProbeVerdict.NO_ROUTE
-            } catch (_: PortUnreachableException) {
-                HostProbeVerdict.REFUSED
-            } catch (_: ConnectException) {
-                // Refused: only a live host's kernel sends the RST.
-                HostProbeVerdict.REFUSED
-            } catch (_: SocketException) {
-                HostProbeVerdict.NO_NETWORK
-            } catch (_: IOException) {
-                // Never evidence about the host: this is something about THIS device.
-                HostProbeVerdict.UNREACHABLE_OTHER
+            } catch (error: IOException) {
+                // Read from the errno: only ECONNREFUSED is a live host's RST.
+                HostProbeVerdict.ofDialFailure(error)
             }
         }
 }
