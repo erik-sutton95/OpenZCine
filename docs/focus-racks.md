@@ -8,7 +8,11 @@ Remaining physical qualification is recorded in
 ## Native AF and Timed Rack
 
 The focus panel offers **Native AF** and **Timed Rack** on iOS and Android. It opens in
-Timed Rack to retain the existing workflow. Opening the panel or selecting a mode temporarily
+Timed Rack to retain the existing workflow. The everyday view keeps the A/B cards and playback
+actions visible. Timed Rack also shows the duration target and estimated execution time. **Edit
+marks** opens manual positioning and the step ledger; **Options** holds start delay, timing
+templates and camera settings. Missing marks or an active nudge keep their setup controls visible.
+Opening the panel or selecting a mode temporarily
 sets its movie AF configuration through the existing confirmed camera-setting path. Native AF
 uses **AF-F / Auto-area AF / subject detection Off**; Timed Rack uses **AF-S / Auto-area AF /
 subject detection Off**, preserving the configuration used for the local timing calibration.
@@ -35,7 +39,8 @@ box. Unlocking does not select a target, move focus, or release the main interfa
 Native AF uses the camera's existing **g6 AF speed**. It has no exact-duration selector or MF
 calibration requirement: the camera determines the transition and whether it acquires the subject.
 AF-F, Auto-area and subject detection Off are configured automatically; g6 has no control in the
-current protocol implementation. **Focus settings** remains an optional secondary control.
+current protocol implementation. Start delay and **Focus settings** remain under **Options**;
+the everyday view identifies transition speed as camera-controlled.
 “Target A/B selected” acknowledges targeting, not optical sharpness. The local test at speed −5 produced smooth transitions
 of roughly five seconds; the near bedpost needed retries. This does not promise exact 1/3/6-second
 moves or reliable acquisition of every subject.
@@ -70,12 +75,16 @@ Disconnecting retires the pending restoration; it is never replayed on a replace
    until movement settles, and Stop remains available. Choose **Set B** after movement settles.
    The thumbnails identify the
    accepted frames for each mark. These shortcuts do not change the step size or minimum pull time.
+5. After both marks are set, use the visible **Prepare lens** recommendation if command sizes
+   have not been measured. It starts one explicit move to the other endpoint with recording
+   stopped. Check that endpoint is sharp. Playback remains available when preparation is recommended.
 
 The rack counts acknowledged increments, independently of the ordinary focus dial. Marks do
-not represent measured distances. The fixed mark cards group thumbnails and relative step positions. A card sets an empty mark;
-once captured, it is labelled Go to A/B with Fast reposition. Replace A/B is explicit under Options.
-The current relative position is shown in the same group. The Near/Far selector sits below it,
-with the three signed step buttons directly underneath.
+not represent measured distances. The fixed mark cards identify the accepted frames and saved
+state. A card sets an empty mark; once captured, it offers Go to A/B for fast repositioning.
+The everyday cards keep their saved identity during movement. **Edit marks** reveals the current
+relative position, Near/Far selector, three signed step buttons, Replace A/B and Reset marks.
+Expanding or collapsing that editor never moves focus or changes the saved marks.
 In Clean display the panel keeps its compact transport. **Open focus rack setup** returns to Live
 display and opens setup without changing marks or timing. The interface lock still prevents setup;
 Stop remains available during movement. Compact transport keeps timing warnings visible.
@@ -91,7 +100,7 @@ move invalidates the relative reference; the app cannot detect every physical ch
 
 ## Choose and run a move
 
-Set **Duration** and **Start delay** in the same panel, then use **Rehearse A→B** or
+Set **Duration**, optionally choose **Start delay** under **Options**, then use **Rehearse A→B** or
 **Rehearse B→A**. While recording the same controls read **Run A→B/B→A**. Both directions
 remain visible and show the selected pull duration. There is no separate direction or
 Fastest/Timed selector. Defaults are three seconds, zero delay and Linear. The panel currently offers
@@ -127,13 +136,19 @@ errors and unsafe context can still prevent movement. Requested duration, estima
 duration and observed host command span are separate values. None measures optical arrival or
 guarantees smoothness. Very close marks may require finer movement than the base increment.
 
-Use **Prepare lens** under Options to measure the connected lens in one explicit pass from the
-current A or B mark to the other. Recording must be stopped. The pass tries 16, 32, 48, 64, 96,
+**Prepare lens** appears prominently when the current marks need unmeasured command sizes. A
+completed pass removes the recommendation; compatible existing measurements can satisfy it too.
+Recording or readiness temporarily disabling the action does not hide that recommendation. When
+already measured, optional preparation remains under **Options**. The action measures the
+connected lens in one explicit pass from the current A or B mark to the other. Recording must be
+stopped. The pass tries 16, 32, 48, 64, 96,
 128, 160 and 192 pulses as the mark span permits, then completes the exact remaining distance
 without exceeding either endpoint. Short spans measure a subset; they do not require wider marks.
 It never returns automatically or starts recording. Pause and Stop retain their normal behavior;
 starting recording during preparation stops further preparation commands. The button states the
-direction and can run another pass from the opposite endpoint when needed.
+direction and can run another pass from the opposite endpoint when needed. Progress identifies
+the movement as lens preparation, without presenting it as a duration-based pull. Timing targets,
+actual command timing and optical sharpness remain separate concepts.
 
 Both apps save successful native command timing maxima separately from session marks. Partial
 successful measurements can be reused after an interrupted preparation, but a failed command adds
@@ -175,7 +190,8 @@ Go to A/B remains the fast alternative. Stopping recording also cancels further 
 
 ## Save timing and manage the panel
 
-Save a named timing template under **Options**. Reset marks and Focus settings are also available there.
+Save a named timing template under **Options**. Focus settings and start delay are also available
+there. **Edit marks** groups Replace A/B and Reset marks with manual positioning.
 Templates retain duration and delay with Linear timing, plus legacy mode/direction fields for
 compatibility. Older Ease in-out values still decode; production playback uses Linear. Existing
 templates without a mode restore as Timed. Loading one requires fresh marks and starts no movement.

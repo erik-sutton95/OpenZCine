@@ -249,15 +249,67 @@ func rackPreparationGuidanceTracksAcknowledgedSizesWithoutBlockingPlayback(span:
     var state = FocusRackState.initial
     state.preparationRecommended = true
     state.preparingLens = false
+    state.timingWarningIsEstimate = true
     let data = try JSONEncoder().encode(state)
     let restored = try JSONDecoder().decode(FocusRackState.self, from: data)
     #expect(restored.preparationRecommended == true)
     #expect(restored.preparingLens == false)
+    #expect(restored.timingWarningIsEstimate == true)
     var old = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     old.removeValue(forKey: "preparationRecommended")
     old.removeValue(forKey: "preparingLens")
+    old.removeValue(forKey: "timingWarningIsEstimate")
     let legacy = try JSONDecoder().decode(
         FocusRackState.self, from: JSONSerialization.data(withJSONObject: old))
     #expect(legacy.preparationRecommended == nil)
     #expect(legacy.preparingLens == nil)
+    #expect(legacy.timingWarningIsEstimate == nil)
+}
+
+@Test func rackPreparationGuidanceReturnsForANewUnmeasuredResidual() throws {
+    var (engine, now) = try preparationEngine(150)
+    try engine.calibrate(at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    #expect(engine.state(at: now).preparationRecommended == false)
+    try engine.seek(markID: "B", at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    try engine.nudge(towardNear: false, steps: 1, at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    try engine.capture(markID: "B", at: now)
+    #expect(engine.calibrationTimings[144] == nil)
+    #expect(engine.state(at: now).preparationRecommended == true)
+    #expect(engine.state(at: now).pullBToA?.enabled == true)
+    try engine.calibrate(at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    #expect(engine.calibrationTimings[144] != nil)
+    #expect(engine.state(at: now).preparationRecommended == false)
+}
+
+@Test func rackPreparationGuidanceReturnsWhenLensTimingBecomesIncompatible() throws {
+    var (engine, now) = try preparationEngine(150)
+    try engine.calibrate(at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    #expect(engine.state(at: now).preparationRecommended == false)
+    let marks = engine.currentProgram.marks
+    var changed = preparationContext(now)
+    changed.lens = "another synthetic lens"
+    engine.observe(changed, at: now)
+    #expect(engine.currentProgram.marks == marks)
+    #expect(engine.state(at: now).preparationRecommended == true)
+    #expect(engine.state(at: now).preparingLens == false)
+}
+
+@Test func rackTimingWarningMetadataKeepsCompletionSeparateFromTheNextEstimate() throws {
+    var (engine, now) = try preparationEngine(150)
+    #expect(engine.state(at: now).timingWarning != nil)
+    #expect(engine.state(at: now).timingWarningIsEstimate == true)
+    try engine.run(direction: .bToA, at: now)
+    _ = try finishPreparation(&engine, now: &now)
+    let completed = engine.state(at: now)
+    #expect(completed.phase == .complete)
+    #expect(try #require(completed.actualMovementDuration) > 3)
+    #expect(completed.timingWarning?.contains("completed in") == true)
+    #expect(completed.timingWarningIsEstimate == false)
+    try engine.setTransition(.init(duration: 1), at: now)
+    #expect(engine.state(at: now).timingWarningIsEstimate == true)
 }
