@@ -27,7 +27,6 @@ enum DemoHarness {
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
-    static let profileClip = value("ZC_PROFILE_CLIP")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
     /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open.
@@ -325,25 +324,6 @@ enum DemoHarness {
         /// `simctl launch`). No effect in normal launches.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {
             let env = environment
-            os.Logger(subsystem: "OpenZCine", category: "profile").notice(
-                "profile env open=\(env["ZC_DEMO_OPEN_MEDIA"] ?? "-", privacy: .public) tools=\(env["ZC_PROFILE_TOOLS"] ?? "-", privacy: .public)")
-            if let raw = env["ZC_PROFILE_TOOLS"] {
-                // Local profiling only: replace (not persist) the playback tool set, then open
-                // the cached library after the splash; MediaBrowserView plays ZC_PROFILE_CLIP.
-                model.assist.playbackVisibleTools = Set(
-                    raw.split(separator: ",").compactMap {
-                        MonitorAssistTool(rawValue: String($0))?.selection
-                    })
-                try? await Task.sleep(for: .seconds(2))
-                model.openCachedMediaLibrary()
-                if env["ZC_PROFILE_LANDSCAPE"] == "1" {
-                    try? await Task.sleep(for: .seconds(3))
-                    for scene in UIApplication.shared.connectedScenes {
-                        (scene as? UIWindowScene)?.requestGeometryUpdate(
-                            .iOS(interfaceOrientations: .landscapeRight)) { _ in }
-                    }
-                }
-            }
             if let review, review.screen == .media || review.screen == .playback {
                 // The clips exist before anything below lists them.
                 await stageReviewMedia(review, in: model)

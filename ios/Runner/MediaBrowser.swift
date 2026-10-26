@@ -1,4 +1,3 @@
-import os
 import AVFoundation
 import ImageIO
 import MonitorPresentation
@@ -285,13 +284,8 @@ struct MediaBrowserView: View {
         if model.isConnected, model.mediaBrowserSource == .camera {
             model.scheduleFetchClipsFromCamera()
         }
-        os.Logger(subsystem: "OpenZCine", category: "profile").notice(
-            "profile begin action=\(DemoHarness.openMediaAction ?? "-", privacy: .public) library=\(model.mediaLibrary != nil) records=\(model.mediaLibrary?.records.count ?? -1)")
         if DemoHarness.openMediaAction == "play", let library = model.mediaLibrary,
-            let record = library.records.first(where: { candidate in
-                model.isClipDownloaded(candidate.payload)
-                    && (DemoHarness.profileClip.map { candidate.asset.filename.contains($0) } ?? true)
-            })
+            let record = library.records.first(where: { model.isClipDownloaded($0.payload) })
         {
             open(.init(record: record, playlist: library.records, admission: library.actionToken))
         }
