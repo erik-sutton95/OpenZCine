@@ -4785,6 +4785,19 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
         try await settle { presentedDepth() == 2 }
         XCTAssertEqual(model.redDownloadHost, .playback)
         XCTAssertEqual(presentedDepth(), 2)
+
+        // The screen closing itself (`dismiss`, the binding's false write) and an immediate new
+        // ask: the dismissal clears only the request it closed.
+        let close = try XCTUnwrap(
+            HostedAccessibility.elements(in: hosted.window).first {
+                $0.accessibilityLabel == "SIMULATED close"
+            }, hosted.labels.joined(separator: ", "))
+        XCTAssertTrue(close.accessibilityActivate())
+        model.redDownloadHost = .playback
+        try await Task.sleep(for: .milliseconds(1_200))
+        try await settle { presentedDepth() == 2 }
+        XCTAssertEqual(model.redDownloadHost, .playback)
+        XCTAssertEqual(presentedDepth(), 2)
     }
 
     /// A SIMULATED media browser presenting a SIMULATED clip player cover with its own mount.
@@ -4797,15 +4810,31 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
                 .fullScreenCover(isPresented: $playing) {
                     Color.gray
                         .redDownloadCover(model, host: .playback) {
-                            Text("SIMULATED player RED download")
+                            SimulatedRedDownload(title: "SIMULATED player RED download")
                         }
                 }
         }
     }
 
+    /// A SIMULATED download screen that closes itself the way the real one does (`dismiss`).
+    private struct SimulatedRedDownload: View {
+        let title: String
+        @Environment(\.dismiss) private var dismiss
+        var body: some View {
+            VStack {
+                Text(title)
+                Button("SIMULATED close") { dismiss() }
+            }
+        }
+    }
+
     /// The playback picker's Download from RED asks the player's mount, not the root.
     func testPlaybackPickerAsksThePlayerForTheRedDownload() async throws {
-        let model = NativeAppModel()
+        // An empty RED library of its own: the app's Documents may hold RED looks.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("red-picker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: root))
         let previous = model.assistConfiguration.selectedLUT
         // A RED look that is not stored opens the picker on the empty RED tab.
         model.assistConfiguration.selectedLUT = .stored(category: .red, fileName: "SIMULATED.cube")
