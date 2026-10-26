@@ -14786,9 +14786,9 @@ extension NativeAppModel {
             let url = try? mediaClipStore.localURL(
                 cameraID: clip.cameraID, filename: clip.filename)
         else { return false }
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        let onDisk = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+        // One stat(2): playback asks this on every body pass (see MediaFileFacts).
+        guard let facts = MediaFileFacts.read(url.path, followingLinks: true) else { return false }
+        let onDisk = facts.size
         // A local-only legacy row can use the existing nonempty-file fact without claiming a
         // camera extent. Active unknown/sentinel objects cannot establish transfer completion.
         if clip.sizeBytes == 0 {
