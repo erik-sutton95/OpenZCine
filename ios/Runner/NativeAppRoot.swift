@@ -1063,9 +1063,16 @@ final class NativeAppModel {
         get { shell.cover == .media && activePanel != .media }
         set { setStandalone(.media, newValue) }
     }
-    /// Full-screen RED LUT download, presented from the app root (not the LUT picker) so it
-    /// survives the monitor collapsing when the internet hop tears the camera session down.
-    var isRedDownloadPresented = false
+    /// The surface presenting the full-screen RED LUT download, or nil when it is closed. The
+    /// monitor's picker asks the app root (not the LUT picker) so the cover survives the monitor
+    /// collapsing when the internet hop tears the camera session down; the clip player's picker
+    /// asks the player, whose own cover would otherwise hold the root's back (`RedDownloadHost`).
+    var redDownloadHost: RedDownloadHost?
+    /// Whether the RED LUT download is up on any surface. Setting it true asks the app root.
+    var isRedDownloadPresented: Bool {
+        get { redDownloadHost != nil }
+        set { redDownloadHost = newValue ? (redDownloadHost ?? .root) : nil }
+    }
     /// Operator Setup presented standalone from the startup home (no camera connection needed —
     /// e.g. signing in to Frame.io or clearing the media cache before a shoot): the shell's
     /// Settings cover, not the monitor's panel.
@@ -14304,11 +14311,9 @@ struct NativeAppRoot: View {
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
-        // when the RED internet hop tears the camera session down mid-download.
-        .fullScreenCover(isPresented: redDownloadPresented) {
-            RedDownloadView { url in await model.importRedZip(from: url) }
-                .environment(model)
-        }
+        // when the RED internet hop tears the camera session down mid-download. The clip player
+        // mounts its own (`MediaPlayerView`).
+        .redDownloadCover(model, host: .root)
         .sheet(
             isPresented: Binding(
                 get: { model.gyroCapture.logsPresented },
@@ -14397,13 +14402,6 @@ struct NativeAppRoot: View {
             await DemoHarness.applyLaunchEnvironment(to: model)
         }
     }
-    private var redDownloadPresented: Binding<Bool> {
-        Binding(
-            get: { model.isRedDownloadPresented },
-            set: { model.isRedDownloadPresented = $0 }
-        )
-    }
-
     private var bugReportPresented: Binding<Bool> {
         Binding(
             get: { model.isBugReportPresented },
