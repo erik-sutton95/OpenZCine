@@ -15,7 +15,6 @@ Fixes
 - Take Over asks first, and the phone that loses the camera stops reconnecting for good. A refused camera Wi-Fi join offers Settings, an explicit retry asks again, and an abandoned connection no longer carries on behind the setup screen.
 - Exposure readouts are restored: Auto ISO shows its limit, values the camera's program owns are dimmed and locked, hold on SHUTTER toggles its lock, and Reading camera settings shows while live view starts.
 - Photo mode turns the LUT and the cinema tools off; video restores them. Shots left follow the stills card, app-triggered photos use that card, and in CL/CH a tap takes one photo while a hold takes a burst.
-- Download from RED in the clip player's LUT menu opens over the clip right away, without leaving the clip.
 - Media sharing treats photos as photos and finishes a clip's copy first. Playback stays paused after Share or app return. The GYRO pill no longer covers the screen lock, and tapping to focus during a focus pull no longer leaves it busy.
 - VoiceOver skips collapsed assist controls and live controls under a covering screen, and shutter labels describe the action. Setup asks for Local Network at its own step. The open landscape View Assist palette hides the values it covers.
 
@@ -23,7 +22,7 @@ What to test
 
 - In video mode, rotate and inspect DISP 3, the FPS chip (LINK, then the frame rate), timecode frames and camera readouts. Tap the storage readout through its steps, then switch to Photo and check SHOTS.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- With no RED LUTs stored, open a clip, open the LUT menu's RED tab and tap Download from RED: it opens over the clip.
+- With no RED LUTs stored, Download from RED in a clip's LUT menu opens over the clip.
 - Open Media on a full card: scroll, select, use Select all and cache a few clips. With Full Resolution Caching on, play an uncached clip briefly, go back and wait about 30 s: it reads CACHED.
 - Let the camera doze, then connect: it wakes and connects, or shows the asleep message if it stays silent. Retry a cancelled Wi-Fi join; with two phones, Take Over asks first and the first phone stops.
 - Change Quality Bias, background the app and return; Live View stays usable. If the live picture drops out, use Share Diagnostics and report the time and what you were doing.
