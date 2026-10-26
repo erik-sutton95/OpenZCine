@@ -30,7 +30,8 @@ enum MediaFileFacts {
         return .init(
             fileNumber: UInt64(info.st_ino), size: UInt64(max(0, info.st_size)),
             modified: Date(
-                timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9))
+                timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9)
+        )
     }
 }
 

@@ -338,7 +338,9 @@ import Testing
         #expect(try same(file, follow: false, as: file))
         #expect(try same(link, follow: false, as: link))
         #expect(try same(link, follow: true, as: file))
-        #expect(MediaFileFacts.read(root.appendingPathComponent("missing").path, followingLinks: true) == nil)
+        #expect(
+            MediaFileFacts.read(root.appendingPathComponent("missing").path, followingLinks: true)
+                == nil)
     }
 
     @Test func indexMemoAlwaysMatchesAFreshRead() throws {
