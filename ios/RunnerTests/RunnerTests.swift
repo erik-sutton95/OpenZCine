@@ -4718,6 +4718,150 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
         }
     }
 
+    /// The owner's report (TestFlight 317): Download from RED in the clip player showed nothing
+    /// until the clip closed. The root cover cannot present over the player's own cover; the
+    /// player's mount presents at once. SIMULATED stand-ins for the player and download screen.
+    func testRedDownloadRequestedInPlaybackPresentsOverThePlayer() async throws {
+        let model = NativeAppModel()
+        defer { model.redDownloadHost = nil }
+        // As in the app: the root mount sits on the root container and the player is a cover
+        // presented by a view inside it (the media browser), from the same root controller.
+        let hosted = try Hosted(
+            ZStack {
+                SimulatedMediaBrowser(model: model)
+            }
+            .redDownloadCover(model, host: .root) { Text("SIMULATED root RED download") }
+        )
+        defer { hosted.close() }
+        func presentedDepth() -> Int {
+            var depth = 0
+            var top: UIViewController? = hosted.host
+            while let next = top?.presentedViewController, !next.isBeingDismissed {
+                depth += 1
+                top = next
+            }
+            return depth
+        }
+        func settle(until done: () -> Bool) async throws {
+            for _ in 0..<150 where !done() {
+                hosted.host.view.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await settle { presentedDepth() == 1 }
+        XCTAssertEqual(presentedDepth(), 1, "The SIMULATED player cover is up")
+
+        // Before the fix every picker asked the root: held behind the player, nothing shows.
+        model.isRedDownloadPresented = true
+        XCTAssertEqual(model.redDownloadHost, .root)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(presentedDepth(), 1, "UIKit holds the root's cover behind the player")
+        XCTAssertFalse(hosted.labels.contains("SIMULATED root RED download"))
+        model.redDownloadHost = nil
+
+        // The playback picker asks the player, which presents over the clip at once.
+        model.redDownloadHost = .playback
+        try await settle { hosted.labels.contains("SIMULATED player RED download") }
+        XCTAssertEqual(presentedDepth(), 2)
+        XCTAssertTrue(
+            hosted.labels.contains("SIMULATED player RED download"),
+            hosted.labels.joined(separator: ", "))
+        XCTAssertTrue(model.isRedDownloadPresented)
+
+        // Closing clears only the player's request; the player stays.
+        model.redDownloadHost = nil
+        try await settle { presentedDepth() == 1 }
+        XCTAssertEqual(presentedDepth(), 1)
+        XCTAssertNil(model.redDownloadHost)
+
+        // Asking again while the closing cover is still leaving: its late disappearance must not
+        // clear the newer ask.
+        model.redDownloadHost = .playback
+        try await settle { presentedDepth() == 2 }
+        model.redDownloadHost = nil
+        hosted.host.view.layoutIfNeeded()
+        model.redDownloadHost = .playback
+        try await Task.sleep(for: .milliseconds(1_200))
+        try await settle { presentedDepth() == 2 }
+        XCTAssertEqual(model.redDownloadHost, .playback)
+        XCTAssertEqual(presentedDepth(), 2)
+
+        // The screen closing itself (`dismiss`, the binding's false write) and an immediate new
+        // ask: the dismissal clears only the request it closed.
+        let close = try XCTUnwrap(
+            HostedAccessibility.elements(in: hosted.window).first {
+                $0.accessibilityLabel == "SIMULATED close"
+            }, hosted.labels.joined(separator: ", "))
+        XCTAssertTrue(close.accessibilityActivate())
+        model.redDownloadHost = .playback
+        try await Task.sleep(for: .milliseconds(1_200))
+        try await settle { presentedDepth() == 2 }
+        XCTAssertEqual(model.redDownloadHost, .playback)
+        XCTAssertEqual(presentedDepth(), 2)
+    }
+
+    /// A SIMULATED media browser presenting a SIMULATED clip player cover with its own mount.
+    private struct SimulatedMediaBrowser: View {
+        let model: NativeAppModel
+        @State private var playing = false
+        var body: some View {
+            Color.black
+                .onAppear { playing = true }
+                .fullScreenCover(isPresented: $playing) {
+                    Color.gray
+                        .redDownloadCover(model, host: .playback) {
+                            SimulatedRedDownload(title: "SIMULATED player RED download")
+                        }
+                }
+        }
+    }
+
+    /// A SIMULATED download screen that closes itself the way the real one does (`dismiss`).
+    private struct SimulatedRedDownload: View {
+        let title: String
+        @Environment(\.dismiss) private var dismiss
+        var body: some View {
+            VStack {
+                Text(title)
+                Button("SIMULATED close") { dismiss() }
+            }
+        }
+    }
+
+    /// The playback picker's Download from RED asks the player's mount, not the root.
+    func testPlaybackPickerAsksThePlayerForTheRedDownload() async throws {
+        // An empty RED library of its own: the app's Documents may hold RED looks.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("red-picker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: root))
+        let previous = model.assistConfiguration.selectedLUT
+        // A RED look that is not stored opens the picker on the empty RED tab.
+        model.assistConfiguration.selectedLUT = .stored(category: .red, fileName: "SIMULATED.cube")
+        defer {
+            model.redDownloadHost = nil
+            model.assistConfiguration.selectedLUT = previous
+        }
+        let hosted = try Hosted(NikonLUTPicker(downloadHost: .playback).environment(model))
+        defer { hosted.close() }
+        func element(_ label: String) -> NSObject? {
+            let matches = HostedAccessibility.elements(in: hosted.host.view).filter {
+                $0.accessibilityLabel == label
+            }
+            return matches.first { $0.accessibilityTraits.contains(.button) } ?? matches.first
+        }
+        for _ in 0..<150 where element("Download from RED") == nil {
+            hosted.host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let download = try XCTUnwrap(
+            element("Download from RED"),
+            "SIMULATED: no RED looks are stored, so the empty RED tab offers the download. "
+                + hosted.labels.joined(separator: ", "))
+        XCTAssertTrue(download.accessibilityActivate())
+        XCTAssertEqual(model.redDownloadHost, .playback)
+    }
+
     func testProductionPickerDelegatesComparisonToInspectorAndDeclaresExposureUnavailable()
         async throws
     {

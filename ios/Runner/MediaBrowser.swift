@@ -951,6 +951,9 @@ struct MediaPlayerView: View {
         }
         .onDisappear { model.isMediaPlaybackActive = false }
         .onChange(of: playing) { _, value in model.isMediaPlaybackActive = value }
+        // The player is a full-screen cover, so the root's download cover cannot present over
+        // it: the playback LUT picker asks this mount instead.
+        .redDownloadCover(model, host: .playback)
     }
 
     private var playing: Bool {
@@ -971,7 +974,7 @@ struct MediaPlayerView: View {
                 initialChromeVisible: !DemoHarness.playbackCleanView),
             makeSource: { context }, captureSource: { context.sourceAdmission },
             preview: { NikonPlaybackInspectorPreview(tool: $0, host: context.host) },
-            lookMenu: { NikonLUTPicker().environment(model) },
+            lookMenu: { NikonLUTPicker(downloadHost: .playback).environment(model) },
             deliveryPopup: { [model] request, dismiss in
                 request.popup(model, coordinator: context.delivery, onDismiss: dismiss)
             })

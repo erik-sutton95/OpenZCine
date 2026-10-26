@@ -22,6 +22,6 @@ What to test
 
 - In video mode, rotate and inspect DISP 3, the FPS chip (LINK, then the frame rate), timecode frames and camera readouts. Tap the storage readout through its steps, then switch to Photo and check SHOTS.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- Open Media on a full card: scroll, select, use Select all and cache a few clips. With Full Resolution Caching on, play an uncached clip briefly, go back and wait about 30 s: it reads CACHED.
+- Open Media on a full card: scroll, select, use Select all and cache a few clips. With Full Resolution Caching on, play an uncached clip briefly, go back and wait about 30 s: it reads CACHED. With no RED LUTs stored, Download from RED in a clip's LUT menu opens over the clip.
 - Let the camera doze, then connect: it wakes and connects, or shows the asleep message if it stays silent. Retry a cancelled Wi-Fi join; with two phones, Take Over asks first and the first phone stops.
 - Change Quality Bias, background the app and return; Live View stays usable. If the live picture drops out, use Share Diagnostics and report the time and what you were doing.

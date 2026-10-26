@@ -34,6 +34,8 @@ retaining Nikon's stills, video and Multicam controls.
   saying it holds it and drops the contradictory "Reconnecting" pill.
 - Media sharing keeps photo options separate from video export and completes
   pending copies before sharing. Playback stays paused after app return.
+- Download from RED in the clip player opens over the clip at once instead of
+  after the clip closes.
 - iOS improves shutter VoiceOver wording, hides collapsed assist controls from
   accessibility and requests Local Network access at the setup permission step.
 - Android restores pairing guards and can save the watcher passcode without a

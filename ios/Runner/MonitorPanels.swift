@@ -736,8 +736,13 @@ struct DrumSideAdjustButton: View {
 /// Nikon supplies catalogue values and actions; the shared picker owns tabs, rows and import UI.
 struct NikonLUTPicker: View {
     let embedded: Bool
+    /// The surface this picker lives on, which presents the RED download it asks for.
+    let downloadHost: RedDownloadHost
 
-    init(embedded: Bool = true) { self.embedded = embedded }
+    init(embedded: Bool = true, downloadHost: RedDownloadHost = .root) {
+        self.embedded = embedded
+        self.downloadHost = downloadHost
+    }
     @Environment(NativeAppModel.self) private var model
     @State private var redFilter = RedOutputFilter.all
 
@@ -805,7 +810,7 @@ struct NikonLUTPicker: View {
                 action: .init(
                     title: "Download from RED",
                     systemImage: availability.isAvailable ? "arrow.down.circle" : "wifi.slash",
-                    perform: { model.isRedDownloadPresented = true })))
+                    perform: { model.redDownloadHost = downloadHost })))
         let custom = storedLibrary(
             .custom, files: model.customLUTs,
             empty: .init(
