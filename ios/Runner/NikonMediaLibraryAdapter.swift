@@ -342,6 +342,15 @@ import OpenZCineCore
     private var rows: [String: (stamp: MediaClipIndexStamp, byName: [String: MediaClip])] = [:]
     /// Listing stamps under which every captured row last matched the canonical index.
     private var verifiedStamps: [String: MediaClipIndexStamp]?
+    /// When the captured rows last matched, and the process's index write generation then.
+    private var lastMatch: (at: UInt64, writes: UInt64)?
+    /// Monotonic nanoseconds; tests supply a manual clock.
+    var now: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+    /// A match stays good this long unless this process writes an index meanwhile. Reading the
+    /// stamps costs two file system calls per bucket, and the playback page asked many times
+    /// per body pass and for every glass backdrop frame: build 317 spent about a third of its
+    /// main thread in these reads while a clip played.
+    static let matchReuseNanoseconds: UInt64 = 250_000_000
     init(
         owner: MonitorMediaLibraryModel<MediaClip>?, store: MediaClipStore,
         codec: NikonMediaLibraryCodec, bytes: NikonMediaLibraryByteStore?,
@@ -403,6 +412,18 @@ import OpenZCineCore
     /// Playback, delivery and gallery bodies ask this many times per second; an unchanged index
     /// (same listing stamps as the last match) needs no read at all.
     private var capturedIndexMatches: Bool {
+        let writes = MediaClipIndexMemo.shared.writeGeneration
+        let time = now()
+        if let lastMatch, lastMatch.writes == writes,
+            time &- lastMatch.at < Self.matchReuseNanoseconds
+        {
+            return true
+        }
+        let matches = indexMatchesOnDisk
+        lastMatch = matches ? (time, writes) : nil
+        return matches
+    }
+    private var indexMatchesOnDisk: Bool {
         var stamps: [String: MediaClipIndexStamp] = [:]
         for bucket in buckets { stamps[bucket] = store.indexStamp(cameraID: bucket) }
         if let verifiedStamps, verifiedStamps == stamps { return true }

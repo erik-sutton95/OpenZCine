@@ -10,12 +10,37 @@ import class OpenCineCameraVocabulary.CustomLUTStore
 /// `media-store`.
 let mediaLibraryLogger = Logger(subsystem: "OpenZCine", category: "media-store")
 
+/// A file's identity, size and modification time from one `stat(2)` call.
+/// `FileManager.attributesOfItem` also reads every extended attribute (getattrlist, lstat,
+/// listxattr, getxattr per call), and playback reads these facts several times a second: build
+/// 317 spent most of its remaining main-thread file time there.
+enum MediaFileFacts {
+    struct Facts: Equatable, Sendable {
+        let fileNumber: UInt64
+        let size: UInt64
+        let modified: Date
+    }
+
+    /// `followingLinks: false` describes a final symbolic link itself, as `attributesOfItem` does.
+    static func read(_ path: String, followingLinks: Bool) -> Facts? {
+        var info = stat()
+        let status = followingLinks ? stat(path, &info) : lstat(path, &info)
+        guard status == 0 else { return nil }
+        let time = info.st_mtimespec
+        return .init(
+            fileNumber: UInt64(info.st_ino), size: UInt64(max(0, info.st_size)),
+            modified: Date(
+                timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9)
+        )
+    }
+}
+
 /// Operation counts for the large-card performance tests (Debug only): each counted call is a
 /// whole-catalog cost, so a test can prove an operation's cost follows its own size. Counts land
 /// in the task-local scope a test installs, so concurrently running tests never mix.
 enum MediaPerformanceProbe {
     enum Counter: Hashable, Sendable {
-        case indexDecode, directoryListing, recordMapping, projectionPass
+        case indexDecode, directoryListing, recordMapping, projectionPass, fileStamp
         /// Microseconds spent in the codec's per-page work (captureCatalog, prepareCatalog,
         /// encodeForPersistence), so a test can split app time from shared-library time.
         case captureMicros, prepareMicros, persistMicros
@@ -988,15 +1013,18 @@ final class MediaClipIndexMemo: @unchecked Sendable {
     private var indexes: [String: (stamp: FileStamp, clips: [MediaClip])] = [:]
     private var listings: [String: Listing] = [:]
     private var recentDecodes: [(bytes: Data, clips: [MediaClip])] = []
+    private var writes: UInt64 = 0
+    /// Advances with every write this process makes to an index (each drops its memo entry).
+    var writeGeneration: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return writes
+    }
 
     static func fileStamp(_ path: String) -> FileStamp? {
-        guard let facts = try? FileManager.default.attributesOfItem(atPath: path),
-            let number = (facts[.systemFileNumber] as? NSNumber)?.uint64Value,
-            let modified = facts[.modificationDate] as? Date
-        else { return nil }
-        return .init(
-            fileNumber: number, size: (facts[.size] as? NSNumber)?.uint64Value ?? 0,
-            modified: modified)
+        MediaPerformanceProbe.count(.fileStamp)
+        guard let facts = MediaFileFacts.read(path, followingLinks: false) else { return nil }
+        return .init(fileNumber: facts.fileNumber, size: facts.size, modified: facts.modified)
     }
     func index(at path: String, stamp: FileStamp) -> [MediaClip]? {
         lock.lock()
@@ -1027,6 +1055,7 @@ final class MediaClipIndexMemo: @unchecked Sendable {
     }
     func invalidate(directory: String) {
         lock.lock()
+        writes &+= 1
         listings[directory] = nil
         indexes = indexes.filter { !$0.key.hasPrefix(directory + "/") }
         lock.unlock()
