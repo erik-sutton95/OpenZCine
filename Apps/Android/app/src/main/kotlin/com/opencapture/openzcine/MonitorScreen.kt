@@ -5,8 +5,9 @@ import com.opencapture.opencine.media.StorageReadoutCycle
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
-import com.opencapture.openzcine.gyro.GyroCaptureState
-import com.opencapture.openzcine.gyro.GyroStatusPill
+import com.opencapture.opencine.gyro.GyroCaptureState
+import com.opencapture.opencine.gyro.GyroPillKind
+import com.opencapture.opencine.cameracontrols.gyro.GyroPillChip
 
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.opencine.cameracontrols.*
@@ -2430,11 +2431,12 @@ internal fun MonitorScreen(
 
         gyroState?.takeIf { state ->
             isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
-                (state.enabled || state.failed) && (!isClean || state.failed)
+                (state.enabled || state.pill.kind == GyroPillKind.ERROR) &&
+                (!isClean || state.pill.kind == GyroPillKind.ERROR)
         }?.let { state ->
             // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
             Box(Modifier.align(Alignment.TopStart).zone(fieldLayout.appBadge), contentAlignment = Alignment.CenterStart) {
-                GyroStatusPill(state, onClick = onOpenGyroLogs)
+                GyroPillChip(state.pill, onClick = onOpenGyroLogs)
             }
         }
 

@@ -13,6 +13,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.nsd.NsdManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.core.view.WindowCompat
@@ -62,14 +63,16 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.gyro.GyroCaptureCoordinator
-import com.opencapture.openzcine.gyro.GyroLogsScreen
-import com.opencapture.openzcine.gyro.GyroMountScreen
-import com.opencapture.openzcine.gyro.shareGyroLog
+import com.opencapture.opencine.gyro.GyroCaptureCoordinator
+import com.opencapture.opencine.gyro.GyroNative
 import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
+import com.opencapture.opencine.cameracontrols.gyro.GyroCopy
+import com.opencapture.opencine.cameracontrols.gyro.GyroFeatureHost
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
+import com.opencapture.opencine.nikon.NikonGyroCameraAdapter
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.opencine.frameio.FrameioInternetHopState
@@ -129,6 +132,7 @@ import com.opencapture.opencine.core.IntegrationID
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import com.opencapture.opencine.appkit.CamerasScreen
 import com.opencapture.opencine.core.ConnectTarget
 import com.opencapture.opencine.core.RecoveryAction
@@ -175,7 +179,9 @@ private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
  * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
-    private val gyroCapture by lazy { GyroCaptureCoordinator(applicationContext) }
+    private val gyroCapture by lazy {
+        GyroCaptureCoordinator(applicationContext, openZCineGyroHostConfiguration(filesDir))
+    }
     private lateinit var mediaRemoteShutter: MonitorRemoteShutter
     private val diagnostics: AndroidAppDiagnostics by lazy {
         AndroidAppDiagnostics.create(applicationContext)
@@ -240,6 +246,7 @@ class MainActivity : ComponentActivity() {
         // for the zone map); the bars themselves are sticky-immersive.
         launch.setContent(this) {
             OpenZCineTheme {
+                GyroFeatureHost(gyroCapture, ZMediaShare) {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
                 // The presented picture under every shared material panel; the monitor feeds and activates it.
@@ -253,15 +260,12 @@ class MainActivity : ComponentActivity() {
                 var uvcSource by root::uvcSource
                 var activeSavedCamera by root::activeSavedCamera
                 val gyroState by gyroCapture.state.collectAsState()
-                var gyroLogsPresented by rememberSaveable { mutableStateOf(false) }
-                var gyroMountPresented by rememberSaveable { mutableStateOf(false) }
                 val gyroSource = MonitorSettingsGyroSource(
                     enabled = gyroState.enabled, setEnabled = gyroCapture::setEnabled,
-                    status = gyroState.status, available = gyroState.available || gyroState.enabled,
-                    openLogs = { gyroLogsPresented = true },
-                    mountName = if (gyroState.mountCalibration != null) "Calibrated"
-                        else gyroState.mountOptions.firstOrNull { it.id == gyroState.mountPreset }?.shortLabel,
-                    configureMount = if (gyroState.mountOptions.isNotEmpty()) ({ gyroMountPresented = true }) else null,
+                    status = GyroCopy.pillA11y(gyroState.pill.kind, warning = false),
+                    available = gyroState.available || gyroState.enabled,
+                    openLogs = gyroCapture::presentLogs,
+                    calibrate = if (gyroState.canCalibrate) gyroCapture::beginCalibration else null,
                 )
                 // The row the running pairing CREATED, so walking away from it takes the row back
                 // out — the wizard saves before the body confirmation. Null once anything
@@ -966,10 +970,17 @@ class MainActivity : ComponentActivity() {
                                     // A multicam member keeps its session for its tile, and a
                                     // recreated activity keeps the root's.
                                     if (!multicam.owns(active) && !isChangingConfigurations) {
-                                        shellSessions.retire(active)
-                                        active.disconnect()
-                                        pairingEnvironment.releaseCameraAp()
+                                        disconnectAfterGyroPreparation(
+                                            isArmed = gyroCapture.state.value.isArmed,
+                                            prepare = gyroCapture::prepareForDisconnect,
+                                            disconnect = {
+                                                shellSessions.retire(active)
+                                                active.disconnect()
+                                                pairingEnvironment.releaseCameraAp()
+                                            },
+                                        )
                                     }
+                                    gyroCapture.bind(null)
                                 }
                             }
                         }
@@ -1052,6 +1063,11 @@ class MainActivity : ComponentActivity() {
                                     environment = pairingEnvironment,
                                     fixtureSession = pairingScript != null || demo?.second != null,
                                     onReconnected = ::acceptPairedCamera,
+                                    prepareForDisconnect = {
+                                        if (gyroCapture.state.value.isArmed) {
+                                            gyroCapture.prepareForDisconnect()
+                                        }
+                                    },
                                 )
                             }
                         DisposableEffect(frameioController, frameioCameraHop) {
@@ -1065,13 +1081,18 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
-                        LaunchedEffect(uvcSource) { gyroCapture.setCalibrationSourceAvailable(uvcSource == null) }
-                        DisposableEffect(active, returnToMulticam != null) {
-                            val eligible = active.takeIf {
-                                it is SwiftCoreCameraSession && returnToMulticam == null && demo == null
+                        LaunchedEffect(active, returnToMulticam != null) {
+                            val adapter = native?.takeIf { returnToMulticam == null && demo == null }?.let {
+                                NikonGyroCameraAdapter(
+                                    it,
+                                    it.liveFrames as? SwiftCoreLiveFrameSource,
+                                    GyroNative,
+                                    lifecycleScope,
+                                    now = { SystemClock.elapsedRealtimeNanos() / 1e9 },
+                                )
                             }
-                            gyroCapture.bind(eligible)
-                            onDispose { gyroCapture.bind(null) }
+                            gyroCapture.bind(adapter)
+                            gyroCapture.setHostEligible(adapter != null)
                         }
                         Box {
                             MonitorScreen(
@@ -1090,11 +1111,12 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top; otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = gyroState.calibration.active ||
-                                    overlay == null && !gyroLogsPresented && !gyroMountPresented,
+                                liveViewEnabled = gyroState.ring != null || gyroState.setupSteps.isNotEmpty() ||
+                                    overlay == null && !gyroState.logsPresented,
                                 liveBackdrop = liveBackdrop,
                                 mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == null && !gyroLogsPresented && !gyroMountPresented,
+                                isMonitorFront = overlay == null && !gyroState.logsPresented &&
+                                    gyroState.ring == null && gyroState.setupSteps.isEmpty(),
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
@@ -1132,7 +1154,7 @@ class MainActivity : ComponentActivity() {
                                 note = monitorNote.value,
                                 clearNote = { if (monitorNote.value == it) monitorNote.value = null },
                                 gyroState = gyroState.takeIf { returnToMulticam == null },
-                                onOpenGyroLogs = { gyroLogsPresented = true },
+                                onOpenGyroLogs = gyroCapture::presentLogs,
                             )
                             relayBroadcastUi.controlHolderName?.let { holder ->
                                 com.opencapture.opencine.cameracontrols.MonitorWatcherControlKey(
@@ -1601,23 +1623,9 @@ class MainActivity : ComponentActivity() {
                         MonitorLegalDocumentScreen(ZLegalDocuments, page) { legalPage = null }
                     }
                 }
-                if (gyroLogsPresented) {
-                    GyroLogsScreen(gyroState,
-                        onShare = { entry ->
-                            shareGyroLog(this@MainActivity, entry, connectionScope) {
-                                Toast.makeText(this@MainActivity, it.message ?: "Could not share gyro log.", Toast.LENGTH_LONG).show()
-                            }
-                        }, onDelete = gyroCapture::delete,
-                        onClose = { gyroLogsPresented = false })
-                }
-                if (gyroMountPresented) {
-                    GyroMountScreen(gyroState, onSelect = gyroCapture::setMountPreset,
-                        onClose = { gyroCapture.stopCalibration(); gyroMountPresented = false },
-                        onCalibrate = gyroCapture::beginCalibration, onCapture = gyroCapture::captureCalibration,
-                        onCancelCalibration = gyroCapture::stopCalibration, onResetCalibration = gyroCapture::resetCalibration)
-                }
                 } // app-root Box
                 } // LocalOperatorHaptics
+                } // GyroFeatureHost
             } // OpenZCineTheme
         } // setContent
     }

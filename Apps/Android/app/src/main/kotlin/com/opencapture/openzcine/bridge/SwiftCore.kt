@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.bridge
 
 import android.system.Os
+import com.opencapture.opencine.gyro.GyroNative
 import com.opencapture.opencine.nikon.NikonNative
 import java.util.TimeZone
 
@@ -15,38 +16,6 @@ import java.util.TimeZone
  * `Sources/OpenZCineAndroidFacade/SwiftCoreJNI.swift`.
  */
 object SwiftCore {
-    /** Shared mount descriptions and validated GCSV axis mappings. */
-    external fun gyroMountPresets(naturalPortrait: Boolean): String
-    /** Creates one shared-core three-pose mount calibration. */
-    external fun gyroCalibrationCreate(): String
-    /** Supplies raw phone-down and camera-level observations on a common monotonic clock. */
-    external fun gyroCalibrationAdd(owner: String, observationJSON: String): String?
-    /** Captures a still pose or independently verifies the third pose. */
-    external fun gyroCalibrationCapture(owner: String, timestamp: Double): String?
-    /** Releases a cancelled or completed calibration owner. */
-    external fun gyroCalibrationClose(owner: String)
-    /** Validates an opaque saved mount calibration through the shared core. */
-    external fun gyroCalibrationValidate(calibrationJSON: String): Boolean
-    /** Creates a process-local owner for the shared gyro take policy. */
-    external fun gyroCreate(): String
-    /** Sends little-endian sensor timestamp/X/Y/Z Double batches, at most 512 samples. */
-    external fun gyroIngest(owner: String, samples: ByteArray): String?
-    /** Observes actual camera REC state on the monotonic sensor clock. */
-    external fun gyroObserve(owner: String, recording: Boolean, timestamp: Double,
-        dateSeconds: Double, cameraLabel: String, mountPreset: String = "unconfigured",
-        calibrationJSON: String = ""): String?
-    /** Advances shared postroll and sensor-health checks. */
-    external fun gyroPoll(owner: String, timestamp: Double): String?
-    /** Finalizes available motion with an explicit reason, without camera commands. */
-    external fun gyroFinish(owner: String, reason: String): String?
-    /** Releases an already-finalized capture owner. */
-    external fun gyroClose(owner: String)
-    /** Creates a streaming shared-core partial-file validator. */
-    external fun gyroRecoveryCreate(): String
-    /** Returns the complete valid prefix length, or -1 for an invalid header. */
-    external fun gyroRecoveryAccept(owner: String, bytes: ByteArray): Long
-    /** Finishes validation using the original descriptor and retires its owner. */
-    external fun gyroRecoveryFinish(owner: String, descriptor: String): String?
     /**
      * True when the Swift core library is bundled and loaded. False (with no
      * crash) when the APK was built without running `just android-core` first.
@@ -56,6 +25,7 @@ object SwiftCore {
         // it is loaded through NikonNative, which then reports them available too. MainActivity
         // touches this first thing in onCreate, before any camera session exists.
         if (!NikonNative.load("OpenZCineAndroid")) return@lazy false
+        if (!GyroNative.load("OpenZCineAndroid")) return@lazy false
         // Swift Foundation on Android resolves `TimeZone.current` from the libc zone
         // ABBREVIATION ("KST", "CEST"), which ICU rarely recognises, and falls back to
         // GMT, so every Calendar.current wall clock in the core was UTC. The camera
