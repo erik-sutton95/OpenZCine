@@ -15,7 +15,7 @@ let mediaLibraryLogger = Logger(subsystem: "OpenZCine", category: "media-store")
 /// in the task-local scope a test installs, so concurrently running tests never mix.
 enum MediaPerformanceProbe {
     enum Counter: Hashable, Sendable {
-        case indexDecode, directoryListing, recordMapping, projectionPass
+        case indexDecode, directoryListing, recordMapping, projectionPass, fileStamp
         /// Microseconds spent in the codec's per-page work (captureCatalog, prepareCatalog,
         /// encodeForPersistence), so a test can split app time from shared-library time.
         case captureMicros, prepareMicros, persistMicros
@@ -988,8 +988,16 @@ final class MediaClipIndexMemo: @unchecked Sendable {
     private var indexes: [String: (stamp: FileStamp, clips: [MediaClip])] = [:]
     private var listings: [String: Listing] = [:]
     private var recentDecodes: [(bytes: Data, clips: [MediaClip])] = []
+    private var writes: UInt64 = 0
+    /// Advances with every write this process makes to an index (each drops its memo entry).
+    var writeGeneration: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return writes
+    }
 
     static func fileStamp(_ path: String) -> FileStamp? {
+        MediaPerformanceProbe.count(.fileStamp)
         guard let facts = try? FileManager.default.attributesOfItem(atPath: path),
             let number = (facts[.systemFileNumber] as? NSNumber)?.uint64Value,
             let modified = facts[.modificationDate] as? Date
@@ -1027,6 +1035,7 @@ final class MediaClipIndexMemo: @unchecked Sendable {
     }
     func invalidate(directory: String) {
         lock.lock()
+        writes &+= 1
         listings[directory] = nil
         indexes = indexes.filter { !$0.key.hasPrefix(directory + "/") }
         lock.unlock()

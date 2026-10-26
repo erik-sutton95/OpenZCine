@@ -237,6 +237,40 @@ import Testing
         await model.mediaLibrary?.dispose()
     }
 
+    /// The playback page asks its captured action on every body pass and for every glass
+    /// backdrop frame (build 317: a third of the main thread in file stamps while a clip
+    /// played). Checks inside one reuse window stamp the index files once; this process's own
+    /// write, or the window passing, reads them again and still decides correctly.
+    @Test func currencyChecksInsideOneWindowStampTheIndexOnce() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let clips = Self.clips()
+        store.upsertBatch(clips, cameraID: Self.bucket)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        model.prepareMediaLibrary(
+            rows: store.list(cameraID: Self.bucket), bucket: Self.bucket, service: nil)
+        let playing = try #require(clips.last)
+        let action = try #require(model.captureMediaLibraryAction([playing]))
+        var clock: UInt64 = 1_000_000_000
+        action.now = { clock }
+        #expect(action.sourceIsCurrent)
+        let scope = MediaPerformanceProbe.Scope()
+        let allCurrent = MediaPerformanceProbe.$scope.withValue(scope) {
+            (0..<200).allSatisfy { _ in action.sourceIsCurrent && action.contentIsCurrent }
+        }
+        #expect(allCurrent)
+        #expect(scope[.fileStamp] == 0, "\(scope[.fileStamp]) file stamps for 200 checks")
+        clock += NikonMediaLibraryAction.matchReuseNanoseconds
+        let stamped = MediaPerformanceProbe.$scope.withValue(scope) { action.sourceIsCurrent }
+        #expect(stamped)
+        #expect(scope[.fileStamp] > 0, "an expired window reads the stamps again")
+        store.update(cameraID: Self.bucket, filename: playing.filename) { $0.sizeBytes += 1 }
+        #expect(!action.sourceIsCurrent, "a write inside the window is still seen")
+        await model.mediaLibrary?.dispose()
+    }
+
     /// What one render of every cell costs in app file facts (the shared catalog used to build
     /// every cell per render; it should build only visible ones). Measured, not asserted here.
     @Test func measureCellFactsForTheWholeCard() async throws {
