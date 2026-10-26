@@ -312,6 +312,35 @@ import Testing
 
     /// The index memo never hides a change: another store's write, a new disk file, a growing
     /// unindexed file and the encoded-bytes shortcut all match a fresh read.
+    /// The one-stat file facts used for index stamps and the downloaded check read the same
+    /// identity, size and time as Foundation's attributes, for a file and a symbolic link.
+    @Test func fileFactsMatchFoundationAttributes() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("A006_C072.MP4")
+        try Data(repeating: 7, count: 12_345).write(to: file)
+        let link = root.appendingPathComponent("link.MP4")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        func foundation(_ url: URL) throws -> MediaFileFacts.Facts {
+            let facts = try FileManager.default.attributesOfItem(atPath: url.path)
+            return .init(
+                fileNumber: try #require((facts[.systemFileNumber] as? NSNumber)?.uint64Value),
+                size: try #require((facts[.size] as? NSNumber)?.uint64Value),
+                modified: try #require(facts[.modificationDate] as? Date))
+        }
+        func same(_ path: URL, follow: Bool, as expected: URL) throws -> Bool {
+            let read = try #require(MediaFileFacts.read(path.path, followingLinks: follow))
+            let reference = try foundation(expected)
+            return read.fileNumber == reference.fileNumber && read.size == reference.size
+                && abs(read.modified.timeIntervalSince(reference.modified)) < 0.000_01
+        }
+        #expect(try same(file, follow: false, as: file))
+        #expect(try same(link, follow: false, as: link))
+        #expect(try same(link, follow: true, as: file))
+        #expect(MediaFileFacts.read(root.appendingPathComponent("missing").path, followingLinks: true) == nil)
+    }
+
     @Test func indexMemoAlwaysMatchesAFreshRead() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
