@@ -129,6 +129,8 @@
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N02000000000000000000006 /* OpenCineCameraControls in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000005 /* OpenCineCameraControls */; };
+		GYR000000000000000000001 /* OpenCineGyro in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000002 /* OpenCineGyro */; };
+		GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000004 /* OpenCineGyroApple */; };
 		F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000022 /* OpenCineFrameIOApple */; };
 		F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000012 /* OpenCineAppKitApple */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
@@ -369,6 +371,8 @@
 				N01000000000000000000004 /* MonitorUI in Frameworks */,
 				N02000000000000000000004 /* OpenCineAppKit in Frameworks */,
 				N02000000000000000000006 /* OpenCineCameraControls in Frameworks */,
+				GYR000000000000000000001 /* OpenCineGyro in Frameworks */,
+				GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */,
 				F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */,
 				F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */,
 				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
@@ -635,6 +639,8 @@
 				N01000000000000000000003 /* MonitorUI */,
 				N02000000000000000000003 /* OpenCineAppKit */,
 				N02000000000000000000005 /* OpenCineCameraControls */,
+				GYR000000000000000000002 /* OpenCineGyro */,
+				GYR000000000000000000004 /* OpenCineGyroApple */,
 				F13D00000000000000000022 /* OpenCineFrameIOApple */,
 				F13D00000000000000000012 /* OpenCineAppKitApple */,
 				N01000000000000000000001 /* MonitorPresentation */,
@@ -1530,6 +1536,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineCameraControls;
+		};
+		GYR000000000000000000002 /* OpenCineGyro */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineGyro;
+		};
+		GYR000000000000000000004 /* OpenCineGyroApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineGyroApple;
 		};
 		F13D00000000000000000022 /* OpenCineFrameIOApple */ = {
 			isa = XCSwiftPackageProductDependency;

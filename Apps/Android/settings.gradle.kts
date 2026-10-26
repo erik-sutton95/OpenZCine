@@ -52,6 +52,7 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:platform")).using(project(":platform"))
         // The one Android Frame.io owner over the shared Swift wire (A4-09).
         substitute(module("com.opencapture.opencine:frameio")).using(project(":frameio"))
+        substitute(module("com.opencapture.opencine:gyro")).using(project(":gyro"))
     }
 }
 
