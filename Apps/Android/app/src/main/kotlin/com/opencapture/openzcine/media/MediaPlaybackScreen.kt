@@ -134,12 +134,16 @@ internal fun MediaPlaybackScreen(
     val usage = remember(context) { MonitorToolUsagePreferences(
         context.getSharedPreferences("assist", Context.MODE_PRIVATE), "assistToolUsage.v1") }
     val placements = remember(context, assists.shared) { playbackPanelPlacement(context, assists) }
+    // The RED IPP2 download asked from the playback LUT menu. It draws over the player here: the
+    // monitor's own download screen sits under this full-screen player (iOS `RedDownloadHost`).
+    var redDownloadPresented by remember { mutableStateOf(false) }
     val emptyScopes = remember { MutableStateFlow(ScopeAssistBundle.EMPTY) }
     val assistSource = MonitorOperatorAssistSource(
         AssistHost(SettingsPalette.peaking, SettingsPalette.highlight, SettingsPalette.midtone),
         picture?.scopes ?: emptyScopes, scopeStackMoved = {}, lookPicker = null,
         panelPlacement = placements,
-        lookMenu = { NikonLutOptions(assists, lutLibrary, onOpenRedDownload = {},
+        lookMenu = { NikonLutOptions(assists, lutLibrary,
+            onOpenRedDownload = { assists.shared.configureTool = null; redDownloadPresented = true },
             onRequestLutImport = null, includesComparison = false) }, paradeIntensityScale = 1.0)
     val signal = MonitorOperatorSignalOptions(
         falseColor = { nikonAssistSection(MonitorAssistTool.FALSE, assists.shared,
@@ -193,6 +197,14 @@ internal fun MediaPlaybackScreen(
             picture = { _, _, geometry -> picture?.picture?.invoke(geometry) })
         MonitorOperatorDeliveryHost(deliveryPopup, onDismissPopup = { deliveryPopup = null }, coordinator)
         if (closing) PlaybackLoading("Closing camera media…")
+        if (redDownloadPresented && lutLibrary != null) {
+            com.opencapture.openzcine.lut.RedLutDownloadScreen(
+                lutLibrary = lutLibrary,
+                frameioController = mediaDelivery.frameio,
+                onClose = { redDownloadPresented = false },
+                onImported = { count -> if (count > 0) assists.shared.armLut() },
+            )
+        }
     }
 }
 
