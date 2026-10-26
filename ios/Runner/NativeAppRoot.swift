@@ -1067,7 +1067,12 @@ final class NativeAppModel {
     /// monitor's picker asks the app root (not the LUT picker) so the cover survives the monitor
     /// collapsing when the internet hop tears the camera session down; the clip player's picker
     /// asks the player, whose own cover would otherwise hold the root's back (`RedDownloadHost`).
-    var redDownloadHost: RedDownloadHost?
+    var redDownloadHost: RedDownloadHost? {
+        get { redDownloadRequest?.host }
+        set { redDownloadRequest = newValue.map { RedDownloadRequest(host: $0) } }
+    }
+    /// The open request; each ask is a new one, so a closing cover clears only its own.
+    var redDownloadRequest: RedDownloadRequest?
     /// Whether the RED LUT download is up on any surface. Setting it true asks the app root.
     var isRedDownloadPresented: Bool {
         get { redDownloadHost != nil }

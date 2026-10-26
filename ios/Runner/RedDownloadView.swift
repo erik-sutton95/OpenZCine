@@ -86,6 +86,12 @@ enum RedDownloadHost: Equatable, Sendable {
     case playback
 }
 
+/// One ask for the RED download on a surface.
+struct RedDownloadRequest: Equatable {
+    let host: RedDownloadHost
+    let id = UUID()
+}
+
 extension View {
     /// The RED download cover for one surface. It presents only while `model.redDownloadHost`
     /// names `host`, and closing it clears that request and no other.
@@ -109,11 +115,17 @@ extension View {
                     if !presented, model.redDownloadHost == host { model.redDownloadHost = nil }
                 })
         ) {
+            let request = model.redDownloadRequest
             content()
                 .environment(model)
                 // A host that goes away with the cover up (the player closing) takes the cover
-                // with it; clear the request so it does not reappear on the next clip.
-                .onDisappear { if model.redDownloadHost == host { model.redDownloadHost = nil } }
+                // with it; clear that request so it does not reappear on the next clip. A newer
+                // ask made while this cover was leaving stays.
+                .onDisappear {
+                    if let request, model.redDownloadRequest == request {
+                        model.redDownloadRequest = nil
+                    }
+                }
         }
     }
 }

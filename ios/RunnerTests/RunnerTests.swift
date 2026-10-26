@@ -4773,6 +4773,18 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
         try await settle { presentedDepth() == 1 }
         XCTAssertEqual(presentedDepth(), 1)
         XCTAssertNil(model.redDownloadHost)
+
+        // Asking again while the closing cover is still leaving: its late disappearance must not
+        // clear the newer ask.
+        model.redDownloadHost = .playback
+        try await settle { presentedDepth() == 2 }
+        model.redDownloadHost = nil
+        hosted.host.view.layoutIfNeeded()
+        model.redDownloadHost = .playback
+        try await Task.sleep(for: .milliseconds(1_200))
+        try await settle { presentedDepth() == 2 }
+        XCTAssertEqual(model.redDownloadHost, .playback)
+        XCTAssertEqual(presentedDepth(), 2)
     }
 
     /// A SIMULATED media browser presenting a SIMULATED clip player cover with its own mount.
