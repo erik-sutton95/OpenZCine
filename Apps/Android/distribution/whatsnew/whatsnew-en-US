@@ -1,6 +1,5 @@
 - Shared OpenCine setup with Add setup, a refreshed DISP 3 and the shared View Assist.
-- Much faster Media on large cards; Full Resolution Caching marks played clips CACHED.
+- Much faster Media on large cards; Full Resolution Caching marks played clips CACHED; Download from RED works in clips.
 - Smoother live view, with no freeze after rotating or returning to the app.
 - A dozing camera gets a wait step; Take Over asks first; clearer Wi-Fi retries.
 - Sharper, faster instant review, one photo per tap in CL/CH, plus Photo LUT, shots and storage fixes.
-- Download from RED works from the clip player's LUT menu.
