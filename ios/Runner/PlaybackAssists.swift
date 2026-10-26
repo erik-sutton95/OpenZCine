@@ -31,7 +31,7 @@ final class NikonPlaybackFeedSession: MonitorPlaybackFeedSession, @unchecked Sen
     @MainActor init(model: NativeAppModel? = nil) {
         super.init(
             configuration: .nikonPlayback, hdrDisplay: { false },
-            journal: { line in playbackFeedLogger.debug("\(line, privacy: .public)") },
+            journal: { line in playbackFeedLogger.notice("\(line, privacy: .public)") },
             declaredClip: { [weak model] transfer in
                 guard let mapping = model?.playbackExposureSignalMapping,
                     mapping.curve.monitorTransfer == transfer
