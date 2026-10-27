@@ -56,20 +56,15 @@ import UIKit
     }
 
     @Test func ibisWritesGoThroughTheCameraQueue() async throws {
-        let (model, native, _, _) = try await makeModel()
+        let (model, native, transport, _) = try await makeModel()
         native.close()
         let write = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "OFF"))
 
-        let result = Task { await model.writeGyroStabilization([write]) }
-        for _ in 0..<100 {
-            if model.debugPendingCameraWriteCount == 1 { break }
-            await Task.yield()
-        }
-
-        #expect(model.debugPendingCameraWriteCount == 1)
-        #expect(await model.debugServiceNextCameraWrite())
-        #expect(await result.value)
+        #expect(await model.writeGyroStabilization([write]))
         #expect(model.debugPendingCameraWriteCount == 0)
+        let calls = await transport.calls
+        let writeCall = calls.last { $0.operation == .setDevicePropValue }
+        #expect(writeCall?.dataOut.map { Array($0) } == [0])
     }
 
     @Test func disconnectRestoresBeforeClosing() async throws {
