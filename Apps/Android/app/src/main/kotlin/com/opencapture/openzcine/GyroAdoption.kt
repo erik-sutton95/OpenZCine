@@ -2,6 +2,7 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.gyro.GyroHostConfiguration
 import com.opencapture.opencine.gyro.GyroLegacyPreferenceKeys
+import com.opencapture.opencine.gyro.GyroPillKind
 import com.opencapture.opencine.gyro.GyroPreferenceKeys
 import java.io.File
 
@@ -27,3 +28,6 @@ internal suspend fun disconnectAfterGyroPreparation(
     if (isArmed) prepare()
     disconnect()
 }
+
+internal fun gyroPillVisibleInCleanMode(kind: GyroPillKind): Boolean =
+    kind == GyroPillKind.ERROR || kind == GyroPillKind.MOUNT_MOVED || kind == GyroPillKind.GAPS

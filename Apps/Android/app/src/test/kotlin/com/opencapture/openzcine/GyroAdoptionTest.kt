@@ -86,6 +86,14 @@ class GyroAdoptionTest {
         assertEquals(listOf("disconnect"), events)
     }
 
+    @Test
+    fun cleanModeKeepsGyroTakeWarnings() {
+        assertTrue(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.MOUNT_MOVED))
+        assertTrue(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.GAPS))
+        assertTrue(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.ERROR))
+        assertFalse(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.RECORDING))
+    }
+
     private fun writeFinishedTake(root: File) {
         if (!root.exists()) check(root.mkdirs())
         val descriptor = descriptor(FINISHED_ID)

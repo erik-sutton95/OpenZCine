@@ -2432,7 +2432,7 @@ internal fun MonitorScreen(
         gyroState?.takeIf { state ->
             isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
                 (state.enabled || state.pill.kind == GyroPillKind.ERROR) &&
-                (!isClean || state.pill.kind == GyroPillKind.ERROR)
+                (!isClean || gyroPillVisibleInCleanMode(state.pill.kind))
         }?.let { state ->
             // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
             Box(Modifier.align(Alignment.TopStart).zone(fieldLayout.appBadge), contentAlignment = Alignment.CenterStart) {
