@@ -4836,7 +4836,21 @@ final class NativeAppModel {
 
         func startDemoSession() {
             stopDiscoveryLoop()
+            if gyroDisconnectTask != nil || gyroCapture.isArmed {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await prepareGyroForDisconnect()
+                    disconnectCameraSession(
+                        resetConnection: false, gyroPreparationCompleted: true)
+                    finishStartDemoSession()
+                }
+                return
+            }
             disconnectCameraSession(resetConnection: false)
+            finishStartDemoSession()
+        }
+
+        private func finishStartDemoSession() {
             isDemoSession = true
             isMonitorPresented = true
             connectedIdentity = nil
@@ -5953,8 +5967,10 @@ final class NativeAppModel {
         stopDiscoveryLoop()
         // The open Media or Settings page stays, with its view state, over the cameras page
         // (A2-07); support and report links leave nothing behind.
+        await prepareGyroForDisconnect()
         disconnectCameraSession(
-            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss)
+            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss,
+            gyroPreparationCompleted: true)
         connection = .disconnected
         // The session is gone, so the return is owed even when the hop ended meanwhile.
         guard current() else { return left }
@@ -7114,9 +7130,25 @@ final class NativeAppModel {
         continuation?.resume(returning: accepted)
     }
 
+    private func prepareGyroForDisconnect() async {
+        if let task = gyroDisconnectTask {
+            await task.value
+            return
+        }
+        guard gyroCapture.isArmed else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.gyroCapture.prepareForDisconnect()
+        }
+        gyroDisconnectTask = task
+        await task.value
+        gyroDisconnectTask = nil
+    }
+
     private func disconnectCameraSession(
         resetConnection: Bool, preserveMonitorSurface: Bool = false,
-        cover: ShellModel.CoverRetention = .dismiss
+        cover: ShellModel.CoverRetention = .dismiss,
+        gyroPreparationCompleted: Bool = false
     ) {
         // A lent multicam member returns to its tile instead of closing; a recovery
         // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
@@ -7124,15 +7156,24 @@ final class NativeAppModel {
             returnToMulticam()
             return
         }
-        if gyroCapture.isArmed, gyroDisconnectTask == nil, !preserveMonitorSurface {
-            gyroDisconnectTask = Task { [weak self] in
-                defer { self?.gyroDisconnectTask = nil }
-                await self?.gyroCapture.prepareForDisconnect()
-                self?.disconnectCameraSession(
-                    resetConnection: resetConnection,
-                    preserveMonitorSurface: preserveMonitorSurface, cover: cover)
+        if !preserveMonitorSurface, !gyroPreparationCompleted {
+            if gyroDisconnectTask != nil { return }
+            if gyroCapture.isArmed {
+                let task = Task { [weak self] in
+                    guard let self else { return }
+                    await self.gyroCapture.prepareForDisconnect()
+                }
+                gyroDisconnectTask = task
+                Task { [weak self] in
+                    await task.value
+                    self?.gyroDisconnectTask = nil
+                    self?.disconnectCameraSession(
+                        resetConnection: resetConnection,
+                        preserveMonitorSurface: preserveMonitorSurface, cover: cover,
+                        gyroPreparationCompleted: true)
+                }
+                return
             }
-            return
         }
         gyroCapture.detachAdapter()
         nikonGyro.disconnected()
@@ -9063,7 +9104,7 @@ final class NativeAppModel {
                 return true
             }
             if let readback {
-                confirmed = true
+                confirmed = pending.gyroRestore == nil || readback == pending.write.data
                 applyCameraRead(pending.write.property, readback)
             } else {
                 cameraPropertySnapshot = cameraPropertySnapshot.applying(
@@ -9108,7 +9149,10 @@ final class NativeAppModel {
                 lockedControls.remove(pending.picker)
             }
             if let gyroRestore = pending.gyroRestore {
-                connectionMessage = gyroRestore ? "Gyro: IBIS restored" : "Gyro: IBIS OFF"
+                connectionMessage =
+                    !confirmed
+                    ? "Gyro: stabilization change was not confirmed"
+                    : gyroRestore ? "Gyro: IBIS restored" : "Gyro: IBIS OFF"
             } else if isShutterLockWrite {
                 let unlocking = pending.write.data.first == 0
                 connectionMessage =

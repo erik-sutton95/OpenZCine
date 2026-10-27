@@ -934,6 +934,7 @@ actor LargeTransferTransport: CameraTransport {
     var holdRead: Bool
     private(set) var calls: [Call] = []
     private var propertyValues: [PTPPropertyCode: Data] = [:]
+    private var refuseWrite = false
     private var readEntered = false
     private var entered: CheckedContinuation<Void, Never>?
     private var releaseRead: CheckedContinuation<Void, Never>?
@@ -949,6 +950,7 @@ actor LargeTransferTransport: CameraTransport {
         self.holdRead = holdRead
     }
     func clear() { calls = [] }
+    func refuseNextWrite() { refuseWrite = true }
     func executeTransaction(
         operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
         dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
@@ -960,7 +962,12 @@ actor LargeTransferTransport: CameraTransport {
             if let rawProperty = parameters.first,
                 let property = PTPPropertyCode(rawValue: rawProperty)
             {
-                propertyValues[property] = dataOut
+                if refuseWrite {
+                    propertyValues[property] = Data([0])
+                    refuseWrite = false
+                } else {
+                    propertyValues[property] = dataOut
+                }
             }
         case .getDevicePropValue:
             if let rawProperty = parameters.first,

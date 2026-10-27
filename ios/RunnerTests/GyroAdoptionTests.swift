@@ -90,6 +90,7 @@ import UIKit
             model.gyroCapture.stabilization?.values == ["movieVR": "OFF", "electronicVR": "OFF"])
 
         model.disconnect()
+        model.disconnect()
         for _ in 0..<100 {
             if !model.debugHasCameraSession && model.debugPendingCameraWriteCount == 0 { break }
             if model.debugPendingCameraWriteCount > 0 {
@@ -118,11 +119,100 @@ import UIKit
         #expect(restoreValues.map { $0.dataOut.map { Array($0) } } == [[2], [1]])
     }
 
+    @Test func internetHopRestoresBeforeLeavingTheCameraNetwork() async throws {
+        let (model, native, transport, _) = try await makeModel()
+        await armGyro(model, native: native)
+        var leaves = 0
+        model.hopNative = .init(
+            currentSSID: { "SIMULATED-AP" },
+            leaveNetwork: { _, _ in leaves += 1 }, rejoin: nil)
+
+        model.beginInternetHop()
+        for _ in 0..<100 {
+            if leaves == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(leaves == 1)
+        for _ in 0..<100 {
+            if await transport.calls.last?.operation == .closeSession { break }
+            await Task.yield()
+        }
+        let calls = await transport.calls
+        #expect(
+            calls.filter { $0.operation == .setDevicePropValue }.suffix(2).map {
+                $0.dataOut.map { Array($0) }
+            } == [[2], [1]])
+        #expect(calls.last?.operation == .closeSession)
+        native.close()
+    }
+
+    @Test func demoEntryRestoresBeforeEnablingTheDemoWriteGuard() async throws {
+        let (model, native, transport, _) = try await makeModel()
+        await armGyro(model, native: native)
+
+        model.startDemoSession()
+        for _ in 0..<100 {
+            if model.isDemoSession { break }
+            await Task.yield()
+        }
+
+        #expect(model.isDemoSession)
+        for _ in 0..<100 {
+            if await transport.calls.last?.operation == .closeSession { break }
+            await Task.yield()
+        }
+        let calls = await transport.calls
+        #expect(
+            calls.filter { $0.operation == .setDevicePropValue }.suffix(2).map {
+                $0.dataOut.map { Array($0) }
+            } == [[2], [1]])
+        #expect(calls.last?.operation == .closeSession)
+        native.close()
+    }
+
+    @Test func gyroWriteFailsWhenReadbackDoesNotMatch() async throws {
+        let (model, native, transport, _) = try await makeModel()
+        let movie = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "SPORT"))
+        let electronic = PTPCameraPropertyWrite.electronicVR(on: true)
+
+        #expect(await model.writeGyroStabilization([movie]))
+        await transport.refuseNextWrite()
+        #expect(await model.writeGyroStabilization([electronic]) == false)
+        native.close()
+    }
+
     @Test func demoSessionNeverWrites() async throws {
         let model = NativeAppModel()
         model.startDemoSession()
         let write = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "OFF"))
 
+        #expect(await model.writeGyroStabilization([write]) == false)
+        #expect(model.debugPendingCameraWriteCount == 0)
+    }
+
+    @Test func demoLoggingWorksWithoutCameraWrites() async throws {
+        let motion = GyroAdoptionMotion()
+        let model = NativeAppModel(
+            gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator(
+                host: NativeAppModel.gyroHostConfiguration(), driver: motion,
+                keyValueStore: motion.keyValues))
+        await model.gyroCapture.waitUntilLoaded()
+        model.startDemoSession()
+        model.setGyroCaptureEnabled(true)
+        model.gyroCapture.receive(.recording(true, at: ProcessInfo.processInfo.systemUptime))
+        motion.buffer?.append(
+            OpenCineGyro.GyroSample(
+                timestamp: ProcessInfo.processInfo.systemUptime, x: 0.01, y: 0.02, z: 0.03))
+        model.gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
+        for _ in 0..<100 {
+            if model.gyroCapture.logs.contains(where: { !$0.active }) { break }
+            await Task.yield()
+        }
+        let write = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "OFF"))
+
+        #expect(!model.debugHasCameraSession)
+        #expect(model.gyroCapture.logs.contains { !$0.active })
         #expect(await model.writeGyroStabilization([write]) == false)
         #expect(model.debugPendingCameraWriteCount == 0)
     }
@@ -201,6 +291,18 @@ import UIKit
         camera.sink?.receive(.disconnected)
         camera.sink?.receive(.connected(.init(id: "nikon-456", name: "Second camera")))
         #expect(!coordinator.hasSavedCalibration)
+    }
+
+    private func armGyro(_ model: NativeAppModel, native: NativeCameraSession) async {
+        model.gyroCapture.enabled = true
+        model.nikonGyro.connected(native.identity)
+        model.applyCameraRead(.movieVibrationReduction, Data([2]))
+        model.applyCameraRead(.electronicVR, Data([1]))
+        model.applyCameraRead(.liveViewSelector, Data([1]))
+        model.reconcileGyroCapture()
+        model.gyroCapture.setupTurnOffStabilization()
+        await model.gyroCapture.waitForCameraWrites()
+        #expect(model.gyroCapture.isArmed)
     }
 
     private func makeModel() async throws -> (
