@@ -8,6 +8,8 @@ import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
+import OpenCineGyro
+import OpenCineGyroApple
 import OpenCineMedia
 import OpenCineRelay
 import OpenCineRelayApple
@@ -1037,7 +1039,7 @@ final class NativeAppModel {
             syncScreenWakePolicy()
             publishWatchState()
             if oldValue != isMonitorPresented {
-                if !isMonitorPresented { gyroCapture.stop(reason: .disconnected) }
+                if !isMonitorPresented { gyroCapture.setHostEligible(false) }
                 // Record admission follows live-view readiness.
                 refreshCommonControlFacts()
                 updateBluetoothShutter()
@@ -1165,8 +1167,11 @@ final class NativeAppModel {
     var videoSource: VideoSourceKind = .cameraLiveView {
         didSet {
             if oldValue != videoSource {
-                gyroCapture.invalidateMountCalibration(
-                    message: "Camera source changed. Start calibration again.")
+                nikonGyro.disconnected()
+                if let identity = connectedIdentity, videoSource == .cameraLiveView {
+                    nikonGyro.connected(identity)
+                }
+                reconcileGyroCapture()
             }
         }
     }
@@ -2532,7 +2537,23 @@ final class NativeAppModel {
     var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
-    let gyroCapture = GyroCaptureCoordinator()
+    let gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator
+    @ObservationIgnored lazy var nikonGyro = NikonGyroCameraAdapter(write: { [weak self] writes in
+        await self?.writeGyroStabilization(writes) ?? false
+    })
+    @ObservationIgnored private var gyroDisconnectTask: Task<Void, Never>?
+
+    static func gyroHostConfiguration(
+        logDirectory: URL = URL.applicationSupportDirectory.appendingPathComponent(
+            "GyroLogs", isDirectory: true)
+    ) -> GyroHostConfiguration {
+        GyroHostConfiguration(
+            appName: "OpenZCine", logDirectory: logDirectory,
+            preferenceKeys: .namespaced("gyro.v2."),
+            legacyKeys: GyroLegacyPreferenceKeys(
+                enabled: "gyroLoggingEnabled.v1", mountPreset: "gyroMountPreset.v1",
+                calibration: "gyroMountCalibration.v1"))
+    }
 
     var isRecording = false {
         didSet {
@@ -2561,8 +2582,10 @@ final class NativeAppModel {
         lutFileStore: CustomLUTStore = CustomLUTStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
         assist: NikonAssistState? = nil,
-        scopePanels: NikonScopePanels? = nil
+        scopePanels: NikonScopePanels? = nil,
+        gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator? = nil
     ) {
+        self.gyroCapture = gyroCapture ?? .init(host: Self.gyroHostConfiguration())
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
         mediaCacheDirectory = .init(
@@ -4201,6 +4224,12 @@ final class NativeAppModel {
                 // gaps — see `isCameraControlSession`.
                 isCameraControlSession = true
                 connectedIdentity = session.identity
+                if !isDemoSession, multicam.lentMember == nil {
+                    gyroCapture.attach(nikonGyro)
+                    nikonGyro.connected(session.identity)
+                    nikonGyro.receive(snapshot: reportedPropertySnapshot)
+                    reconcileGyroCapture()
+                }
                 startKeepAlive(session: session)
                 startEventDraining(session: session)
                 startLinkHealthMonitoring()
@@ -5296,14 +5325,19 @@ final class NativeAppModel {
         let value: String
         let write: PTPCameraPropertyWrite
         let admission: NikonCommandAdmission?
+        let completion: ((Bool) -> Void)?
+        let gyroRestore: Bool?
         init(
             picker: CameraPicker, value: String, write: PTPCameraPropertyWrite,
-            admission: NikonCommandAdmission? = nil
+            admission: NikonCommandAdmission? = nil,
+            completion: ((Bool) -> Void)? = nil, gyroRestore: Bool? = nil
         ) {
             self.picker = picker
             self.value = value
             self.write = write
             self.admission = admission
+            self.completion = completion
+            self.gyroRestore = gyroRestore
         }
     }
 
@@ -5320,7 +5354,27 @@ final class NativeAppModel {
     private func dropPendingCameraWrites(
         where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
     ) {
+        let dropped = pendingCameraWrites.filter(shouldDrop)
+        for pending in dropped { pending.completion?(false) }
         pendingCameraWrites.removeAll(where: shouldDrop)
+    }
+
+    func writeGyroStabilization(_ writes: [PTPCameraPropertyWrite]) async -> Bool {
+        guard !isDemoSession else { return false }
+        for write in writes {
+            let succeeded = await withCheckedContinuation { continuation in
+                enqueueCameraWrite(
+                    PendingCameraWrite(
+                        picker: .stabilization,
+                        value: write.property == .movieVibrationReduction
+                            ? "IBIS" : "Electronic VR",
+                        write: write, completion: { continuation.resume(returning: $0) },
+                        gyroRestore: gyroDisconnectTask != nil || !gyroCapture.enabled))
+                drainPendingWritesIfIdle()
+            }
+            guard succeeded else { return false }
+        }
+        return true
     }
 
     private struct FocusResetContext: Equatable {
@@ -7070,6 +7124,18 @@ final class NativeAppModel {
             returnToMulticam()
             return
         }
+        if gyroCapture.isArmed, gyroDisconnectTask == nil, !preserveMonitorSurface {
+            gyroDisconnectTask = Task { [weak self] in
+                defer { self?.gyroDisconnectTask = nil }
+                await self?.gyroCapture.prepareForDisconnect()
+                self?.disconnectCameraSession(
+                    resetConnection: resetConnection,
+                    preserveMonitorSurface: preserveMonitorSurface, cover: cover)
+            }
+            return
+        }
+        gyroCapture.detachAdapter()
+        nikonGyro.disconnected()
         let session = cameraSession
         let runtime = monitorRuntime
         if !preserveMonitorSurface, shell.monitor != nil { shell.close(cover) }
@@ -7363,7 +7429,7 @@ final class NativeAppModel {
         cameras.consent.retire(source: "native-connect")
         feedIncidentProducer?.end()
         feedIncidentProducer = nil
-        gyroCapture.stop(reason: .disconnected)
+        gyroCapture.setHostEligible(false)
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
         // publishing a session, so a handshake finishing after this clear can't resurrect state.
         connectionGeneration += 1
@@ -7881,7 +7947,7 @@ final class NativeAppModel {
     /// timecode rides the live-view frame header only — there is no PTP timecode property — so
     /// ending live view froze it (#271). Command uses `streamsHeaderOnly` instead.
     private var shouldPauseLiveFeed: Bool {
-        activePanelHidesLiveFeed && !gyroCapture.calibrationInProgress
+        activePanelHidesLiveFeed && gyroCapture.ring == nil && gyroCapture.setupSteps.isEmpty
     }
 
     /// Command mode (DISP 3): the dashboard hides the image but shows live timecode and record
@@ -8058,7 +8124,7 @@ final class NativeAppModel {
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
-                    gyroCapture.stop(reason: .interrupted)
+                    gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
                     applyCameraRecordState(isRecording: false, force: true)
                     let error =
                         event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
@@ -8098,7 +8164,9 @@ final class NativeAppModel {
         case .objectAdded, .captureComplete:
             handleBodyFiredCapture(session: session)
         case .movieRecordStarted, .movieRecordComplete, .movieRecordInterrupted:
-            if event.eventCode == .movieRecordInterrupted { gyroCapture.stop(reason: .interrupted) }
+            if event.eventCode == .movieRecordInterrupted {
+                gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
+            }
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
@@ -8163,7 +8231,7 @@ final class NativeAppModel {
     /// app so it vanishes mid-shoot. The session object is kept so `enterForeground()` can resume.
     func enterBackground() {
         retireOperatorQuickPresentation()
-        gyroCapture.stop(reason: .backgrounded)
+        gyroCapture.appDidEnterBackground()
         AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
@@ -8269,22 +8337,14 @@ final class NativeAppModel {
 
     /// Publishes the integration pump's picture/header delivery. JPEG decoding and native
     /// scopes, relay, watch and display processing stay with their presentation owner.
-    private func consumeCameraFrame(
+    func consumeCameraFrame(
         _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
         session: NativeCameraSession, incident: NikonFeedIncidentProducer.Preview?
     ) async -> Bool {
         guard !Task.isCancelled, cameraSession === session else { return false }
         // Calibration needs the raw header at arrival, before decode or display smoothing.
-        reconcileGyroCapture(recording: frame.isRecording)
-        let cameraDown = frame.level.flatMap { level in
-            level.hasPitch
-                ? GyroCameraGravity.down(
-                    rollDegrees: PTPLevelAngles.signedDegrees(level.roll),
-                    pitchDegrees: PTPLevelAngles.signedDegrees(level.pitch)) : nil
-        }
-        gyroCapture.receiveCalibrationCamera(
-            cameraDown,
-            at: ProcessInfo.processInfo.systemUptime, sourceID: connectionGeneration)
+        nikonGyro.receive(frame: frame, at: ProcessInfo.processInfo.systemUptime)
+        reconcileGyroCapture()
         if delivery.headerOnly {
             liveViewFocus = frame.focus
             applyLiveViewHeaderState(frame)
@@ -8902,7 +8962,10 @@ final class NativeAppModel {
     private func applyCameraRecordState(
         isRecording recording: Bool, force: Bool = false, observeGyro: Bool = true
     ) {
-        if observeGyro { reconcileGyroCapture(recording: recording) }
+        if observeGyro {
+            gyroCapture.receive(.recording(recording, at: ProcessInfo.processInfo.systemUptime))
+            reconcileGyroCapture()
+        }
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
@@ -8934,7 +8997,9 @@ final class NativeAppModel {
     /// Single-flight and bound to the session: rapid picker taps extend the one running drain
     /// instead of stacking tasks on the transaction gate, and a drain never outlives its session.
     private func drainPendingWritesIfIdle() {
-        guard !isMonitorPresented, let session = cameraSession else { return }
+        guard let session = cameraSession,
+            !isMonitorPresented || pendingCameraWrites.contains(where: { $0.gyroRestore != nil })
+        else { return }
         guard pendingWriteDrainTask == nil else { return }
         pendingWriteDrainTask = Task { [weak self] in
             defer { self?.pendingWriteDrainTask = nil }
@@ -8948,6 +9013,13 @@ final class NativeAppModel {
     private func performNextPendingCameraWrite(session: NativeCameraSession) async -> Bool {
         guard !pendingCameraWrites.isEmpty else { return false }
         let pending = pendingCameraWrites.removeFirst()
+        var completed = false
+        func finish(_ succeeded: Bool) {
+            guard !completed else { return }
+            completed = true
+            pending.completion?(succeeded)
+        }
+        defer { finish(false) }
         let sourceGeneration = connectionGeneration
         guard cameraSession === session else { return true }
         let isShutterModeWrite = pending.write.property == .movieShutterMode
@@ -8957,6 +9029,7 @@ final class NativeAppModel {
             || pending.write.property == .stillISOAutoControl
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
+        var confirmed = false
         do {
             let writeStarted = ContinuousClock.now
             if let admission = pending.admission {
@@ -8990,6 +9063,7 @@ final class NativeAppModel {
                 return true
             }
             if let readback {
+                confirmed = true
                 applyCameraRead(pending.write.property, readback)
             } else {
                 cameraPropertySnapshot = cameraPropertySnapshot.applying(
@@ -9033,7 +9107,9 @@ final class NativeAppModel {
             if !isShutterLockWrite {
                 lockedControls.remove(pending.picker)
             }
-            if isShutterLockWrite {
+            if let gyroRestore = pending.gyroRestore {
+                connectionMessage = gyroRestore ? "Gyro: IBIS restored" : "Gyro: IBIS OFF"
+            } else if isShutterLockWrite {
                 let unlocking = pending.write.data.first == 0
                 connectionMessage =
                     unlocking
@@ -9160,6 +9236,7 @@ final class NativeAppModel {
                         : "\(pending.picker.title) is locked on the camera (Control lock).")
             }
         }
+        finish(confirmed)
         return true
     }
 
@@ -9381,10 +9458,11 @@ final class NativeAppModel {
     }
 
     /// A value the camera returned, applied to the display snapshot and the reported one.
-    private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
+    func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
         let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
+        nikonGyro.receive(snapshot: reportedPropertySnapshot)
         if property == .movieFileType {
             stabilizationFileTypeReadback = reportedPropertySnapshot.fileType
         }
@@ -14319,18 +14397,10 @@ struct NativeAppRoot: View {
         // when the RED internet hop tears the camera session down mid-download. The clip player
         // mounts its own (`MediaPlayerView`).
         .redDownloadCover(model, host: .root)
-        .sheet(
-            isPresented: Binding(
-                get: { model.gyroCapture.logsPresented },
-                set: { model.gyroCapture.logsPresented = $0 }
-            )
-        ) { GyroLogsView(coordinator: model.gyroCapture) }
-        .sheet(
-            isPresented: Binding(
-                get: { model.gyroCapture.mountPresented },
-                set: { model.gyroCapture.mountPresented = $0 }
-            )
-        ) { GyroMountView(coordinator: model.gyroCapture) }
+        .gyroFeature(
+            model.gyroCapture,
+            haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled })
+        )
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
         .monitorAppStartup(startup, splashVisible: $showsLaunchSplash) { choice in
             ReliabilityConsentPrompt(onChoice: choice)
@@ -15175,21 +15245,16 @@ extension NativeAppModel {
     /// Keeps the opt-in local to the phone while recording authority remains with the camera.
     func setGyroCaptureEnabled(_ enabled: Bool) {
         gyroCapture.enabled = enabled
-        reconcileGyroCapture(recording: reportedRecording)
+        reconcileGyroCapture()
     }
 
-    private func reconcileGyroCapture(recording: Bool?) {
-        let eligible =
+    func reconcileGyroCapture() {
+        nikonGyro.receive(snapshot: reportedPropertySnapshot)
+        gyroCapture.setHostEligible(
             isConnected && cameraSession != nil && isMonitorPresented
-            && UIApplication.shared.applicationState == .active
-            && !isDemoSession && videoSource != .relay
-            && !multicam.isPresented && multicam.lentMember == nil
-            && GyroCaptureCoordinator.selectorArms(cameraPropertySnapshot.captureSelector)
-        gyroCapture.configure(
-            eligible: eligible,
-            cameraLabel: connectedIdentity?.model ?? "Nikon camera", recording: recording,
-            calibrationSourceID: eligible && videoSource == .cameraLiveView
-                ? connectionGeneration : nil)
+                && UIApplication.shared.applicationState == .active
+                && !isDemoSession && videoSource != .relay
+                && !multicam.isPresented && multicam.lentMember == nil)
     }
 }
 

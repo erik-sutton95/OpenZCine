@@ -570,12 +570,15 @@ struct NikonMonitorShell: View {
         )
         .overlay {
             if model.activePanel == nil,
-                model.displayMode != .clean || model.gyroCapture.statusIsFailure
-                    || model.gyroCapture.hasGapWarning
+                model.displayMode != .clean || model.gyroCapture.pill.kind == .error
+                    || model.gyroCapture.pill.kind == .mountMoved
+                    || model.gyroCapture.pill.kind == .gaps
             {
                 // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
-                GyroMonitorStatus(coordinator: model.gyroCapture)
-                    .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
+                GyroPillView(state: model.gyroCapture.pill) {
+                    model.gyroCapture.logsPresented = true
+                }
+                .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
             }
         }
         .overlay { MonitorRecoveryOverlay() }
