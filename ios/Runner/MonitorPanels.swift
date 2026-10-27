@@ -1164,10 +1164,11 @@ struct OperatorSettingsPanel: View {
             gyro: .init(
                 enabled: Binding(
                     get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
-                status: model.gyroCapture.failure ?? model.gyroCapture.statusText,
-                openLogs: model.gyroCapture.openLogs,
-                mountName: model.gyroCapture.mountName,
-                configureMount: model.gyroCapture.openMount)
+                status: GyroCopy.pillA11y(model.gyroCapture.pill.kind, warning: false),
+                available: model.gyroSettingsAvailable,
+                openLogs: { model.gyroCapture.logsPresented = true },
+                calibrate: model.gyroCapture.canCalibrate
+                    ? { model.gyroCapture.beginCalibration() } : nil)
         )
     }
 

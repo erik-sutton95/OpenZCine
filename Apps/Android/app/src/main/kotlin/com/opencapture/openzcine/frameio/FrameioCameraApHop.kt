@@ -27,6 +27,7 @@ internal class AndroidFrameioCameraApHop(
     private val environment: PairingEnvironment,
     private val fixtureSession: Boolean,
     private val onReconnected: (PairedCamera) -> Unit,
+    private val prepareForDisconnect: suspend () -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
     private val rejoinTimeoutMillis: Long = DEFAULT_REJOIN_TIMEOUT_MILLIS,
 ) : FrameioCameraHop {
@@ -45,13 +46,16 @@ internal class AndroidFrameioCameraApHop(
     override suspend fun leaveCameraNetwork(): Boolean {
         if (availability != FrameioHopAvailability.READY) return false
         return try {
-            activeSession.disconnect()
+            disconnectSession()
             if (activeSession.state.value !is CameraSessionState.Disconnected) return false
             environment.releaseCameraAp()
             true
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
+            if (activeSession.state.value is CameraSessionState.Disconnected) {
+                runCatching { environment.releaseCameraAp() }
+            }
             false
         }
     }
@@ -85,7 +89,7 @@ internal class AndroidFrameioCameraApHop(
         } catch (_: TimeoutCancellationException) {
             return failedReconnect()
         } catch (error: CancellationException) {
-            activeSession.disconnect()
+            disconnectSession()
             environment.releaseCameraAp()
             throw error
         } catch (_: Exception) {
@@ -94,9 +98,17 @@ internal class AndroidFrameioCameraApHop(
     }
 
     private suspend fun failedReconnect(): FrameioCameraRejoinEvidence? {
-        runCatching { activeSession.disconnect() }
+        runCatching { disconnectSession() }
         environment.releaseCameraAp()
         return null
+    }
+
+    private suspend fun disconnectSession() {
+        try {
+            prepareForDisconnect()
+        } finally {
+            activeSession.disconnect()
+        }
     }
 
     private companion object {

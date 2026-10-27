@@ -925,6 +925,7 @@ actor LargeTransferTransport: CameraTransport {
     struct Call: Sendable {
         let operation: PTPOperationCode
         let parameters: [UInt32]
+        let dataOut: Data?
     }
     nonisolated let kind: CameraTransportKind
     let operations: [PTPOperationCode]
@@ -932,6 +933,8 @@ actor LargeTransferTransport: CameraTransport {
     var chunks: [Data]
     var holdRead: Bool
     private(set) var calls: [Call] = []
+    private var propertyValues: [PTPPropertyCode: Data] = [:]
+    private var refuseWrite = false
     private var readEntered = false
     private var entered: CheckedContinuation<Void, Never>?
     private var releaseRead: CheckedContinuation<Void, Never>?
@@ -947,13 +950,31 @@ actor LargeTransferTransport: CameraTransport {
         self.holdRead = holdRead
     }
     func clear() { calls = [] }
+    func refuseNextWrite() { refuseWrite = true }
     func executeTransaction(
         operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
         dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
     ) async throws -> PTPIPTransactionResult {
-        calls.append(.init(operation: operationCode, parameters: parameters))
+        calls.append(.init(operation: operationCode, parameters: parameters, dataOut: dataOut))
         var data = Data()
         switch operationCode {
+        case .setDevicePropValue:
+            if let rawProperty = parameters.first,
+                let property = PTPPropertyCode(rawValue: rawProperty)
+            {
+                if refuseWrite {
+                    propertyValues[property] = Data([0])
+                    refuseWrite = false
+                } else {
+                    propertyValues[property] = dataOut
+                }
+            }
+        case .getDevicePropValue:
+            if let rawProperty = parameters.first,
+                let property = PTPPropertyCode(rawValue: rawProperty)
+            {
+                data = propertyValues[property] ?? Data()
+            }
         case .getDeviceInfo: data = deviceInfo()
         case .getObjectSize: data = Data(ByteCoding.uint64LE(totalBytes))
         case .getObjectInfo: data = objectInfo()

@@ -236,6 +236,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineCameraVocabulary/**",
                 "Sources/OpenCineFrameIO/**",
                 "Sources/OpenCineFrameIOAndroid/**",
+                "Sources/OpenCineGyro/**",
+                "Sources/OpenCineGyroAndroid/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
                 "Sources/OpenCineJNISupport/**",
@@ -350,6 +352,7 @@ dependencies {
     implementation("com.opencapture.opencine:appkit-sentry:0.1.0-SNAPSHOT")
     // The one Frame.io owner (sign-in, upload, history, hop lease) over FrameioNative (A4-09).
     implementation("com.opencapture.opencine:frameio:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:gyro:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -377,6 +380,7 @@ dependencies {
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(testFixtures("com.opencapture.opencine:gyro:0.1.0-SNAPSHOT"))
 
     // NikonFeedIncidentProducerTest asserts with kotlin.test, as the unit tests do.
     androidTestImplementation(libs.kotlin.test.junit)
