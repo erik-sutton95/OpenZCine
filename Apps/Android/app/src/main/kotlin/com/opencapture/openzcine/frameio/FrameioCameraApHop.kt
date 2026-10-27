@@ -53,6 +53,9 @@ internal class AndroidFrameioCameraApHop(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
+            if (activeSession.state.value is CameraSessionState.Disconnected) {
+                runCatching { environment.releaseCameraAp() }
+            }
             false
         }
     }

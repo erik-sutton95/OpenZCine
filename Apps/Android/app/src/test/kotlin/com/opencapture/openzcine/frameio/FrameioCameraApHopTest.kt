@@ -117,6 +117,7 @@ class FrameioCameraApHopTest {
         assertFalse(hop.leaveCameraNetwork())
 
         assertEquals(1, active.disconnectCalls)
+        assertEquals(1, harness.releaseCalls)
         assertIs<CameraSessionState.Disconnected>(active.state.value)
     }
 
