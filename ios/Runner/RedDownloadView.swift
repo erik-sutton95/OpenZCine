@@ -87,7 +87,7 @@ enum RedDownloadHost: Equatable, Sendable {
 }
 
 /// One ask for the RED download on a surface.
-struct RedDownloadRequest: Equatable {
+struct RedDownloadRequest: Equatable, Identifiable {
     let host: RedDownloadHost
     let id = UUID()
 }
@@ -109,20 +109,19 @@ extension View {
         @ViewBuilder content: @escaping () -> some View
     ) -> some View {
         fullScreenCover(
-            isPresented: Binding(
-                get: { model.redDownloadHost == host },
-                set: { presented in
-                    if !presented, model.redDownloadHost == host { model.redDownloadHost = nil }
-                })
-        ) {
-            let request = model.redDownloadRequest
+            item: Binding<RedDownloadRequest?>(
+                get: {
+                    model.redDownloadRequest?.host == host ? model.redDownloadRequest : nil
+                },
+                set: { _ in })
+        ) { request in
             content()
                 .environment(model)
                 // A host that goes away with the cover up (the player closing) takes the cover
                 // with it; clear that request so it does not reappear on the next clip. A newer
                 // ask made while this cover was leaving stays.
                 .onDisappear {
-                    if let request, model.redDownloadRequest == request {
+                    if model.redDownloadRequest == request {
                         model.redDownloadRequest = nil
                     }
                 }
