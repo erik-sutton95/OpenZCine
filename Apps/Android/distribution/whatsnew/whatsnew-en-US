@@ -1,5 +1,5 @@
-- Shared OpenCine setup with Add setup, a refreshed DISP 3 and the shared View Assist.
-- Much faster Media on large cards; Full Resolution Caching marks played clips CACHED; Download from RED works in clips.
-- Smoother live view, with no freeze after rotating or returning to the app.
-- A dozing camera gets a wait step; Take Over asks first; clearer Wi-Fi retries.
-- Sharper, faster instant review, one photo per tap in CL/CH, plus Photo LUT, shots and storage fixes.
+- Shared setup, DISP 3 and View Assist; experimental gyro logs add guided calibration, stabilization restore and mount-move warnings.
+- Faster Media and playback on large cards; Full Resolution Caching marks played clips CACHED; scopes and assists stay responsive.
+- Download from RED opens over the clip player.
+- Smoother live view, camera wake and Take Over fixes, plus clearer Wi-Fi retries.
+- Sharper instant review and CL/CH capture, plus Photo LUT, shots, storage and sharing fixes.
