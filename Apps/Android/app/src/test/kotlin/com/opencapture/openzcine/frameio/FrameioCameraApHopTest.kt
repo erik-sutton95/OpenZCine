@@ -101,6 +101,26 @@ class FrameioCameraApHopTest {
     }
 
     @Test
+    fun `gyro preparation failure still disconnects the session`() = runTest {
+        val active = FakeSession(connectSucceeds = true, initiallyConnected = true)
+        val harness = EnvironmentHarness()
+        val hop =
+            AndroidFrameioCameraApHop(
+                activeSession = active,
+                savedCamera = savedCamera(),
+                environment = harness.environment,
+                fixtureSession = false,
+                onReconnected = {},
+                prepareForDisconnect = { error("SIMULATED restore failure") },
+            )
+
+        assertFalse(hop.leaveCameraNetwork())
+
+        assertEquals(1, active.disconnectCalls)
+        assertIs<CameraSessionState.Disconnected>(active.state.value)
+    }
+
+    @Test
     fun `failed replacement never emits rejoin evidence`() = runTest {
         val active = FakeSession(connectSucceeds = false, initiallyConnected = true)
         val harness = EnvironmentHarness()

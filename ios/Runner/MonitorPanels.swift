@@ -1165,7 +1165,7 @@ struct OperatorSettingsPanel: View {
                 enabled: Binding(
                     get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
                 status: GyroCopy.pillA11y(model.gyroCapture.pill.kind, warning: false),
-                available: model.gyroCapture.isArmed || model.gyroCapture.canCalibrate,
+                available: model.gyroSettingsAvailable,
                 openLogs: { model.gyroCapture.logsPresented = true },
                 calibrate: model.gyroCapture.canCalibrate
                     ? { model.gyroCapture.beginCalibration() } : nil)

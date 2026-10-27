@@ -1773,115 +1773,119 @@ final class NativeAppModel {
         // AWDL browsing under the decoding stream costs the watcher the same periodic radio
         // locks it costs a broadcaster, and a rejoin only re-finds a path that already worked.
         startRelayBrowsing(includePeerToPeer: false)
-        disconnectCameraSession(resetConnection: false)
-        cameraState = .blank
-        relayedBatteryReading = nil
-        relayedBatteryExhausted = nil
-        resetCameraPropertyState()
-        resetLinkHealthMeasurements()
-        discoveredCameras = []
-        connectedIdentity = nil
-        liveFrameImage = nil
-        videoSource = .relay
-        isMonitorPresented = wasWatching
-        connection = .connected
-        connectionMessage = "Joining \(discovery.name)…"
-        relayJoinDenied = false
-        linkMeter.restart()
-        applyLinkChip()
-        operatorSession.declare(modes: displayModes)
-
-        let client = MonitorRelayClient()
-        client.onStateChanged = { [weak self, weak client] state in
-            guard let self, let client, self.relayClient === client else { return }
-            self.relayClientState = state
-            // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
-            // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
-            // that never comes up is indistinguishable from a connected feed with no frames,
-            // which is exactly how it was reported from set.
-            self.applyLinkChip()
-            switch state {
-            case .connecting:
-                break
-            case .waiting(let reason):
-                self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
-                self.relayFailureReason = reason
-            case .connected(let hostName, let cameraName):
-                self.showsWatcherBrowse = false
-                self.shell.dismissCover()
-                self.isMonitorPresented = true
-                self.connectionMessage =
-                    cameraName.map { "Watching \(hostName) (\($0))." }
-                    ?? "Watching \(hostName)."
-                self.relayFailureReason = nil
-            case .failed(let reason):
-                // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
-                // client-to-client traffic, which camera APs typically do not — the honest
-                // remedy is leaving that network (nearby broadcasts reach this device
-                // directly, no shared network needed). Say so instead of a bare "couldn't
-                // reach".
-                let hint =
-                    self.isOnCameraAccessPointNetwork
-                    ? " This device is on the camera's own Wi-Fi. Leave that network and "
-                        + "watch from your regular Wi-Fi; nearby broadcasts reach this "
-                        + "device directly."
-                    : ""
-                self.connectionMessage = reason + hint
-                self.relayFailureReason = reason + hint
-                // A frozen frame that still looks live is the one failure mode a set monitor
-                // must never have — blank it so the reason overlay says what actually happened.
-                self.liveFrameImage = nil
-            case .idle:
-                break
-            }
-        }
-        client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
-        client.onControlToken = { [weak self] token in
+        Task { [weak self] in
             guard let self else { return }
-            self.relayHoldsControl = token.holderIsRecipient
-            self.relayControlHolderName = token.holderIsRecipient ? nil : token.holderName
-            // Losing control mid-gesture must not leave a drum open over a camera that has stopped
-            // listening to this device.
-            if !token.holderIsRecipient { self.dismissActivePanel() }
-        }
-        client.onFrame = { [weak self, weak client] metadata, image in
-            guard let self, let client, self.relayClient === client else { return }
-            self.applyRelayFrame(metadata: metadata, image: image, client: client)
-        }
-        client.onJoinDenied = { [weak self, weak client] denial in
-            guard let self, let client, self.relayClient === client else { return }
-            // Denied while WATCHING is the broadcaster ending the session deliberately —
-            // exit to the camera list. Only a pre-join refusal is a join failure.
-            if case .connected = self.relayClientState, !denial.passcodeRequired {
-                self.leaveRelay()
-                self.connectionMessage = denial.reason
-                return
+            await prepareGyroForDisconnect()
+            disconnectCameraSession(resetConnection: false, gyroPreparationCompleted: true)
+            cameraState = .blank
+            relayedBatteryReading = nil
+            relayedBatteryExhausted = nil
+            resetCameraPropertyState()
+            resetLinkHealthMeasurements()
+            discoveredCameras = []
+            connectedIdentity = nil
+            liveFrameImage = nil
+            videoSource = .relay
+            isMonitorPresented = wasWatching
+            connection = .connected
+            connectionMessage = "Joining \(discovery.name)…"
+            relayJoinDenied = false
+            linkMeter.restart()
+            applyLinkChip()
+            operatorSession.declare(modes: displayModes)
+
+            let client = MonitorRelayClient()
+            client.onStateChanged = { [weak self, weak client] state in
+                guard let self, let client, self.relayClient === client else { return }
+                self.relayClientState = state
+                // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
+                // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
+                // that never comes up is indistinguishable from a connected feed with no frames,
+                // which is exactly how it was reported from set.
+                self.applyLinkChip()
+                switch state {
+                case .connecting:
+                    break
+                case .waiting(let reason):
+                    self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
+                    self.relayFailureReason = reason
+                case .connected(let hostName, let cameraName):
+                    self.showsWatcherBrowse = false
+                    self.shell.dismissCover()
+                    self.isMonitorPresented = true
+                    self.connectionMessage =
+                        cameraName.map { "Watching \(hostName) (\($0))." }
+                        ?? "Watching \(hostName)."
+                    self.relayFailureReason = nil
+                case .failed(let reason):
+                    // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
+                    // client-to-client traffic, which camera APs typically do not — the honest
+                    // remedy is leaving that network (nearby broadcasts reach this device
+                    // directly, no shared network needed). Say so instead of a bare "couldn't
+                    // reach".
+                    let hint =
+                        self.isOnCameraAccessPointNetwork
+                        ? " This device is on the camera's own Wi-Fi. Leave that network and "
+                            + "watch from your regular Wi-Fi; nearby broadcasts reach this "
+                            + "device directly."
+                        : ""
+                    self.connectionMessage = reason + hint
+                    self.relayFailureReason = reason + hint
+                    // A frozen frame that still looks live is the one failure mode a set monitor
+                    // must never have — blank it so the reason overlay says what actually happened.
+                    self.liveFrameImage = nil
+                case .idle:
+                    break
+                }
             }
-            self.relayJoinNeedsPasscode = denial.passcodeRequired
-            // A second denial after a code was sent means the CODE was wrong — say that,
-            // not the generic ask.
-            self.relayFailureReason =
-                denial.passcodeRequired && self.relayPasscodeWasAttempted
-                ? "That passcode wasn't accepted. Check it with the broadcasting device."
-                : denial.reason
-            self.relayJoinDenied = true
-            self.applyLinkChip()
-            self.liveFrameImage = nil
+            client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
+            client.onControlToken = { [weak self] token in
+                guard let self else { return }
+                self.relayHoldsControl = token.holderIsRecipient
+                self.relayControlHolderName = token.holderIsRecipient ? nil : token.holderName
+                // Losing control mid-gesture must not leave a drum open over a camera that has stopped
+                // listening to this device.
+                if !token.holderIsRecipient { self.dismissActivePanel() }
+            }
+            client.onFrame = { [weak self, weak client] metadata, image in
+                guard let self, let client, self.relayClient === client else { return }
+                self.applyRelayFrame(metadata: metadata, image: image, client: client)
+            }
+            client.onJoinDenied = { [weak self, weak client] denial in
+                guard let self, let client, self.relayClient === client else { return }
+                // Denied while WATCHING is the broadcaster ending the session deliberately —
+                // exit to the camera list. Only a pre-join refusal is a join failure.
+                if case .connected = self.relayClientState, !denial.passcodeRequired {
+                    self.leaveRelay()
+                    self.connectionMessage = denial.reason
+                    return
+                }
+                self.relayJoinNeedsPasscode = denial.passcodeRequired
+                // A second denial after a code was sent means the CODE was wrong — say that,
+                // not the generic ask.
+                self.relayFailureReason =
+                    denial.passcodeRequired && self.relayPasscodeWasAttempted
+                    ? "That passcode wasn't accepted. Check it with the broadcasting device."
+                    : denial.reason
+                self.relayJoinDenied = true
+                self.applyLinkChip()
+                self.liveFrameImage = nil
+            }
+            relayHoldsControl = false
+            relayControlHolderName = nil
+            relayClient = client
+            lastGoodFrameAt = Date()
+            client.connect(to: discovery.endpoint)
+            var joinPasscode =
+                relaySubmittedPasscodes[discovery.name]
+                ?? Self.storedRelayPasscode(forHost: discovery.name)
+            #if DEBUG
+                joinPasscode = joinPasscode ?? demoRelayJoinPasscode
+            #endif
+            relayPasscodeWasAttempted = joinPasscode?.isEmpty == false
+            client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
+            startRelayWatchdog(for: discovery)
         }
-        relayHoldsControl = false
-        relayControlHolderName = nil
-        relayClient = client
-        lastGoodFrameAt = Date()
-        client.connect(to: discovery.endpoint)
-        var joinPasscode =
-            relaySubmittedPasscodes[discovery.name]
-            ?? Self.storedRelayPasscode(forHost: discovery.name)
-        #if DEBUG
-            joinPasscode = joinPasscode ?? demoRelayJoinPasscode
-        #endif
-        relayPasscodeWasAttempted = joinPasscode?.isEmpty == false
-        client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
-        startRelayWatchdog(for: discovery)
     }
 
     /// Watcher passcodes, remembered per broadcaster in the Keychain so a set's code is typed
@@ -4566,8 +4570,12 @@ final class NativeAppModel {
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
         recoveryEpisode.resetStorm()
-        disconnectCameraSession(resetConnection: true)
-        startDiscoveryLoop(resetResults: false)
+        Task { [weak self] in
+            guard let self else { return }
+            await prepareGyroForDisconnect()
+            disconnectCameraSession(resetConnection: true, gyroPreparationCompleted: true)
+            startDiscoveryLoop(resetResults: false)
+        }
     }
 
     // MARK: - Multicam (NIKON-01)
@@ -4740,6 +4748,7 @@ final class NativeAppModel {
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
+        var debugHasDiscoveryLoop: Bool { discoveryLoopTask != nil }
         /// Adopts an already-established SIMULATED transport session for hosted media tests.
         /// The real session supplies deletion authority; no connection flag bypasses admission.
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
@@ -4869,6 +4878,10 @@ final class NativeAppModel {
             discoveredCameras = []
             connectionMessage = "Demo UI session. No camera commands are being sent."
             connection = .connected
+            gyroCapture.receive(
+                .connected(.init(id: "demo-session", name: "SIMULATED demo camera")))
+            gyroCapture.receive(.videoMode(true))
+            reconcileGyroCapture()
             refreshLinkHealth()
         }
 
@@ -5374,7 +5387,7 @@ final class NativeAppModel {
     }
 
     func writeGyroStabilization(_ writes: [PTPCameraPropertyWrite]) async -> Bool {
-        guard !isDemoSession else { return false }
+        guard !isDemoSession, cameraSession != nil else { return false }
         for write in writes {
             let succeeded = await withCheckedContinuation { continuation in
                 enqueueCameraWrite(
@@ -7175,6 +7188,7 @@ final class NativeAppModel {
                 return
             }
         }
+        if isDemoSession { gyroCapture.receive(.disconnected) }
         gyroCapture.detachAdapter()
         nikonGyro.disconnected()
         let session = cameraSession
@@ -11876,6 +11890,7 @@ final class NativeAppModel {
             // `updating` preserves every other field — crucially `mediaStatus`, so the top-bar MEDIA
             // cell keeps toggling capacity ↔ duration after a record start/stop.
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
+            gyroCapture.receive(.recording(start, at: ProcessInfo.processInfo.systemUptime))
             return
         }
         guard shell.control.session != nil, !pictureOnlyMonitor else {
@@ -15286,6 +15301,10 @@ extension LiveHDRDisplay {
     static let app = LiveHDRDisplay()
 }
 extension NativeAppModel {
+    var gyroSettingsAvailable: Bool {
+        gyroCapture.isArmed || gyroCapture.canCalibrate || gyroCapture.enabled
+    }
+
     /// Keeps the opt-in local to the phone while recording authority remains with the camera.
     func setGyroCaptureEnabled(_ enabled: Bool) {
         gyroCapture.enabled = enabled
@@ -15295,9 +15314,9 @@ extension NativeAppModel {
     func reconcileGyroCapture() {
         nikonGyro.receive(snapshot: reportedPropertySnapshot)
         gyroCapture.setHostEligible(
-            isConnected && cameraSession != nil && isMonitorPresented
+            isConnected && (cameraSession != nil || isDemoSession) && isMonitorPresented
                 && UIApplication.shared.applicationState == .active
-                && !isDemoSession && videoSource != .relay
+                && (isDemoSession || videoSource != .relay)
                 && !multicam.isPresented && multicam.lentMember == nil)
     }
 }

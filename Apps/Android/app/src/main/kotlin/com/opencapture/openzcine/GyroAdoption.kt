@@ -25,8 +25,11 @@ internal suspend fun disconnectAfterGyroPreparation(
     prepare: suspend () -> Unit,
     disconnect: suspend () -> Unit,
 ) {
-    if (isArmed) prepare()
-    disconnect()
+    try {
+        if (isArmed) prepare()
+    } finally {
+        disconnect()
+    }
 }
 
 internal fun gyroPillVisibleInCleanMode(kind: GyroPillKind): Boolean =

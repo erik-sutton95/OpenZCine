@@ -87,6 +87,21 @@ class GyroAdoptionTest {
     }
 
     @Test
+    fun disconnectRunsWhenGyroPreparationThrows() = runTest {
+        val events = mutableListOf<String>()
+
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            disconnectAfterGyroPreparation(
+                isArmed = true,
+                prepare = { error("SIMULATED restore failure") },
+                disconnect = { events += "disconnect" },
+            )
+        }
+
+        assertEquals(listOf("disconnect"), events)
+    }
+
+    @Test
     fun cleanModeKeepsGyroTakeWarnings() {
         assertTrue(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.MOUNT_MOVED))
         assertTrue(gyroPillVisibleInCleanMode(com.opencapture.opencine.gyro.GyroPillKind.GAPS))

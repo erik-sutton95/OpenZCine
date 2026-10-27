@@ -101,8 +101,11 @@ internal class AndroidFrameioCameraApHop(
     }
 
     private suspend fun disconnectSession() {
-        prepareForDisconnect()
-        activeSession.disconnect()
+        try {
+            prepareForDisconnect()
+        } finally {
+            activeSession.disconnect()
+        }
     }
 
     private companion object {

@@ -30,6 +30,8 @@ import UIKit
         model.reconcileGyroCapture()
         model.gyroCapture.beginCalibration()
         model.gyroCapture.startRing()
+        #expect(model.gyroCapture.isArmed)
+        #expect(motion.buffer != nil)
         let frame = PTPLiveViewFrame(
             jpeg: Data([1]), timecode: Timecode(on: false, hour: 0, minute: 0, second: 0, frame: 0),
             isRecording: true, level: PTPLevelAngles(roll: 0, pitch: 0, yaw: 0))
@@ -45,12 +47,11 @@ import UIKit
                 timestamp: ProcessInfo.processInfo.systemUptime, x: 0.01, y: 0.02, z: 0.03))
 
         var levelArrived = false
-        for _ in 0..<100 {
+        let logged = await waitUntil {
             if case .posing = model.gyroCapture.ring { levelArrived = true }
-            if model.gyroCapture.logs.contains(where: { $0.active }), levelArrived { break }
-            await Task.yield()
+            return model.gyroCapture.logs.contains(where: { $0.active }) && levelArrived
         }
-        #expect(model.gyroCapture.logs.contains { $0.active })
+        #expect(logged)
         #expect(levelArrived)
     }
 
@@ -117,6 +118,7 @@ import UIKit
             ])
         let restoreValues = writes.filter { $0.operation == .setDevicePropValue }.suffix(2)
         #expect(restoreValues.map { $0.dataOut.map { Array($0) } } == [[2], [1]])
+        #expect(model.debugHasDiscoveryLoop)
     }
 
     @Test func internetHopRestoresBeforeLeavingTheCameraNetwork() async throws {
@@ -182,6 +184,53 @@ import UIKit
         native.close()
     }
 
+    @Test func disconnectedSessionRejectsGyroWriteWithoutQueueing() async throws {
+        let model = NativeAppModel()
+        let write = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "OFF"))
+        let result = Task { await model.writeGyroStabilization([write]) }
+        for _ in 0..<100 {
+            if model.debugPendingCameraWriteCount > 0 { break }
+            await Task.yield()
+        }
+
+        #expect(model.debugPendingCameraWriteCount == 0)
+        if model.debugPendingCameraWriteCount == 0 {
+            #expect(await result.value == false)
+        } else {
+            result.cancel()
+        }
+    }
+
+    @Test func joinRelayKeepsRelayStateAfterGyroRestore() async throws {
+        let (model, native, transport, _) = try await makeModel()
+        await armGyro(model, native: native)
+        let discovery = MonitorRelayDiscovery(
+            id: "SIMULATED-gyro-relay", name: "SIMULATED gyro relay",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65500))
+        defer { model.leaveRelay() }
+
+        model.joinRelay(discovery)
+        for _ in 0..<100 {
+            if await transport.calls.last?.operation == .closeSession { break }
+            await Task.yield()
+        }
+
+        #expect(model.videoSource == .relay)
+        let calls = await transport.calls
+        #expect(
+            calls.filter { $0.operation == .setDevicePropValue }.suffix(2).map {
+                $0.dataOut.map { Array($0) }
+            } == [[2], [1]])
+        native.close()
+    }
+
+    @Test func enabledGyroSettingsRemainActionableWhileUnavailable() {
+        let model = NativeAppModel()
+        model.gyroCapture.enabled = true
+
+        #expect(model.gyroSettingsAvailable)
+    }
+
     @Test func demoSessionNeverWrites() async throws {
         let model = NativeAppModel()
         model.startDemoSession()
@@ -195,24 +244,27 @@ import UIKit
         let motion = GyroAdoptionMotion()
         let model = NativeAppModel(
             gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator(
-                host: NativeAppModel.gyroHostConfiguration(), driver: motion,
+                host: NativeAppModel.gyroHostConfiguration(logDirectory: motion.logDirectory),
+                driver: motion,
                 keyValueStore: motion.keyValues))
         await model.gyroCapture.waitUntilLoaded()
         model.startDemoSession()
         model.setGyroCaptureEnabled(true)
-        model.gyroCapture.receive(.recording(true, at: ProcessInfo.processInfo.systemUptime))
+        #expect(model.gyroCapture.camera != nil)
+        #expect(model.gyroCapture.isArmed)
+        #expect(model.gyroCapture.motionRunning)
+        #expect(motion.buffer != nil)
+        model.preferences.recordConfirmationEnabled = false
+        model.toggleRecording()
         motion.buffer?.append(
             OpenCineGyro.GyroSample(
                 timestamp: ProcessInfo.processInfo.systemUptime, x: 0.01, y: 0.02, z: 0.03))
-        model.gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
-        for _ in 0..<100 {
-            if model.gyroCapture.logs.contains(where: { !$0.active }) { break }
-            await Task.yield()
-        }
+        model.toggleRecording()
+        let logged = await waitUntil { model.gyroCapture.logs.contains(where: { !$0.active }) }
         let write = try #require(PTPCameraPropertyWrite.vibrationReduction(label: "OFF"))
 
         #expect(!model.debugHasCameraSession)
-        #expect(model.gyroCapture.logs.contains { !$0.active })
+        #expect(logged)
         #expect(await model.writeGyroStabilization([write]) == false)
         #expect(model.debugPendingCameraWriteCount == 0)
     }
@@ -293,6 +345,12 @@ import UIKit
         #expect(!coordinator.hasSavedCalibration)
     }
 
+    private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !condition(), ContinuousClock.now < deadline { await Task.yield() }
+        return condition()
+    }
+
     private func armGyro(_ model: NativeAppModel, native: NativeCameraSession) async {
         model.gyroCapture.enabled = true
         model.nikonGyro.connected(native.identity)
@@ -316,13 +374,15 @@ import UIKit
         let motion = GyroAdoptionMotion()
         let model = NativeAppModel(
             gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator(
-                host: NativeAppModel.gyroHostConfiguration(), driver: motion,
+                host: NativeAppModel.gyroHostConfiguration(logDirectory: motion.logDirectory),
+                driver: motion,
                 keyValueStore: motion.keyValues))
         model.debugAdoptEstablishedMediaSession(native)
         model.connectedIdentity = native.identity
         model.connection = .connected
         model.gyroCapture.attach(model.nikonGyro)
         model.isMonitorPresented = true
+        await model.gyroCapture.waitUntilLoaded()
         return (model, native, transport, motion)
     }
 }
@@ -335,7 +395,11 @@ private final class GyroAdoptionKeyValues: GyroKeyValueStore {
 
 @MainActor private final class GyroAdoptionMotion: OpenCineGyroApple.GyroMotionDriving {
     let keyValues = GyroAdoptionKeyValues()
+    let logDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gyro-adoption-\(UUID().uuidString)", isDirectory: true)
     var buffer: OpenCineGyroApple.GyroSampleBuffer?
+
+    deinit { try? FileManager.default.removeItem(at: logDirectory) }
 
     func startGyro(into buffer: OpenCineGyroApple.GyroSampleBuffer) throws { self.buffer = buffer }
     func stopGyro() { buffer = nil }
