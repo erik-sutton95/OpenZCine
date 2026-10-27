@@ -1440,6 +1440,7 @@ final class NativeAppModel {
     /// The broadcast this viewer joined, kept so retry — manual and automatic — knows its target.
     @ObservationIgnored private var relayJoinTarget: MonitorRelayDiscovery?
     @ObservationIgnored private var relayJoinGeneration = 0
+    @ObservationIgnored private var relayPendingJoinCount = 0
     @ObservationIgnored private var relayClientCreationCount = 0
     /// Self-heals a viewer session: rejoins on failure once the broadcast is visible again, and
     /// tears through a connected-but-stalled link (the suspended-broadcaster shape).
@@ -1777,7 +1778,9 @@ final class NativeAppModel {
         startRelayBrowsing(includePeerToPeer: false)
         relayJoinGeneration &+= 1
         let joinGeneration = relayJoinGeneration
+        relayPendingJoinCount += 1
         Task { [weak self] in
+            defer { self?.relayPendingJoinCount -= 1 }
             guard let self else { return }
             await prepareGyroForDisconnect()
             guard relayJoinGeneration == joinGeneration else { return }
@@ -4575,6 +4578,7 @@ final class NativeAppModel {
             startDiscoveryLoop(resetResults: false)
             return
         }
+        relayJoinGeneration &+= 1
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
         recoveryEpisode.resetStorm()
@@ -4763,6 +4767,7 @@ final class NativeAppModel {
         var debugHasCameraSession: Bool { cameraSession != nil }
         var debugHasDiscoveryLoop: Bool { discoveryLoopTask != nil }
         var debugRelayClientCreationCount: Int { relayClientCreationCount }
+        var debugRelayJoinTaskCompleted: Bool { relayPendingJoinCount == 0 }
         /// Adopts an already-established SIMULATED transport session for hosted media tests.
         /// The real session supplies deletion authority; no connection flag bypasses admission.
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {

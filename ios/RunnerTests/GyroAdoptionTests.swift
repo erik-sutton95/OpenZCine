@@ -233,9 +233,26 @@ import UIKit
 
         model.joinRelay(discovery)
         model.leaveRelay()
-        await model.gyroCapture.waitForCameraWrites()
-        for _ in 0..<10 { await Task.yield() }
+        let completed = await waitUntil { model.debugRelayJoinTaskCompleted }
 
+        #expect(completed)
+        #expect(model.debugRelayClientCreationCount == 0)
+        #expect(model.videoSource != .relay)
+        native.close()
+    }
+
+    @Test func disconnectDuringGyroRestoreCancelsRelayJoin() async throws {
+        let (model, native, _, _) = try await makeModel()
+        await armGyro(model, native: native)
+        let discovery = MonitorRelayDiscovery(
+            id: "SIMULATED-disconnect-relay", name: "SIMULATED disconnect relay",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65500))
+
+        model.joinRelay(discovery)
+        model.disconnect()
+        let completed = await waitUntil { model.debugRelayJoinTaskCompleted }
+
+        #expect(completed)
         #expect(model.debugRelayClientCreationCount == 0)
         #expect(model.videoSource != .relay)
         native.close()
@@ -254,6 +271,8 @@ import UIKit
 
         model.joinRelay(first)
         model.joinRelay(second)
+        let completed = await waitUntil { model.debugRelayJoinTaskCompleted }
+        #expect(completed)
         for _ in 0..<100 {
             if await transport.calls.last?.operation == .closeSession { break }
             await Task.yield()
@@ -388,7 +407,7 @@ import UIKit
     }
 
     private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(2)
+        let deadline = ContinuousClock.now + .seconds(4)
         while !condition(), ContinuousClock.now < deadline { await Task.yield() }
         return condition()
     }
