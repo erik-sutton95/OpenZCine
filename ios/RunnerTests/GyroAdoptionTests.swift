@@ -224,6 +224,48 @@ import UIKit
         native.close()
     }
 
+    @Test func leavingDuringGyroRestoreCancelsRelayJoin() async throws {
+        let (model, native, _, _) = try await makeModel()
+        await armGyro(model, native: native)
+        let discovery = MonitorRelayDiscovery(
+            id: "SIMULATED-cancelled-relay", name: "SIMULATED cancelled relay",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65500))
+
+        model.joinRelay(discovery)
+        model.leaveRelay()
+        await model.gyroCapture.waitForCameraWrites()
+        for _ in 0..<10 { await Task.yield() }
+
+        #expect(model.debugRelayClientCreationCount == 0)
+        #expect(model.videoSource != .relay)
+        native.close()
+    }
+
+    @Test func secondRelayJoinSupersedesTheFirst() async throws {
+        let (model, native, transport, _) = try await makeModel()
+        await armGyro(model, native: native)
+        let first = MonitorRelayDiscovery(
+            id: "SIMULATED-first-relay", name: "SIMULATED first relay",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65500))
+        let second = MonitorRelayDiscovery(
+            id: "SIMULATED-second-relay", name: "SIMULATED second relay",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65501))
+        defer { model.leaveRelay() }
+
+        model.joinRelay(first)
+        model.joinRelay(second)
+        for _ in 0..<100 {
+            if await transport.calls.last?.operation == .closeSession { break }
+            await Task.yield()
+        }
+
+        #expect(model.debugRelayClientCreationCount == 1)
+        #expect(model.videoSource == .relay)
+        let calls = await transport.calls
+        #expect(calls.last?.operation == .closeSession)
+        native.close()
+    }
+
     @Test func enabledGyroSettingsRemainActionableWhileUnavailable() {
         let model = NativeAppModel()
         model.gyroCapture.enabled = true

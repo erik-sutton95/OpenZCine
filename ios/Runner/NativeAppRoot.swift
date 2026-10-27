@@ -1439,6 +1439,8 @@ final class NativeAppModel {
     var relayFailureReason: String?
     /// The broadcast this viewer joined, kept so retry — manual and automatic — knows its target.
     @ObservationIgnored private var relayJoinTarget: MonitorRelayDiscovery?
+    @ObservationIgnored private var relayJoinGeneration = 0
+    @ObservationIgnored private var relayClientCreationCount = 0
     /// Self-heals a viewer session: rejoins on failure once the broadcast is visible again, and
     /// tears through a connected-but-stalled link (the suspended-broadcaster shape).
     @ObservationIgnored private var relayWatchdogTask: Task<Void, Never>?
@@ -1773,9 +1775,12 @@ final class NativeAppModel {
         // AWDL browsing under the decoding stream costs the watcher the same periodic radio
         // locks it costs a broadcaster, and a rejoin only re-finds a path that already worked.
         startRelayBrowsing(includePeerToPeer: false)
+        relayJoinGeneration &+= 1
+        let joinGeneration = relayJoinGeneration
         Task { [weak self] in
             guard let self else { return }
             await prepareGyroForDisconnect()
+            guard relayJoinGeneration == joinGeneration else { return }
             disconnectCameraSession(resetConnection: false, gyroPreparationCompleted: true)
             cameraState = .blank
             relayedBatteryReading = nil
@@ -1795,6 +1800,7 @@ final class NativeAppModel {
             operatorSession.declare(modes: displayModes)
 
             let client = MonitorRelayClient()
+            relayClientCreationCount += 1
             client.onStateChanged = { [weak self, weak client] state in
                 guard let self, let client, self.relayClient === client else { return }
                 self.relayClientState = state
@@ -1967,6 +1973,7 @@ final class NativeAppModel {
     }
 
     func leaveRelay() {
+        relayJoinGeneration &+= 1
         showsWatcherBrowse = false
         relayJoinNeedsPasscode = false
         relayPasscodeWasAttempted = false
@@ -3950,6 +3957,7 @@ final class NativeAppModel {
         // released by whichever comes first: this attempt finishing, or a teardown replacing it
         // (`clearCameraSessionState`), so a failed or cancelled attempt never blocks the retry.
         guard !isEstablishingConnection else { return }
+        relayJoinGeneration &+= 1
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
@@ -4570,12 +4578,17 @@ final class NativeAppModel {
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
         recoveryEpisode.resetStorm()
-        Task { [weak self] in
-            guard let self else { return }
-            await prepareGyroForDisconnect()
-            disconnectCameraSession(resetConnection: true, gyroPreparationCompleted: true)
-            startDiscoveryLoop(resetResults: false)
+        if gyroCapture.isArmed || gyroDisconnectTask != nil {
+            Task { [weak self] in
+                guard let self else { return }
+                await prepareGyroForDisconnect()
+                disconnectCameraSession(resetConnection: true, gyroPreparationCompleted: true)
+                startDiscoveryLoop(resetResults: false)
+            }
+            return
         }
+        disconnectCameraSession(resetConnection: true)
+        startDiscoveryLoop(resetResults: false)
     }
 
     // MARK: - Multicam (NIKON-01)
@@ -4749,6 +4762,7 @@ final class NativeAppModel {
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
         var debugHasDiscoveryLoop: Bool { discoveryLoopTask != nil }
+        var debugRelayClientCreationCount: Int { relayClientCreationCount }
         /// Adopts an already-established SIMULATED transport session for hosted media tests.
         /// The real session supplies deletion authority; no connection flag bypasses admission.
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
