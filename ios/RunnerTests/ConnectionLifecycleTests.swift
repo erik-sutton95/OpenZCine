@@ -1256,23 +1256,8 @@ struct LiveViewStartBudgetTests {
     func stalledLiveViewStartFailsWithRetry() async throws {
         let clock = WatchdogClock()
         let attempts = StalledAttempts()
-        let model = NativeAppModel()
-        model.connectionClock = clock.clock
+        let model = Self.model(clock: clock, attempts: attempts)
         model.cameraHost = Self.host
-        model.cameraNetworkJoinPeers = .init(
-            join: { _ in }, isAlive: { _ in true },
-            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
-            establish: { host, _, pairing, _, _ in
-                // A fresh camera link per attempt, so a retry is seen reaching the SDK boundary.
-                let transport = StallAfterHandshakeTransport()
-                attempts.transports.append(transport)
-                let session = try await NativeCameraSession.establish(
-                    transport: transport, host: host, cameraName: "SIMULATED ZR",
-                    requestPairing: pairing)
-                // Everything after the handshake goes unanswered, like the field stall.
-                await transport.stall()
-                return session
-            })
         defer {
             model.cancelConnectionAttempt()
             for transport in attempts.transports { transport.close() }
@@ -1332,6 +1317,67 @@ struct LiveViewStartBudgetTests {
             links \(attempts.transports.count) session \(model.debugHasCameraSession) \
             phase \(model.connectionPhase) establishing \(model.debugIsEstablishingConnection)
             """)
+    }
+
+    @Test("A joined camera network's direct connect leaves a stalled live view start to its budget")
+    func joinedNetworkDirectConnectWaitsForTheBudget() async throws {
+        let ssid = "NIKON_ZR_STALL"
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.249", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: ssid),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: ssid))
+        let clock = WatchdogClock()
+        let attempts = StalledAttempts()
+        let model = Self.model(clock: clock, attempts: attempts)
+        model.savedCameras = [setup]
+        model.connectedWiFiSSID = nil
+        defer {
+            model.cancelConnectionAttempt()
+            for transport in attempts.transports { transport.close() }
+            clock.releaseAll()
+            NativeCameraConnectionStore.shared.forgetKnownPairing(host: setup.host)
+        }
+
+        // The scan flow's Connect: join the camera's network, then dial its known address.
+        model.applyManualCameraWiFi(ssid: ssid, key: "SIMULATED-key")
+        model.confirmCameraWiFiJoin()
+        let preparing = await Self.until {
+            model.connectionPhase == .preparingLiveView && !model.debugIsEstablishingConnection
+        }
+        try #require(preparing, "the joined network's direct connect must reach live view")
+        let copy = CameraConnectionTimeout.timeoutMessage(
+            phase: .preparingLiveView, deviceName: model.connectionProgressDeviceName)
+
+        for _ in 0..<84 where model.connectionPhase != .failed {
+            guard await Self.until({ clock.pendingSleeps > 0 }) else { break }
+            clock.advance(by: .milliseconds(500))
+        }
+        _ = await Self.until { model.connectionPhase == .failed }
+
+        #expect(model.connectionPhase == .failed)
+        #expect(model.connectionFailureDetail == copy)
+        #expect(attempts.transports.count == 1, "nothing redials over live view preparation")
+    }
+
+    /// A model whose camera links complete the handshake and then stall, on simulated time.
+    private static func model(clock: WatchdogClock, attempts: StalledAttempts) -> NativeAppModel {
+        let model = NativeAppModel()
+        model.connectionClock = clock.clock
+        model.cameraNetworkJoinPeers = .init(
+            join: { _ in }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
+            establish: { host, _, pairing, _, _ in
+                // A fresh camera link per attempt, so a retry is seen reaching the SDK boundary.
+                let transport = StallAfterHandshakeTransport()
+                attempts.transports.append(transport)
+                let session = try await NativeCameraSession.establish(
+                    transport: transport, host: host, cameraName: "SIMULATED ZR",
+                    requestPairing: pairing)
+                // Everything after the handshake goes unanswered, like the field stall.
+                await transport.stall()
+                return session
+            })
+        return model
     }
 
     /// Yields until `condition` holds; the simulated work needs only main-actor and actor hops.

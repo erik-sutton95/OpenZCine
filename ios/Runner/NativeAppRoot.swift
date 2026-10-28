@@ -3539,6 +3539,7 @@ final class NativeAppModel {
         viaCameraAccessPointJoin: Bool = false
     ) async -> Bool {
         cameraHost = host
+        let clock = connectionHostClock
         for attempt in 1...maxAttempts {
             // `isConnectionProgressPresented` goes false when the operator taps Cancel/Close
             // on the card — stop retrying then, even though the .handshaking phase isn't one
@@ -3547,10 +3548,14 @@ final class NativeAppModel {
             connectToCamera(viaCameraAccessPointJoin: viaCameraAccessPointJoin)
             // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
             while isEstablishingConnection {
-                try? await Task.sleep(for: .milliseconds(200))
+                try? await clock.sleep(.milliseconds(200))
                 guard !Task.isCancelled else { return false }
             }
-            if isConnected { return true }
+            // An established session preparing live view has its own bounded exit: the first
+            // frame, or the phase watchdog's budget failing the attempt with Try again.
+            // Redialling over it tore the prepared session down, and the reconnect phase written
+            // below hid the stall from that budget.
+            if isConnected || connection == .preparingLiveView { return true }
             // Pairing just handed the card to the "Confirm on camera" wait (the only thing that
             // arms this). Retrying over that hand-off is what overwrote the instruction before
             // the operator could read it and then redialled a body busy rebooting its access
@@ -3563,7 +3568,7 @@ final class NativeAppModel {
             connectionProgressShowsFailure = false
             connectionPhase = .discovering
             connectionMessage = "Reconnecting to \(deviceName)…"
-            try? await Task.sleep(for: .seconds(2))
+            try? await clock.sleep(.seconds(2))
         }
         return false
     }
