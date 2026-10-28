@@ -3534,6 +3534,13 @@ final class NativeAppModel {
         return saved.host
     }
 
+    /// Whether a redialling loop's last dial is resolved: connected, or established and
+    /// preparing live view, which has its own bounded exit (the first frame, or the phase
+    /// watchdog failing the attempt with Try again). Redialling then tears the session down.
+    private var dialResolved: Bool {
+        isConnected || connection == .preparingLiveView
+    }
+
     /// Dials one known host through the single-flighted connect until it lands or attempts run
     /// out. Returns whether this loop resolved the card — connected, or handed off to the
     /// post-pairing wait; the last attempt's failure card stays up.
@@ -3554,11 +3561,9 @@ final class NativeAppModel {
                 try? await clock.sleep(.milliseconds(200))
                 guard !Task.isCancelled else { return false }
             }
-            // An established session preparing live view has its own bounded exit: the first
-            // frame, or the phase watchdog's budget failing the attempt with Try again.
-            // Redialling over it tore the prepared session down, and the reconnect phase written
-            // below hid the stall from that budget.
-            if isConnected || connection == .preparingLiveView { return true }
+            // Redialling over a session preparing live view tore it down, and the reconnect
+            // phase written below hid the stall from the live view budget.
+            if dialResolved { return true }
             // Pairing just handed the card to the "Confirm on camera" wait (the only thing that
             // arms this). Retrying over that hand-off is what overwrote the instruction before
             // the operator could read it and then redialled a body busy rebooting its access
@@ -6192,7 +6197,7 @@ final class NativeAppModel {
                     while self.isEstablishingConnection, !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(200))
                     }
-                    if self.isConnected { return }
+                    if self.dialResolved { return }
                     // Give the ZR a moment to release its stale session before the next Init.
                     try? await Task.sleep(for: .seconds(2))
                 } else {
