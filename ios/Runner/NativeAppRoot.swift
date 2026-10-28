@@ -4427,23 +4427,24 @@ final class NativeAppModel {
     /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
     private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
         connectionTimeoutTask?.cancel()
+        let clock = connectionWatchdogHostClock
         connectionTimeoutTask = Task { [weak self] in
             var watchedPhase = self?.connectionPhase ?? .idle
-            var phaseStartedAt = ContinuousClock.now
+            var phaseStartedAt = clock.now()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await clock.sleep(.milliseconds(500))
                 guard !Task.isCancelled, let self, self.connectionGeneration == generation else {
                     return
                 }
                 let phase = self.connectionPhase
                 if phase != watchedPhase {
                     watchedPhase = phase
-                    phaseStartedAt = .now
+                    phaseStartedAt = clock.now()
                     continue
                 }
                 guard
                     let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
-                    ContinuousClock.now - phaseStartedAt >= .seconds(budget)
+                    clock.now() - phaseStartedAt >= .seconds(budget)
                 else { continue }
                 var message = CameraConnectionTimeout.timeoutMessage(
                     phase: phase, deviceName: self.connectionProgressDeviceName)
@@ -4471,6 +4472,14 @@ final class NativeAppModel {
         }
     }
 
+    /// The clock the connection phase watchdog measures its budgets on.
+    private var connectionWatchdogHostClock: HostClock {
+        #if DEBUG
+            if let connectionWatchdogClock { return connectionWatchdogClock }
+        #endif
+        return .live
+    }
+
     /// Ends the in-flight attempt with exactly the disposal an explicit cancel performs — stale
     /// transport, PTP session, sockets, tasks, queued writes and camera identity released, and the
     /// single-flight latch freed — then surfaces a retryable failure.
@@ -4482,7 +4491,10 @@ final class NativeAppModel {
         diagnostic: AppDiagnosticEvent,
         logReason: String
     ) {
-        guard isEstablishingConnection else { return }
+        // The connect task ends at `enterLiveView`, releasing the latch while the attempt is
+        // still preparing live view. That phase keeps its budget: without it a stall after the
+        // handshake left "Starting live view" up forever (hardware pass 2026-10-28).
+        guard isEstablishingConnection || connectionPhase == .preparingLiveView else { return }
         logConnection("attempt failed host=\(cameraHost) — \(logReason)")
         AppDiagnostics.shared.record(diagnostic)
         disconnectCameraSession(resetConnection: false)
@@ -4759,6 +4771,10 @@ final class NativeAppModel {
                 )? = nil
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
+
+        /// SIMULATED time for the connection phase watchdog, so a test crosses a phase budget
+        /// without waiting in real time. `nil` keeps the real clocks.
+        @ObservationIgnored var connectionWatchdogClock: HostClock?
 
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a

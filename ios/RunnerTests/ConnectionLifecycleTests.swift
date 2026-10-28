@@ -1241,3 +1241,208 @@ private final class ParkedMonitorLink: NikonMonitorLink {
     func startRecording() async throws {}
     func stopRecording() async throws {}
 }
+
+/// Hardware pass 2026-10-28 (Nikon ZR, iOS 323): after a disconnect every connect sat on
+/// "Starting live view" forever. The connect task ends at `enterLiveView` and releases the
+/// single-flight latch there, and the watchdog's failure path required that latch, so the
+/// 40 s "never started live view" budget could never end the attempt. SIMULATED transport that
+/// answers the handshake and then never answers again; virtual watchdog clock, no real waits.
+@MainActor
+@Suite("Live view start budget")
+struct LiveViewStartBudgetTests {
+    private static let host = "usb:SIMULATED-live-view-stall"
+
+    @Test("A connection that never starts live view fails after its budget and can be retried")
+    func stalledLiveViewStartFailsWithRetry() async throws {
+        let clock = WatchdogClock()
+        let transport = StallAfterHandshakeTransport()
+        let model = NativeAppModel()
+        model.connectionWatchdogClock = clock.clock
+        model.cameraHost = Self.host
+        model.cameraNetworkJoinPeers = .init(
+            join: { _ in }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
+            establish: { host, _, pairing, _, _ in
+                let session = try await NativeCameraSession.establish(
+                    transport: transport, host: host, cameraName: "SIMULATED ZR",
+                    requestPairing: pairing)
+                // Everything after the handshake goes unanswered, like the field stall.
+                await transport.stall()
+                return session
+            })
+        defer {
+            model.cancelConnectionAttempt()
+            transport.close()
+            clock.releaseAll()
+            NativeCameraConnectionStore.shared.forgetKnownPairing(host: Self.host)
+        }
+
+        model.connectToCamera(operatorRequested: true)
+        let preparing = await Self.until {
+            model.connectionPhase == .preparingLiveView && !model.debugIsEstablishingConnection
+        }
+        try #require(preparing, "the real connect must reach live view with its latch released")
+        try #require(model.debugHasCameraSession)
+        #expect(NikonConnectFlow(model: model).phase == .preparingLiveView)
+        let copy = CameraConnectionTimeout.timeoutMessage(
+            phase: .preparingLiveView, deviceName: model.connectionProgressDeviceName)
+
+        // Run the watchdog past the 40 s preparing-live-view budget, one 0.5 s tick at a time.
+        for _ in 0..<84 {
+            guard await Self.until({ clock.pendingSleeps > 0 }) else { break }
+            clock.advance(by: .milliseconds(500))
+        }
+        _ = await Self.until { model.connectionPhase == .failed }
+
+        #expect(model.connectionPhase == .failed)
+        #expect(model.resolvedConnectionPhase == .failed)
+        #expect(NikonConnectFlow(model: model).phase == .failed)
+        // The failed card shows the detail; the resumed discovery loop owns `connectionMessage`.
+        #expect(model.connectionFailureDetail == copy)
+        #expect(!model.debugHasCameraSession, "the stalled session is released")
+
+        // The failed card's Try again starts a fresh attempt.
+        let generation = model.debugConnectionGeneration
+        model.retryConnectionAttempt()
+        #expect(model.debugConnectionGeneration > generation)
+        #expect(model.debugIsEstablishingConnection)
+    }
+
+    /// Yields until `condition` holds; the simulated work needs only main-actor and actor hops.
+    private static func until(
+        _ condition: @MainActor () -> Bool, yields: Int = 20_000
+    ) async -> Bool {
+        for _ in 0..<yields {
+            if condition() { return true }
+            await Task.yield()
+        }
+        return condition()
+    }
+}
+
+/// A manual `HostClock`: sleeps end only when the test advances time past them.
+private final class WatchdogClock: @unchecked Sendable {
+    private struct Sleeper {
+        let id: Int
+        let deadline: Duration
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private let lock = NSLock()
+    private var elapsed: Duration = .zero
+    private var sleepers: [Sleeper] = []
+    private var nextID = 0
+
+    var clock: HostClock {
+        HostClock(
+            now: { [self] in MonotonicInstant(lock.withLock { elapsed }) },
+            date: { Date(timeIntervalSinceReferenceDate: 0) },
+            sleep: { [self] duration in try await sleep(for: duration) })
+    }
+
+    var pendingSleeps: Int { lock.withLock { sleepers.count } }
+
+    func advance(by duration: Duration) {
+        let due: [Sleeper] = lock.withLock {
+            elapsed += duration
+            let due = sleepers.filter { $0.deadline <= elapsed }
+            sleepers.removeAll { $0.deadline <= elapsed }
+            return due
+        }
+        for sleeper in due { sleeper.continuation.resume() }
+    }
+
+    func releaseAll() {
+        let all = lock.withLock {
+            let all = sleepers
+            sleepers = []
+            return all
+        }
+        for sleeper in all { sleeper.continuation.resume(throwing: CancellationError()) }
+    }
+
+    private func sleep(for duration: Duration) async throws {
+        let id = lock.withLock {
+            nextID += 1
+            return nextID
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let cancelled = lock.withLock {
+                    if Task.isCancelled { return true }
+                    sleepers.append(
+                        .init(id: id, deadline: elapsed + duration, continuation: continuation))
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let sleeper = lock.withLock {
+                let index = sleepers.firstIndex { $0.id == id }
+                return index.map { sleepers.remove(at: $0) }
+            }
+            sleeper?.continuation.resume(throwing: CancellationError())
+        }
+    }
+}
+
+/// SIMULATED camera that completes the handshake, then leaves every later transaction and
+/// event read unanswered until it is closed.
+private actor StallAfterHandshakeTransport: CameraTransport {
+    nonisolated let kind: CameraTransportKind = .usb
+    private var stalled = false
+    private var closed = false
+    private var parked: [CheckedContinuation<Void, Never>] = []
+    private let operations: [PTPOperationCode] = [
+        .getDevicePropValue, .setDevicePropValue, .startLiveView, .endLiveView,
+        .getLiveViewImageEx, .deviceReady,
+    ]
+
+    func stall() { stalled = true }
+
+    func executeTransaction(
+        operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
+        dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
+    ) async throws -> PTPIPTransactionResult {
+        if stalled { try await park() }
+        let data = operationCode == .getDeviceInfo ? deviceInfo() : Data()
+        let bytes =
+            ByteCoding.uint16LE(PTPResponseCode.ok.rawValue)
+            + ByteCoding.uint32LE(transactionID ?? 1)
+        return PTPIPTransactionResult(
+            operationResponse: try PTPOperationResponse(payloadBytes: bytes), data: data)
+    }
+
+    func nextEvent() async throws -> PTPEvent {
+        try await park()
+        throw NativeCameraSessionError.connectionClosed
+    }
+
+    nonisolated func close() { Task { await self.release() } }
+
+    private func park() async throws {
+        if !closed { await withCheckedContinuation { parked.append($0) } }
+        throw NativeCameraSessionError.connectionClosed
+    }
+
+    private func release() {
+        closed = true
+        let waiting = parked
+        parked = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    private func string(_ value: String) -> [UInt8] {
+        [UInt8(value.utf16.count + 1)] + value.utf16.flatMap { ByteCoding.uint16LE($0) } + [0, 0]
+    }
+
+    private func deviceInfo() -> Data {
+        var bytes: [UInt8] = [100, 0, 10, 0, 0, 0, 100, 0, 0, 0, 0]
+        bytes += ByteCoding.uint32LE(UInt32(operations.count))
+        for operation in operations { bytes += ByteCoding.uint16LE(operation.rawValue) }
+        for _ in 0..<4 { bytes += ByteCoding.uint32LE(0) }
+        for value in ["SIMULATED", "SIMULATED ZR", "1.0", "SIMULATED-stall"] {
+            bytes += string(value)
+        }
+        return Data(bytes)
+    }
+}
