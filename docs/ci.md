@@ -40,7 +40,8 @@ the test here with its issue in the same pull request.
 | Test | Job | Issue |
 | --- | --- | --- |
 | Shared conformance scenarios, iOS (never passed hosted; `simctl list` timeouts) | `conformance` | [#450](https://github.com/erik-sutton95/OpenZCine/issues/450), [OpenCine#111](https://github.com/erik-sutton95/OpenCine/issues/111) |
-| `NikonPlaybackOwnerAdoptionTests` and two `NikonMediaOpeningAdmissionTests` (burst cover, retired video close); hosted timing | `native`, step "Quarantined Nikon playback tests" (nightly, non-blocking) | [#467](https://github.com/erik-sutton95/OpenZCine/issues/467) |
+| `NikonPlaybackOwnerAdoptionTests` and two `NikonMediaOpeningAdmissionTests` (burst cover, retired video close); hosted timing | `native`, step "Quarantined hosted-timing tests" (nightly, non-blocking) | [#467](https://github.com/erik-sutton95/OpenZCine/issues/467) |
+| `LutPackDownloadLifetimeTests/testProgressCoverRetainsWebOwnerAndDeliversTheArchiveToImport`; hosted WebKit page process stalls before `about:blank` loads | `native`, step "Quarantined hosted-timing tests" (nightly, non-blocking) | [#531](https://github.com/erik-sutton95/OpenZCine/issues/531) |
 
 A test leaves quarantine after its issue is fixed and several consecutive nightlies pass.
 

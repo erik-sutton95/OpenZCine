@@ -284,7 +284,7 @@ jobs:
           if-no-files-found: error
       # The portrait header layout matrix (MonitorPortraitHeaderClearanceTests, about eight minutes
       # hosted) renders the monitor at every size: nightly tier only (docs/ci.md). The quarantined
-      # Nikon playback tests (#467) never run here; the nightly runs them in the next step. Serial:
+      # tests (#467, #531) never run here; the nightly runs them in the next step. Serial:
       # cloning two parallel simulators took about eight minutes hosted for about ten of test work.
       - name: Unit tests
         env:
@@ -293,6 +293,7 @@ jobs:
             NikonPlaybackOwnerAdoptionTests
             NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto
             NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery
+            LutPackDownloadLifetimeTests/testProgressCoverRetainsWebOwnerAndDeliversTheArchiveToImport
         run: |
           set -euo pipefail
           skips=("-skip-testing:RunnerTests/$SKIP")
@@ -302,8 +303,8 @@ jobs:
             -parallel-testing-enabled NO \
             -resultBundlePath "$RUNNER_TEMP/native-ios/Runner.xcresult" \
             "${skips[@]}" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
-      # Quarantine (#467): known hosted timing flakes, nightly only and non-blocking.
-      - name: Quarantined Nikon playback tests
+      # Quarantine (#467, #531): known hosted timing flakes, nightly only and non-blocking.
+      - name: Quarantined hosted-timing tests
         if: ${{ inputs.full }}
         continue-on-error: true
         run: |
@@ -314,6 +315,7 @@ jobs:
             -only-testing:RunnerTests/NikonPlaybackOwnerAdoptionTests \
             -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto \
             -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery \
+            -only-testing:RunnerTests/LutPackDownloadLifetimeTests/testProgressCoverRetainsWebOwnerAndDeliversTheArchiveToImport \
             test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-quarantined-test.log"
       - name: Build the Watch companion (watchOS Simulator)
         run: |
