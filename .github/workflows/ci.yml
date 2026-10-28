@@ -354,16 +354,18 @@ jobs:
             xcrun xcresulttool get test-results summary --path "$result_bundle" \
               | tee "$RUNNER_TEMP/native-ios/summary.json"
           fi
-      # Per-suite timing for the package tests and every iOS unit test run, in the job summary.
+      # Per-suite timing for the package tests and every iOS unit test run, in the job summary and
+      # the log.
       # Reporting never decides the verdict; the meta job tests the script.
       - name: Summarize test timing
         if: always()
         continue-on-error: true
         run: |
+          set -o pipefail
           python3 scripts/ci-test-timing.py swift-testing "$RUNNER_TEMP/native-ios/swift-test.log" \
-            >> "$GITHUB_STEP_SUMMARY"
+            | tee -a "$GITHUB_STEP_SUMMARY"
           python3 scripts/ci-test-timing.py xcresult "$RUNNER_TEMP/native-ios/Runner.xcresult" \
-            "$RUNNER_TEMP/native-ios/Quarantined.xcresult" >> "$GITHUB_STEP_SUMMARY"
+            "$RUNNER_TEMP/native-ios/Quarantined.xcresult" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Retain iOS test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -513,14 +515,15 @@ jobs:
           set -euo pipefail
           read -ra tasks <<< "$TASKS"
           ./gradlew --init-script ../../scripts/ci-gradle-task-timing.gradle "${tasks[@]}"
-      # Per-task times and, for the JVM tests, per-suite times in the job summary. Reporting never
-      # decides the verdict; the meta job tests the script.
+      # Per-task times and, for the JVM tests, per-suite times in the job summary and the log.
+      # Reporting never decides the verdict; the meta job tests the script.
       - name: Summarize Gradle timing
         if: always()
         continue-on-error: true
         run: |
+          set -o pipefail
           python3 scripts/ci-test-timing.py gradle "$RUNNER_TEMP/gradle-task-timing.tsv" Apps/Android \
-            >> "$GITHUB_STEP_SUMMARY"
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   bug-relay:
     name: Anonymous bug relay
