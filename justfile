@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
+check: hygiene testflight-notes-check play-notes-check ci-timing-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -29,6 +29,10 @@ testflight-notes-check:
 # Validate the reviewed Google Play tester-facing release notes.
 play-notes-check:
     ./scripts/android-play-release-notes-check.sh
+
+# Test the CI job-summary timing tables (scripts/ci-test-timing.py) on recorded output shapes.
+ci-timing-test:
+    python3 scripts/ci-test-timing-test.py
 
 # Spell-check the repository.
 typos:
