@@ -1294,6 +1294,8 @@ struct LiveViewStartBudgetTests {
         // A real link bounds the stalled session's CloseSession with a deadline; this fake has no
         // timer, so end that teardown the way its deadline would before the retry awaits it.
         attempts.transports[0].close()
+        // The resumed discovery can select another camera; Try again still means this one.
+        model.cameraHost = "usb:SIMULATED-other-camera"
         let generation = model.debugConnectionGeneration
         model.retryConnectionAttempt()
         #expect(model.debugConnectionGeneration > generation)
@@ -1310,6 +1312,7 @@ struct LiveViewStartBudgetTests {
             clock.advance(by: .milliseconds(500))
         }
         let retried = await Self.until { reopened() }
+        #expect(attempts.hosts == [Self.host, Self.host], "the retry dials the camera that failed")
         #expect(
             retried,
             """
@@ -1370,6 +1373,7 @@ struct LiveViewStartBudgetTests {
                 // A fresh camera link per attempt, so a retry is seen reaching the SDK boundary.
                 let transport = StallAfterHandshakeTransport()
                 attempts.transports.append(transport)
+                attempts.hosts.append(host)
                 let session = try await NativeCameraSession.establish(
                     transport: transport, host: host, cameraName: "SIMULATED ZR",
                     requestPairing: pairing)
@@ -1396,6 +1400,7 @@ struct LiveViewStartBudgetTests {
 @MainActor
 private final class StalledAttempts {
     var transports: [StallAfterHandshakeTransport] = []
+    var hosts: [String] = []
 }
 
 /// A manual `HostClock`: sleeps end only when the test advances time past them.

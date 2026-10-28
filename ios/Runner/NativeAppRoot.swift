@@ -3337,6 +3337,9 @@ final class NativeAppModel {
         connectionFailureDetail = ""
         connectionPhase = .joiningWiFi
         isConnectionProgressPresented = true
+        // A join that fails before it dials retries the way it always did; only a dial it makes
+        // records a target for Try again.
+        failedCardRetryTarget = nil
         connectionMessage = ConnectionProgressCopy.statusDetail(
             phase: .joiningWiFi,
             deviceName: deviceName,
@@ -3976,6 +3979,7 @@ final class NativeAppModel {
                 discoveredCamera: discoveredCamera,
                 setup: setup
             )
+            failedCardRetryTarget = .init(host: host, camera: discoveredCamera, setup: setup)
         }
 
         stopDiscoveryLoop()
@@ -4518,8 +4522,27 @@ final class NativeAppModel {
     /// backing out and tapping the camera again — without making them do it.
     func retryConnectionAttempt() {
         guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
-        connectToCamera(operatorRequested: true)
+        guard let target = failedCardRetryTarget else {
+            connectToCamera(operatorRequested: true)
+            return
+        }
+        // The camera and setup that failed, not whatever discovery selected since: the failure
+        // restarts discovery, which can move `cameraHost` to another body. The camera's current
+        // discovery entry keeps the held-by-another-device check up to date.
+        cameraHost = target.host
+        let camera = target.camera.map { failed in
+            discoveredCameras.first { $0.id == failed.id } ?? failed
+        }
+        connectToCamera(camera, setup: target.setup, operatorRequested: true)
     }
+
+    /// What the operator's latest connect dialled, so Try again repeats exactly that attempt.
+    private struct ConnectionRetryTarget {
+        let host: String
+        let camera: DiscoveredCamera?
+        let setup: PTPIPSavedCameraRecord?
+    }
+    @ObservationIgnored private var failedCardRetryTarget: ConnectionRetryTarget?
 
     private func startupConnectionMessage(
         for strategy: CameraConnectionStrategy,
