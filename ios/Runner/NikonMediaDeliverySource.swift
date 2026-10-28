@@ -64,21 +64,14 @@ import os
     var originals: MonitorDeliveryOriginalService<MediaClip> {
         .init(
             available: { [self] in isCached($0) },
+            // Nikon originals come from the app's resumable camera stream, the one the player
+            // and the gallery's Download use. The shared library has no Nikon transfer service,
+            // so caching through it always failed (owner report 2026-10-28).
             acquire: { [self] clip in
-                guard action.sourceIsCurrent, let owner = action.owner,
-                    let record = owner.records.first(where: {
-                        $0.payload.id == clip.id
-                            && NikonMediaLibraryAction.sameContent($0.payload, clip)
-                    })
-                else { return }
-                _ = try? await owner.cacheOriginal(record.asset.id)
+                guard action.sourceIsCurrent, let model else { return }
+                _ = await model.cacheClipFromCamera(clip)
             },
-            progress: { [self] clip in
-                guard let owner = action.owner,
-                    let record = owner.records.first(where: { $0.payload.id == clip.id })
-                else { return nil }
-                return owner.progress[record.asset.id]
-            })
+            progress: { [self] clip in model?.mediaDownloadProgress[clip.id] })
     }
     func update(_ clip: MediaClip, _ change: (inout MediaClip) -> Void) {
         guard isCurrent else { return }

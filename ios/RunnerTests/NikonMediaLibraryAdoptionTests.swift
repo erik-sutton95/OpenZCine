@@ -936,6 +936,8 @@ actor LargeTransferTransport: CameraTransport {
     private var propertyValues: [PTPPropertyCode: Data] = [:]
     private var refuseWrite = false
     private var readEntered = false
+    private var readsEntered = 0
+    private var readWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var entered: CheckedContinuation<Void, Never>?
     private var releaseRead: CheckedContinuation<Void, Never>?
     init(
@@ -979,6 +981,10 @@ actor LargeTransferTransport: CameraTransport {
         case .getObjectSize: data = Data(ByteCoding.uint64LE(totalBytes))
         case .getObjectInfo: data = objectInfo()
         case .getPartialObject, .getPartialObjectEx:
+            readsEntered += 1
+            let ready = readWaiters.filter { $0.count <= readsEntered }
+            readWaiters.removeAll { $0.count <= readsEntered }
+            for waiter in ready { waiter.continuation.resume() }
             if holdRead {
                 readEntered = true
                 entered?.resume()
@@ -997,6 +1003,11 @@ actor LargeTransferTransport: CameraTransport {
     func waitUntilRead() async {
         if readEntered { return }
         await withCheckedContinuation { entered = $0 }
+    }
+    /// Returns once `count` object reads have reached the camera.
+    func waitUntilReads(_ count: Int) async {
+        if readsEntered >= count { return }
+        await withCheckedContinuation { readWaiters.append((count, $0)) }
     }
     func release() {
         releaseRead?.resume()

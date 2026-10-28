@@ -2710,7 +2710,8 @@ final class NativeAppModel {
     }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
-    @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
+    /// The one camera stream running per clip id; a second caller joins it.
+    @ObservationIgnored private var mediaDownloadFlights: [String: MediaDownloadFlight] = [:]
     /// Deletion progress while a batch delete runs — non-nil hides the per-item grid churn behind
     /// one progress bar, and the grid refreshes once when it clears.
     private var mediaDeletionProgressOverride: MonitorMediaDeletionProgress?
@@ -2787,6 +2788,31 @@ final class NativeAppModel {
     }
     /// Per-slot card capacity from the last `refreshMediaStorageSlots` pass.
     var mediaStorageSlots: [MediaStorageSlotDisplay] = []
+    /// The end of one clip's camera stream. A joiner's cancellation ends only its own wait.
+    @MainActor final class MediaDownloadFlight {
+        private var finished = false
+        private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+        func finish() {
+            finished = true
+            let held = waiters
+            waiters = [:]
+            for waiter in held.values { waiter.resume() }
+        }
+        func wait() async {
+            let id = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if finished || Task.isCancelled {
+                        continuation.resume()
+                    } else {
+                        waiters[id] = continuation
+                    }
+                }
+            } onCancel: {
+                Task { @MainActor in self.waiters.removeValue(forKey: id)?.resume() }
+            }
+        }
+    }
     /// Actual native stream task captured by an item; retired cleanup cannot stop a successor.
     final class MediaClipStreamTicket {
         let task: Task<Void, Never>
@@ -15119,17 +15145,22 @@ extension NativeAppModel {
     }
 
     private func streamClip(_ clip: MediaClip) async {
-        if isClipDownloaded(clip) { return }
-        if mediaDownloadInFlight.contains(clip.id) {
-            while mediaDownloadInFlight.contains(clip.id), !isClipDownloaded(clip) {
-                try? await Task.sleep(for: .milliseconds(50))
-                if Task.isCancelled { return }
-            }
-            return
+        // Join the stream already running for this clip. One that ends without the whole clip
+        // (the player was closed and cancelled it) is resumed below from its partial bytes, so
+        // Share or Download of that clip never fails on the cancelled stream (owner report
+        // 2026-10-28).
+        while let running = mediaDownloadFlights[clip.id] {
+            await running.wait()
+            if Task.isCancelled { return }
         }
+        if isClipDownloaded(clip) { return }
         guard let session = cameraSession, let handle = clip.handle else { return }
-        mediaDownloadInFlight.insert(clip.id)
-        defer { mediaDownloadInFlight.remove(clip.id) }
+        let flight = MediaDownloadFlight()
+        mediaDownloadFlights[clip.id] = flight
+        defer {
+            if mediaDownloadFlights[clip.id] === flight { mediaDownloadFlights[clip.id] = nil }
+            flight.finish()
+        }
         let bucket = clip.cameraID
         let total = clip.sizeBytes
         do {
