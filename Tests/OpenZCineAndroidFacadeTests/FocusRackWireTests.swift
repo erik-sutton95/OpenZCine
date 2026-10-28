@@ -109,8 +109,10 @@ private func waitForRackWire(
         if predicate(reply) { return reply }
         try await Task.sleep(for: .milliseconds(10))
     }
+    let reply = try rackWireReply(wire, owner)
+    if predicate(reply) { return reply }
     Issue.record("Shared rack wire did not reach the expected state")
-    return try rackWireReply(wire, owner)
+    return reply
 }
 
 @Test func rackProductionWireStoresOnlyValidatedTimingAndNeverStartsOnTemplateLoad() async throws {
@@ -1087,6 +1089,32 @@ private final class NativeRackWireFixture: @unchecked Sendable {
     #expect(returned.canNativeAutofocus)
     #expect(!returned.nativeAF.busy && returned.nativeAFChange == nil)
     #expect(returned.nativeAF.a?.x == 0.25 && returned.nativeAF.b?.x == 0.75)
+    #expect(fixture.camera.drives == 0)
+}
+
+@Test func rackWireQueuedCloseCannotOverwriteANewerOpen() async throws {
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    var input = try #require(fixture.fields()["afSettings"] as? [String: Any])
+    input["restorationFocusSettled"] = true
+    _ = try fixture.step("closePanel", ["afSettings": input])
+    _ = try fixture.step("openPanel", ["afSettings": input])
+    for _ in 0..<2 {
+        let next = try await waitForRackWire(fixture.wire, fixture.owner) {
+            $0.afSettingsReady || $0.afSettingsChange != nil
+        }
+        if next.afSettingsReady { break }
+        let change = try #require(next.afSettingsChange)
+        fixture.camera.apply(change)
+        _ = try fixture.step(
+            "afSettingsComplete",
+            ["afChange": try JSONSerialization.jsonObject(with: JSONEncoder().encode(change))])
+    }
+    let reopened = try await waitForRackWire(fixture.wire, fixture.owner) {
+        $0.afSettingsReady && !$0.afSettingsPending
+    }
+    #expect(reopened.afSettingsFailure == nil)
+    #expect(fixture.camera.values == .target(.nativeAF))
     #expect(fixture.camera.drives == 0)
 }
 

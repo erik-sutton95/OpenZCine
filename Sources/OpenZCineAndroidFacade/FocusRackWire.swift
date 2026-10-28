@@ -522,12 +522,6 @@ public final class FocusRackWire: @unchecked Sendable {
             case "externalFocus", "nativeTargetFocus": intent = .externalFocusAction
             case "interrupt": return
             case "closePanel":
-                lock.withLock {
-                    panelOpen = false
-                    afSetupReady = false
-                    afFailure = nil
-                    afLease.requestRestore()
-                }
                 intent = .discardMarks
             case "loadTemplate":
                 guard let template = request.template else {
