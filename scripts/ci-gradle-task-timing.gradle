@@ -31,10 +31,11 @@ abstract class CiTaskTimingService
             outcome = 'FAILED'
         } else if (result instanceof TaskSkippedResult) {
             outcome = 'SKIPPED'
+        } else if (result.fromCache) {
+            // A task restored from the build cache also reports upToDate, so this check comes first.
+            outcome = 'FROM-CACHE'
         } else if (result.upToDate) {
             outcome = 'UP-TO-DATE'
-        } else if (result.fromCache) {
-            outcome = 'FROM-CACHE'
         } else {
             outcome = 'EXECUTED'
         }
