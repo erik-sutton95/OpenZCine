@@ -30,10 +30,12 @@ import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
@@ -311,7 +313,16 @@ object DemoHarness {
                         Log.i(TAG, "demo feed ← synthetic colour bars (no sample video)")
                     }
                 }
-        return session to frameSource
+        val source = if (intent.getBooleanExtra("zc.demo.freezeFeed", false)) {
+            // Geometry-only UI tests retain one real presentation without continuous demo work.
+            object : LiveFrameSource {
+                override val frames = flow {
+                    emit(frameSource.frames.first())
+                    awaitCancellation()
+                }
+            }
+        } else frameSource
+        return session to source
     }
 
     /**

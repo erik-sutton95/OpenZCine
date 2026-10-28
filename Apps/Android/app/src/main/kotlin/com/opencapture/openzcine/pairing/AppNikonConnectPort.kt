@@ -65,6 +65,13 @@ internal class AppNikonConnectPort(
 
     private var requested = false
 
+    /** Lifecycle gate for discovery; no enumeration runs while the activity is not resumed. */
+    var sceneActive: Boolean = false
+        set(value) {
+            field = value
+            updateDiscovery()
+        }
+
     /**
      * Discovery runs only while the cameras page shows: the model asks whenever nothing is live,
      * but the wizard and the monitor (reached without the model) must not pay for the list's dials.
@@ -87,7 +94,7 @@ internal class AppNikonConnectPort(
     }
 
     private fun updateDiscovery() {
-        if (!(requested && pageVisible)) {
+        if (!(requested && pageVisible && sceneActive)) {
             connector.stopDiscovery()
             sightingsJob?.cancel()
             sightingsJob = null

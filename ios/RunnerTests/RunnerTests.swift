@@ -4351,10 +4351,8 @@ extension RunnerTests {
 
 extension RunnerTests {
     /// Landscape: the expanded View Assist palette's lower row lies over the camera values bar.
-    /// The shared live surface hides the values while the open palette covers them (hardware pass
-    /// 1.1, OpenCine#251), so no value peeks out under the palette, paints over a chip or takes its
-    /// tap. Reduce Transparency makes the palette glass opaque, so a covered chip's pixels must not
-    /// change when the values do; collapsing the palette shows the values again.
+    /// The shared live surface hides the values while the open palette covers them. Values
+    /// cannot paint through it, and reappear with their current values when the palette closes.
     @MainActor
     func testExpandedLandscapePaletteDrawsAboveTheCameraValues() async throws {
         let model = NativeAppModel()
@@ -4426,25 +4424,28 @@ extension RunnerTests {
         }
 
         try await settle()
-        func values() -> [NSObject] {
-            elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
+        let bar = elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
+            .map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
+        guard !bar.isNull else {
+            XCTFail("The closed palette must leave the camera values visible")
+            return
         }
-        let bar = values().map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
-        XCTAssertFalse(bar.isNull, "The collapsed palette leaves the camera values shown")
+        let closed = try XCTUnwrap(render())
+        let originalValues = pixels(closed, bar)
         let expand = try XCTUnwrap(
             elements(host.view).first { identifier($0) == "monitor.assists.expand" },
             "Exposed: \(elements(host.view).map(identifier).filter { !$0.isEmpty })")
         XCTAssertTrue(expand.accessibilityActivate())
         try await settle()
+        XCTAssertFalse(
+            elements(host.view).contains { identifier($0).hasPrefix("monitor.capture.") },
+            "The overlapping palette must hide the values from accessibility")
         let covered = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist.") }
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
         XCTAssertFalse(covered.isEmpty, "The open landscape palette must reach the values bar")
-        XCTAssertEqual(
-            values().map(identifier), [],
-            "The open palette covers the values bar, so its values are hidden, not drawn under it")
         // Copy the regions now: a renderer image read after a later render showed the later frame.
-        let regions = covered
+        let regions = [bar] + covered
         let first = try XCTUnwrap(render())
         let shown = regions.map { pixels(first, $0) }
 
@@ -4467,25 +4468,31 @@ extension RunnerTests {
         add(attachment)
 
         // A value painted over a chip changes hundreds of its pixels; allow 1% for icon noise.
-        func differing(_ index: Int) -> Int {
-            stride(from: 0, to: shown[index].count, by: 4).filter {
-                shown[index][$0..<$0 + 4] != changed[index][$0..<$0 + 4]
+        func differing(_ before: [UInt8], _ after: [UInt8]) -> Int {
+            stride(from: 0, to: before.count, by: 4).filter {
+                before[$0..<$0 + 4] != after[$0..<$0 + 4]
             }.count
         }
         func noise(_ rect: CGRect) -> Int { Int(rect.integral.width * rect.integral.height) / 100 }
+        XCTAssertLessThanOrEqual(
+            differing(shown[0], changed[0]), noise(bar),
+            "Changed camera values must not paint anywhere in the hidden strip")
         for (index, rect) in covered.enumerated() {
             XCTAssertLessThanOrEqual(
-                differing(index), noise(rect),
+                differing(shown[index + 1], changed[index + 1]), noise(rect),
                 "A camera value drew over the open palette at \(NSCoder.string(for: rect))")
         }
-
         let collapse = try XCTUnwrap(
-            elements(host.view).first {
-                ["monitor.assists.expand", "monitor.assists.collapse"].contains(identifier($0))
-            })
+            elements(host.view).first { identifier($0) == "monitor.assists.collapse" })
         XCTAssertTrue(collapse.accessibilityActivate())
         try await settle()
-        XCTAssertFalse(values().isEmpty, "Collapsing the palette shows the camera values again")
+        XCTAssertTrue(
+            elements(host.view).contains { identifier($0).hasPrefix("monitor.capture.") },
+            "Closing the palette must restore the camera values")
+        let restored = try XCTUnwrap(render())
+        XCTAssertGreaterThan(
+            differing(originalValues, pixels(restored, bar)), noise(bar),
+            "The restored camera values must redraw with their updated values")
     }
 }
 

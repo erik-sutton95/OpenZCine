@@ -132,6 +132,24 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   stay in Gyroflow.
   See [the workflow and hardware validation requirements](gyro-logging.md).
 
+- **Programmable A/B focus racks** (local implementation, discussion #11): shared timing,
+  session-local acknowledged marks, Pause/Resume and timing templates for iOS and Android.
+  Local work adds Native AF picture A/B targets, immediate selection and delayed directional
+  actions alongside Timed Rack, with camera-set AF speed and separate movement authority on both
+  shells. Timed duration targets retain their requested value while showing a longer execution
+  estimate when needed; runtime overruns warn and extend playback. A shared measured planner
+  selects command sizes for every duration and lens. One explicit Prepare lens pass measures
+  bounded sizes within A/B while recording is stopped, replacing manual multi-stage preparation.
+  Compact guided focus panels keep A/B, duration and expected timing visible; mark editing and
+  advanced options are secondary, with a prominent advisory preparation action when useful.
+  Native AF shows saved targets and visible point-lock recovery. Timed mark setup selects Near/Far,
+  then 1/10/100 signed steps.
+  Shared and native-shell regressions cover timing overruns, safety-read placement and cancellation;
+  the remaining recorded qualification matrix is explicitly open.
+  Both modes temporarily configure movie AF and restore only still-owned settings on close,
+  deferring restoration until recording and focus work stop while preserving manual changes.
+  See [the local workflow](focus-racks.md) and
+  [qualification result](investigations/focus-rack-qualification.md).
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
 - **Android live focus and virtual-horizon parity** (OPE-58, in review) — carry camera-origin

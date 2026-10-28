@@ -128,7 +128,15 @@ internal class SavedCameraConnector(
         discovery =
             scope.launch {
                 launch { environment.hotspotCameras.collect { discoveredCameras.value = it } }
-                environment.usbCameraSource?.let { source -> launch { source.cameras.collect { usbCameras.value = it } } }
+                environment.usbCameraSource?.let { source ->
+                    launch { source.cameras.collect { usbCameras.value = it } }
+                    launch {
+                        while (true) {
+                            source.refresh()
+                            delay(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+                        }
+                    }
+                }
                 launch {
                     while (true) {
                         hotspotSubnetBases.value =
@@ -149,6 +157,11 @@ internal class SavedCameraConnector(
     fun stopDiscovery() {
         discovery?.cancel()
         discovery = null
+    }
+
+    /** Requests OS consent only after the operator selects an attached USB camera's Allow action. */
+    fun requestUsbPermission(camera: UsbPtpCamera) {
+        environment.usbCameraSource?.requestPermission(camera)
     }
 
     /** The saved wireless hosts' liveness, from the presence-port dial (never PTP). */

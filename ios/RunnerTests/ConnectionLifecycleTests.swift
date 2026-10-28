@@ -486,9 +486,11 @@ struct SessionRecoveryPictureTests {
         let model = recovering(peer)
 
         model.debugSimulateTransportDetach()
-        _ = await peer.drive(until: 1)
+        let controlReturned = await peer.drive(until: 5) { peer.connects == 1 }
+        #expect(controlReturned)
+        peer.time += 0.001  // A fresh frame arrives after the attempt's start tick.
         peer.picture = (peer.time, peer.time)
-        let recovered = await peer.drive(until: 2) { model.sessionRecovery == .idle }
+        let recovered = await peer.drive(until: peer.time + 1) { model.sessionRecovery == .idle }
 
         #expect(recovered)
         #expect(peer.connects == 1)

@@ -1,5 +1,5 @@
-- Shared setup, DISP 3 and View Assist; experimental gyro logs add guided calibration, stabilization restore and mount-move warnings.
-- Faster Media and playback on large cards; Full Resolution Caching marks played clips CACHED; scopes and assists stay responsive.
-- Download from RED opens over the clip player.
-- Smoother live view, camera wake and Take Over fixes, plus clearer Wi-Fi retries.
-- Sharper instant review and CL/CH capture, plus Photo LUT, shots, storage and sharing fixes.
+- Native AF and Timed Rack: saved A/B targets, Prepare lens, timing estimates and Stop.
+- Shared setup, DISP 3, View Assist and guided gyro calibration with stabilization restore.
+- Faster Media, playback and scopes; played clips stay CACHED; Download from RED opens over playback.
+- Smooth live view, camera wake, Take Over and Wi-Fi retry fixes.
+- Sharper review and CL/CH capture; Photo LUT, shots, storage and sharing fixes. Focus recovers after Settings and reopening.

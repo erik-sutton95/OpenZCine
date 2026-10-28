@@ -390,6 +390,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // Compose UI testing 1.12.1 pulls Espresso 3.5.0, whose input reflection fails on API 37.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(libs.kotlin.test.junit)
     // Retired donor renderer for exact Vulkan pixel parity; test APK only.
     androidTestImplementation(project(":frozen-vulkan-donor"))

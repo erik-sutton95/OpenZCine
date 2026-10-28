@@ -89,6 +89,16 @@ class ConnectionFailureMessagesTest {
     }
 
     @Test
+    fun `a silent camera keeps wake and network guidance instead of socket details`() {
+        for (detail in listOf(null, "PTP-IP socket timed out")) {
+            val message = friendlyCameraConnectionFailure(CameraConnectionFailure.CAMERA_SILENT, detail)
+            assertTrue(message.contains("wake it (half-press the shutter)"))
+            assertTrue(message.contains("same Wi‑Fi"))
+            assertFalse(message.contains("PTP"))
+        }
+    }
+
+    @Test
     fun `plain operator text is preserved`() {
         assertEquals("USB cable unplugged.", friendlyCameraConnectionFailure(null, "USB cable unplugged."))
         val busy = "Another device is connected to this camera. Disconnect it there, then try again."
