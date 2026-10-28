@@ -117,15 +117,28 @@ extension View {
         ) { request in
             content()
                 .environment(model)
-                // A host that goes away with the cover up (the player closing) takes the cover
-                // with it; clear that request so it does not reappear on the next clip. A newer
-                // ask made while this cover was leaving stays.
-                .onDisappear {
-                    if model.redDownloadRequest == request {
-                        model.redDownloadRequest = nil
-                    }
-                }
+                .modifier(RedDownloadDismissGuard(model: model, request: request))
         }
+    }
+}
+
+/// SwiftUI can update the closing cover's captured request before its disappearance arrives.
+/// Lifecycle state keeps the request that actually appeared, so a late dismissal cannot clear a successor.
+private struct RedDownloadDismissGuard: ViewModifier {
+    let model: NativeAppModel
+    let request: RedDownloadRequest
+    @State private var presentedRequest: RedDownloadRequest?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                if presentedRequest == nil { presentedRequest = request }
+            }
+            .onDisappear {
+                if model.redDownloadRequest == presentedRequest {
+                    model.redDownloadRequest = nil
+                }
+            }
     }
 }
 
