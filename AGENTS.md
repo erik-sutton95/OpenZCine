@@ -176,6 +176,12 @@ just android-check
 
 For dual-platform product work, run **both** `just native-check` and `just android-check`.
 
+Run the gates you need in **one** `just` invocation, for example `just check native-check` or
+`just check native-check android-check`. Just runs a recipe that several gates share
+(`swift-lint`, `swift-test`, `check-demo-isolation`, `check-gles-shaders`) once per invocation;
+separate invocations repeat it, and `just check` followed by `just native-check` runs the Swift
+package tests twice.
+
 Hosted CI has two tiers ([`docs/ci.md`](docs/ci.md)): the PR tier feeds the one required check,
 **CI gate**; the nightly tier runs the full suite on `main` and keeps one "Nightly CI failing on
 main" issue. A PR-tier failure is fixed, or the test is quarantined with an issue; there are no
@@ -220,8 +226,10 @@ every recipe. Common commands:
 ```sh
 just setup          # Install local tooling (macOS / Homebrew)
 just check          # Run all repo-level checks (lint, format, CI meta)
-just native-check   # Run Swift checks — format, build, and tests
-just ios-build      # Build the iOS app shell
+just native-check   # Swift checks, then one iOS build-for-testing, its unit tests and the Watch build
+just check native-check # Both gates in one invocation; shared recipes run once
+just ios-test       # Build the iOS app and tests once, then test without rebuilding
+just ios-build      # Build the iOS app shell only (no tests)
 just watch-build    # Build the watchOS companion app
 just test           # Run Swift package tests
 just android-build  # Build the Android phone app and staged Swift runtime

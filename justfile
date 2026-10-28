@@ -103,7 +103,10 @@ conformance-ios udid result="":
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
-# Run the iOS shell's Swift Testing suite on the first available iPhone simulator.
+# Build the iOS app and its unit tests once, then run them without rebuilding on the first available
+# iPhone simulator (IOS_TEST_DEVICE_ID picks another). The build is the same generic simulator
+# build `ios-build` makes, so `native-check` needs no second app build. Arguments go to both
+# xcodebuild calls: `just ios-test -only-testing:RunnerTests/SomeTests` builds once, runs one suite.
 ios-test *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -115,15 +118,19 @@ ios-test *args:
         echo "No available iPhone simulator found." >&2
         exit 1
     fi
+    build_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
+      -destination 'generic/platform=iOS Simulator' {{args}} build-for-testing)
     test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
       -destination "platform=iOS Simulator,id=$device_id" {{args}})
     if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
         test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
     fi
+    test_command+=(test-without-building)
+    build_and_test() { "${build_command[@]}" && "${test_command[@]}"; }
     if [ -n "${IOS_TEST_LOG_PATH:-}" ]; then
-        "${test_command[@]}" test 2>&1 | tee "$IOS_TEST_LOG_PATH"
+        build_and_test 2>&1 | tee "$IOS_TEST_LOG_PATH"
     else
-        "${test_command[@]}" test
+        build_and_test
     fi
 
 # Build the watchOS companion app for the simulator.
@@ -174,8 +181,9 @@ testflight:
 sentry-test:
     OPC_APP_ROOT=. OPC_APP_NAME=Runner bash ../OpenCine/scripts/sentry/sentry-test.sh
 
-# Run all native production checks that do not require camera hardware.
-native-check: check-demo-isolation swift-check ios-test ios-build watch-build
+# Run all native production checks that do not require camera hardware. `ios-test` already builds
+# the app `ios-build` builds; run with `just check native-check` so shared recipes run once.
+native-check: check-demo-isolation swift-check ios-test watch-build
 
 # Format production Swift sources.
 format: swift-format

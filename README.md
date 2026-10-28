@@ -182,7 +182,7 @@ just                       # list all recipes
 just check                 # run repository quality checks
 just format                # format Swift sources
 just test                  # run Swift package tests
-just native-check          # run Swift tests and build the native iOS app
+just native-check          # run Swift tests, then build and test the native iOS app
 just android-build         # build the Android app and staged Swift runtime
 just android-check         # build, test, compile device tests, and lint Android
 just android-release-check # verify the signed phone/Wear release pair
