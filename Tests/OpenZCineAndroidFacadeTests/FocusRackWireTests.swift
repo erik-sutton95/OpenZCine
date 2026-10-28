@@ -101,7 +101,10 @@ private func waitForRackWire(
     _ wire: FocusRackWire, _ owner: String,
     predicate: (RackWireReply) -> Bool
 ) async throws -> RackWireReply {
-    for _ in 0..<200 {
+    // Photo-processing suites share the executor and can delay these asynchronous replies.
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(10))
+    while clock.now < deadline {
         let reply = try rackWireReply(wire, owner)
         if predicate(reply) { return reply }
         try await Task.sleep(for: .milliseconds(10))
