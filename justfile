@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene testflight-notes-check play-notes-check typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
+check: hygiene testflight-notes-check play-notes-check ci-timing-test ios-test-script-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -29,6 +29,14 @@ testflight-notes-check:
 # Validate the reviewed Google Play tester-facing release notes.
 play-notes-check:
     ./scripts/android-play-release-notes-check.sh
+
+# Test the CI job-summary timing tables (scripts/ci-test-timing.py) on recorded output shapes.
+ci-timing-test:
+    python3 scripts/ci-test-timing-test.py
+
+# Test how scripts/ios-test.sh splits options between the build and the test run.
+ios-test-script-test:
+    ./scripts/ios-test-test.sh
 
 # Spell-check the repository.
 typos:
@@ -99,28 +107,12 @@ conformance-ios udid result="":
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
-# Run the iOS shell's Swift Testing suite on the first available iPhone simulator.
+# Build the iOS app and its unit tests once for the first available iPhone simulator
+# (IOS_TEST_DEVICE_ID picks another), then run them there without rebuilding. Extra xcodebuild
+# options are allowed: `just ios-test -only-testing:RunnerTests/SomeTests` builds once and runs
+# one suite (scripts/ios-test.sh says which options reach which call).
 ios-test *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    device_id="${IOS_TEST_DEVICE_ID:-}"
-    if [ -z "$device_id" ]; then
-        device_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && !found { print $2; found = 1 }')"
-    fi
-    if [ -z "$device_id" ]; then
-        echo "No available iPhone simulator found." >&2
-        exit 1
-    fi
-    test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "platform=iOS Simulator,id=$device_id" {{args}})
-    if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
-        test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
-    fi
-    if [ -n "${IOS_TEST_LOG_PATH:-}" ]; then
-        "${test_command[@]}" test 2>&1 | tee "$IOS_TEST_LOG_PATH"
-    else
-        "${test_command[@]}" test
-    fi
+    ./scripts/ios-test.sh {{args}}
 
 # Build the watchOS companion app for the simulator.
 watch-build:
@@ -170,8 +162,11 @@ testflight:
 sentry-test:
     OPC_APP_ROOT=. OPC_APP_NAME=Runner bash ../OpenCine/scripts/sentry/sentry-test.sh
 
-# Run all native production checks that do not require camera hardware.
-native-check: check-demo-isolation swift-check ios-test ios-build watch-build
+# Run all native production checks that do not require camera hardware. No `ios-build`: the
+# OpenZCineWatch scheme builds the generic simulator Runner.app (arm64 and x86_64, unsigned) that
+# embeds the Watch app, which is exactly what `ios-build` makes. Run with `just check native-check`
+# so the recipes both gates share run once.
+native-check: check-demo-isolation swift-check ios-test watch-build
 
 # Format production Swift sources.
 format: swift-format

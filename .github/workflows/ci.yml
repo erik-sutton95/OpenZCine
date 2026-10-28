@@ -67,6 +67,12 @@ jobs:
       - name: Google Play notes
         run: ./scripts/android-play-release-notes-check.sh
 
+      - name: CI timing summaries
+        run: python3 scripts/ci-test-timing-test.py
+
+      - name: iOS test recipe options
+        run: ./scripts/ios-test-test.sh
+
       - name: Spell check
         uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
 
@@ -165,6 +171,8 @@ jobs:
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
               - 'scripts/ci-install-swift-android.sh'
+              # Applied to every Android Gradle invocation in CI.
+              - 'scripts/ci-gradle-task-timing.gradle'
               - 'justfile'
               # Changing the CI or Play build must re-run the Android job.
               - '.github/workflows/ci.yml'
@@ -235,8 +243,11 @@ jobs:
           restore-keys: |
             ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-
             ios-xcode-${{ steps.xcode.outputs.version }}-
+      # The log feeds the per-suite timing table in the job summary.
       - name: Demo isolation, swift-format and Swift package tests
-        run: just check-demo-isolation swift-check
+        run: |
+          set -euo pipefail
+          just check-demo-isolation swift-check 2>&1 | tee "$RUNNER_TEMP/native-ios/swift-test.log"
       # One build of the app and its unit tests; every test run below reuses it without building.
       # Hosted runners are arm64: an x86_64 simulator slice only doubles the compile.
       - name: Build the app and its tests (iOS Simulator)
@@ -346,12 +357,25 @@ jobs:
             xcrun xcresulttool get test-results summary --path "$result_bundle" \
               | tee "$RUNNER_TEMP/native-ios/summary.json"
           fi
+      # Per-suite timing for the package tests and every iOS unit test run, in the job summary and
+      # the log.
+      # Reporting never decides the verdict; the meta job tests the script.
+      - name: Summarize test timing
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 scripts/ci-test-timing.py swift-testing "$RUNNER_TEMP/native-ios/swift-test.log" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/ci-test-timing.py xcresult "$RUNNER_TEMP/native-ios/Runner.xcresult" \
+            "$RUNNER_TEMP/native-ios/Quarantined.xcresult" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Retain iOS test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-ios-test-evidence
           path: |
+            ${{ runner.temp }}/native-ios/swift-test.log
             ${{ runner.temp }}/native-ios/Runner.xcresult
             ${{ runner.temp }}/native-ios/ios-test.log
             ${{ runner.temp }}/native-ios/Quarantined.xcresult
@@ -437,12 +461,26 @@ jobs:
           echo "All CI jobs passed or were skipped: $RESULTS"
 
   android:
-    name: Android
+    name: Android (${{ matrix.part }})
     needs: changes
     # Skip the Gradle build when nothing under Apps/Android changed.
     if: ${{ needs.changes.outputs.android == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Three Gradle invocations on parallel runners instead of one serial step. Together they
+    # schedule exactly the task graph of `just android-check` plus the release closure (docs/ci.md);
+    # each stages the Swift core itself. The gate sees one `android` result: failure if any part
+    # fails, so every part stays required.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: JVM tests
+            tasks: test
+          - part: debug build, lint and device-test compile
+            tasks: assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest lint
+          - part: release closure
+            tasks: :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -470,11 +508,25 @@ jobs:
       - name: Install Swift Android SDK
         run: ./scripts/ci-install-swift-android.sh
 
-      - name: Build, compile UI tests, unit-test, lint, and verify release packages
+      - name: Gradle, ${{ matrix.part }}
         working-directory: Apps/Android
         env:
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
-        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
+          CI_GRADLE_TASK_TIMING: ${{ runner.temp }}/gradle-task-timing.tsv
+          TASKS: ${{ matrix.tasks }}
+        run: |
+          set -euo pipefail
+          read -ra tasks <<< "$TASKS"
+          ./gradlew --init-script ../../scripts/ci-gradle-task-timing.gradle "${tasks[@]}"
+      # Per-task times and, for the JVM tests, per-suite times in the job summary and the log.
+      # Reporting never decides the verdict; the meta job tests the script.
+      - name: Summarize Gradle timing
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 scripts/ci-test-timing.py gradle "$RUNNER_TEMP/gradle-task-timing.tsv" Apps/Android \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   bug-relay:
     name: Anonymous bug relay
