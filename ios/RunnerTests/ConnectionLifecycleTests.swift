@@ -1255,14 +1255,17 @@ struct LiveViewStartBudgetTests {
     @Test("A connection that never starts live view fails after its budget and can be retried")
     func stalledLiveViewStartFailsWithRetry() async throws {
         let clock = WatchdogClock()
-        let transport = StallAfterHandshakeTransport()
+        let attempts = StalledAttempts()
         let model = NativeAppModel()
-        model.connectionWatchdogClock = clock.clock
+        model.connectionClock = clock.clock
         model.cameraHost = Self.host
         model.cameraNetworkJoinPeers = .init(
             join: { _ in }, isAlive: { _ in true },
             dial: { _ in Issue.record("the simulated SDK owns this establishment") },
             establish: { host, _, pairing, _, _ in
+                // A fresh camera link per attempt, so a retry is seen reaching the SDK boundary.
+                let transport = StallAfterHandshakeTransport()
+                attempts.transports.append(transport)
                 let session = try await NativeCameraSession.establish(
                     transport: transport, host: host, cameraName: "SIMULATED ZR",
                     requestPairing: pairing)
@@ -1272,7 +1275,7 @@ struct LiveViewStartBudgetTests {
             })
         defer {
             model.cancelConnectionAttempt()
-            transport.close()
+            for transport in attempts.transports { transport.close() }
             clock.releaseAll()
             NativeCameraConnectionStore.shared.forgetKnownPairing(host: Self.host)
         }
@@ -1301,11 +1304,34 @@ struct LiveViewStartBudgetTests {
         #expect(model.connectionFailureDetail == copy)
         #expect(!model.debugHasCameraSession, "the stalled session is released")
 
-        // The failed card's Try again starts a fresh attempt.
+        // The failed card's Try again runs a fresh connection all the way to a new session.
+        try #require(attempts.transports.count == 1)
+        // A real link bounds the stalled session's CloseSession with a deadline; this fake has no
+        // timer, so end that teardown the way its deadline would before the retry awaits it.
+        attempts.transports[0].close()
         let generation = model.debugConnectionGeneration
         model.retryConnectionAttempt()
         #expect(model.debugConnectionGeneration > generation)
-        #expect(model.debugIsEstablishingConnection)
+        // The retry settles before its fresh Init (a reconnect); step simulated time past it.
+        func reopened() -> Bool {
+            attempts.transports.count == 2 && model.debugHasCameraSession
+                && model.connectionPhase == .preparingLiveView
+        }
+        // The watchdog always has a tick parked; the settle is the second sleeper.
+        for _ in 0..<6 {
+            guard await Self.until({ reopened() || clock.pendingSleeps >= 2 }), !reopened() else {
+                break
+            }
+            clock.advance(by: .milliseconds(500))
+        }
+        let retried = await Self.until { reopened() }
+        #expect(
+            retried,
+            """
+            the retry reaches establishment again and opens a new session: \
+            links \(attempts.transports.count) session \(model.debugHasCameraSession) \
+            phase \(model.connectionPhase) establishing \(model.debugIsEstablishingConnection)
+            """)
     }
 
     /// Yields until `condition` holds; the simulated work needs only main-actor and actor hops.
@@ -1318,6 +1344,12 @@ struct LiveViewStartBudgetTests {
         }
         return condition()
     }
+}
+
+/// The simulated camera links the connection opened, one per establishment.
+@MainActor
+private final class StalledAttempts {
+    var transports: [StallAfterHandshakeTransport] = []
 }
 
 /// A manual `HostClock`: sleeps end only when the test advances time past them.

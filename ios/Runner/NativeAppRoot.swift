@@ -4000,6 +4000,7 @@ final class NativeAppModel {
         }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
         let previousTeardown = sessionTeardownTask
+        let clock = connectionHostClock
         establishmentTask = Task { [weak self] in
             // Only this generation's owner may release the latch — a stale attempt finishing late
             // must not unlatch the attempt that replaced it.
@@ -4032,7 +4033,7 @@ final class NativeAppModel {
             // a cold first connect has nothing to wait for. [verify-on-HW: tune this settle to the
             // camera's real slot-release time.]
             if hadPriorSession {
-                try? await Task.sleep(for: .milliseconds(1200))
+                try? await clock.sleep(.milliseconds(1200))
             }
             guard self?.connectionGeneration == generation else { return }
             let store = NativeCameraConnectionStore.shared
@@ -4427,7 +4428,7 @@ final class NativeAppModel {
     /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
     private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
         connectionTimeoutTask?.cancel()
-        let clock = connectionWatchdogHostClock
+        let clock = connectionHostClock
         connectionTimeoutTask = Task { [weak self] in
             var watchedPhase = self?.connectionPhase ?? .idle
             var phaseStartedAt = clock.now()
@@ -4472,10 +4473,11 @@ final class NativeAppModel {
         }
     }
 
-    /// The clock the connection phase watchdog measures its budgets on.
-    private var connectionWatchdogHostClock: HostClock {
+    /// The clock a connection attempt waits on: the phase watchdog's budgets and the reconnect
+    /// settle before a fresh Init.
+    private var connectionHostClock: HostClock {
         #if DEBUG
-            if let connectionWatchdogClock { return connectionWatchdogClock }
+            if let connectionClock { return connectionClock }
         #endif
         return .live
     }
@@ -4772,9 +4774,10 @@ final class NativeAppModel {
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
 
-        /// SIMULATED time for the connection phase watchdog, so a test crosses a phase budget
-        /// without waiting in real time. `nil` keeps the real clocks.
-        @ObservationIgnored var connectionWatchdogClock: HostClock?
+        /// SIMULATED time for a connection attempt (the phase watchdog and the reconnect settle),
+        /// so a test crosses a phase budget or a retry without waiting in real time. `nil` keeps
+        /// the real clocks.
+        @ObservationIgnored var connectionClock: HostClock?
 
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
