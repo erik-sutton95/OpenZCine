@@ -317,12 +317,37 @@ frame is clean. **Never report a UI change as complete or "matches the mockup" w
 pass.** Prefer the real device size and, when a screen has multiple states, screenshot the
 tightest one. Glass / material / edge-highlight tuning counts as a UI change — always redeploy.
 
-## Testing requirements
+## Writing tests
 
-- **View models** must have unit tests covering their core logic.
-- **Critical user flows** (camera connection, record start/stop, live-view activation) must have
+Test behavior at contract boundaries, not implementation. A test earns its place when a real
+regression fails it and a correct refactor does not. Tests that pin implementation lock in
+whatever code exists today and cost every later change (and every agent) time and tokens.
+
+- One test per behavior that the operator, a camera or another app depends on: camera commands
+  and the bytes they put on the wire, recording start and stop, preservation of footage and user
+  data, session recovery, migrations, and shared UI contracts (what is shown, announced and
+  tappable). Not one test per function or type.
+- Do not test private helpers, call order, file or type names, source text or exact internal
+  counts, and do not reach into private state through reflection. Do not copy an old
+  implementation into a test as its oracle; use golden data or recorded camera output.
+- Before adding a test, check whether an existing test already fails for the same bug. Extend it
+  instead of adding a near-duplicate.
+- Deterministic only: manual clocks and event signals, no sleeps, wall-clock budgets or fixed
+  yield loops. A performance requirement is an operation count in normal tests; real timing
+  budgets belong in a performance tier.
+- A test that flakes twice is quarantined with an issue the same day (see the CI quarantine
+  rule), not diagnosed again run after run.
+- A test that fails a correct refactor is pinning implementation. Replace it with a behavior test
+  that catches the same bug, then delete it in the same change. That deletion is not lost
+  coverage.
+- Keep: wire and migration goldens, recovery and decoder ownership tests, real-camera corpora,
+  Swift and Kotlin twins (they test two shipping implementations), and architecture rules on
+  imports, dependency edges and brand-free shared code (they guard a boundary, not an
+  implementation detail).
+- Critical user flows (camera connection, record start and stop, live-view activation) have
   UI-level integration tests.
-- **Business logic coverage**: 80% or higher line coverage for `Sources/OpenZCineCore`.
+- There is no line-coverage target. Coverage counts lines executed, not behavior protected, and
+  chasing it produces the implementation tests this section rules out.
 - Use **Swift Testing** (`#expect`, `#require`) for new Swift tests and the existing Kotlin/JUnit
   conventions for Android tests. XCTest is acceptable only in existing targets not yet migrated.
 
