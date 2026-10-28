@@ -103,9 +103,8 @@ conformance-ios udid result="":
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
-# Build the iOS app and its unit tests once, then run them without rebuilding on the first available
-# iPhone simulator (IOS_TEST_DEVICE_ID picks another). The build is the same generic simulator
-# build `ios-build` makes, so `native-check` needs no second app build. Arguments go to both
+# Build the iOS app and its unit tests once for the first available iPhone simulator
+# (IOS_TEST_DEVICE_ID picks another), then run them there without rebuilding. Arguments go to both
 # xcodebuild calls: `just ios-test -only-testing:RunnerTests/SomeTests` builds once, runs one suite.
 ios-test *args:
     #!/usr/bin/env bash
@@ -118,10 +117,11 @@ ios-test *args:
         echo "No available iPhone simulator found." >&2
         exit 1
     fi
+    destination="platform=iOS Simulator,id=$device_id"
     build_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination 'generic/platform=iOS Simulator' {{args}} build-for-testing)
+      -destination "$destination" {{args}} build-for-testing)
     test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "platform=iOS Simulator,id=$device_id" {{args}})
+      -destination "$destination" {{args}})
     if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
         test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
     fi
@@ -181,8 +181,10 @@ testflight:
 sentry-test:
     OPC_APP_ROOT=. OPC_APP_NAME=Runner bash ../OpenCine/scripts/sentry/sentry-test.sh
 
-# Run all native production checks that do not require camera hardware. `ios-test` already builds
-# the app `ios-build` builds; run with `just check native-check` so shared recipes run once.
+# Run all native production checks that do not require camera hardware. No `ios-build`: the
+# OpenZCineWatch scheme builds the generic simulator Runner.app (arm64 and x86_64, unsigned) that
+# embeds the Watch app, which is exactly what `ios-build` makes. Run with `just check native-check`
+# so the recipes both gates share run once.
 native-check: check-demo-isolation swift-check ios-test watch-build
 
 # Format production Swift sources.
