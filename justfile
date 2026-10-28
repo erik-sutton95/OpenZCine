@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene testflight-notes-check play-notes-check ci-timing-test ios-test-script-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
+check: hygiene testflight-notes-check play-notes-check ci-timing-test ios-test-script-test swift-android-install-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -37,6 +37,10 @@ ci-timing-test:
 # Test how scripts/ios-test.sh splits options between the build and the test run.
 ios-test-script-test:
     ./scripts/ios-test-test.sh
+
+# Test how scripts/ci-install-swift-android.sh recovers from a failed Swift SDK install.
+swift-android-install-test:
+    ./scripts/ci-install-swift-android-test.sh
 
 # Spell-check the repository.
 typos:
