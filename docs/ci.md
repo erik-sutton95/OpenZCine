@@ -33,6 +33,7 @@ next passing night.
 
 ## QUARANTINE
 
+A test that flakes twice, locally or in hosted CI, is quarantined the same day.
 Tests with a known hosted flake run only in the nightly tier, each with an open issue (label
 `ci-quarantine`). There are no accepted reds in pull requests: fix the failure, or quarantine
 the test here with its issue in the same pull request.

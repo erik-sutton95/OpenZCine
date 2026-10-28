@@ -335,8 +335,9 @@ whatever code exists today and cost every later change (and every agent) time an
 - Deterministic only: manual clocks and event signals, no sleeps, wall-clock budgets or fixed
   yield loops. A performance requirement is an operation count in normal tests; real timing
   budgets belong in a performance tier.
-- A test that flakes twice is quarantined with an issue the same day (see the CI quarantine
-  rule), not diagnosed again run after run.
+- A test that flakes twice, locally or in CI, is quarantined that day: it moves to the nightly
+  tier with a `ci-quarantine` issue in the same change (see the CI quarantine rule), instead of
+  being diagnosed again run after run.
 - A test that fails a correct refactor is pinning implementation. Replace it with a behavior test
   that catches the same bug, then delete it in the same change. That deletion is not lost
   coverage.

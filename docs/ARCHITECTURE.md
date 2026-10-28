@@ -70,7 +70,6 @@ All new code in the iOS shell follows these conventions:
 
 - **Swift Testing** (`import Testing`, `#expect`, `#require`) for all new tests.
 - XCTest is acceptable only when integrating with existing test targets not yet migrated.
-- ViewModels must have unit tests covering their core logic.
 - Critical user flows (camera connection, record start/stop, live-view activation) must have
   UI-level integration tests.
 - Behavior tests at contract boundaries, with no line-coverage target (see `AGENTS.md`, Writing tests).
