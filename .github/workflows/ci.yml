@@ -437,12 +437,26 @@ jobs:
           echo "All CI jobs passed or were skipped: $RESULTS"
 
   android:
-    name: Android
+    name: Android (${{ matrix.part }})
     needs: changes
     # Skip the Gradle build when nothing under Apps/Android changed.
     if: ${{ needs.changes.outputs.android == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Three Gradle invocations on parallel runners instead of one serial step. Together they
+    # schedule exactly the task graph of `just android-check` plus the release closure (docs/ci.md);
+    # each stages the Swift core itself. The gate sees one `android` result: failure if any part
+    # fails, so every part stays required.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: JVM tests
+            tasks: test
+          - part: debug build, lint and device-test compile
+            tasks: assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest lint
+          - part: release closure
+            tasks: :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -470,11 +484,15 @@ jobs:
       - name: Install Swift Android SDK
         run: ./scripts/ci-install-swift-android.sh
 
-      - name: Build, compile UI tests, unit-test, lint, and verify release packages
+      - name: Gradle, ${{ matrix.part }}
         working-directory: Apps/Android
         env:
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
-        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest test lint :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact
+          TASKS: ${{ matrix.tasks }}
+        run: |
+          set -euo pipefail
+          read -ra tasks <<< "$TASKS"
+          ./gradlew "${tasks[@]}"
 
   bug-relay:
     name: Anonymous bug relay
