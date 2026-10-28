@@ -776,6 +776,32 @@ class FocusRackControllerTest {
         rack.close()
     }
 
+    @Test fun `fresh monitor return resumes service once without resuming under a cover`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        var writes = 0
+        rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+        rack.activate()
+        rack.observe(JSONObject().put("afSettings", JSONObject().put("foreground", true)))
+        rack.interrupt()
+        rack.observe(JSONObject().put("afSettings", JSONObject().put("foreground", false)))
+        rack.resumeAFSettings(eligible = false)
+        assertFalse(wire.requests.any { it.optString("kind") == "resumeAFSettings" })
+
+        rack.observe(JSONObject().put("afSettings", JSONObject().put("foreground", true)))
+        wire.afSettingsChange = JSONObject().put("id", 2).put("sessionID", "camera-owner")
+            .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F").put("restoring", false)
+        rack.resumeAFSettings(eligible = true)
+        rack.resumeAFSettings(eligible = true)
+        testScheduler.runCurrent()
+        assertEquals(1, wire.requests.count { it.optString("kind") == "resumeAFSettings" })
+        val resume = wire.requests.first { it.optString("kind") == "resumeAFSettings" }
+        assertTrue(resume.getJSONObject("afSettings").getBoolean("foreground"))
+        assertEquals(1, writes)
+        rack.close()
+    }
+
     @Test fun `malformed snapshots stop safely without committing a partial mode`() = runTest {
         for (field in listOf("canPause", "totalSteps")) {
             val wire = Wire()

@@ -579,7 +579,8 @@ public final class FocusRackWire: @unchecked Sendable {
         }
 
         private func requestSettings(_ mode: FocusControlMode) throws {
-            guard afSetupRequested else { return }
+            // Reopening waits for the closing panel's reserved write before recapturing setup.
+            guard afSetupRequested, afLease.pending == nil else { return }
             defer {
                 afSetupRequested = false
                 afManualBeforeCapture.removeAll()
@@ -605,9 +606,16 @@ public final class FocusRackWire: @unchecked Sendable {
             let current = await controller.snapshot()
             let start: (SettingsInput, Int)? = lock.withLock {
                 state = current
-                guard !closed, !afSuspended, !afSetupRequested, !modeSwitchPending,
-                    nativeRack.dispatchedRequest == nil,
-                    afLease.needsService, afLease.pending == nil,
+                guard !closed, !afSuspended, !modeSwitchPending,
+                    nativeRack.dispatchedRequest == nil
+                else { return nil }
+                if afSetupRequested {
+                    do { try requestSettings(focusMode) } catch {
+                        self.error = error.localizedDescription
+                        return nil
+                    }
+                }
+                guard !afSetupRequested, afLease.needsService, afLease.pending == nil,
                     afFailure == nil, let input = afInput
                 else { return nil }
                 _ = afLease.nextChange(input.observation(rack: current, ready: false))
@@ -980,7 +988,7 @@ public final class FocusRackWire: @unchecked Sendable {
                                 && nativeRack.dispatchedRequest == nil,
                             afSettingsChange: afEffectReady ? afLease.pending : nil,
                             afSettingsExpectedValues: afEffectReady ? afInput?.values : nil,
-                            afSettingsPending: afLease.needsService,
+                            afSettingsPending: afSetupRequested || afLease.needsService,
                             afSettingsRestoring: afLease.restoring,
                             afSettingsReady: afSetupReady,
                             afSettingsFailure: afFailure ?? afLease.failure,

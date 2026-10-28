@@ -115,7 +115,12 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     }
 
     fun openPanel() { afSuspended = false; activate(); send("openPanel") }
-    fun resumeAFSettings() { afSuspended = false; send("resumeAFSettings") }
+    /** Returning to an eligible monitor resumes settings service without replaying interrupted work. */
+    fun resumeAFSettings(eligible: Boolean = true) {
+        if (!eligible || !afSuspended) return
+        afSuspended = false
+        send("resumeAFSettings")
+    }
 
     /** Allocates the inert native owner only when the operator first opens Focus Rack. */
     fun activate() {

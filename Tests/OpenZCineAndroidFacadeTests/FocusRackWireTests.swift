@@ -1070,6 +1070,79 @@ private final class NativeRackWireFixture: @unchecked Sendable {
     }
 }
 
+@Test func rackWireFreshForegroundResumeKeepsInterruptedNativeDelayCancelled() async throws {
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    try fixture.setTargets()
+    _ = try fixture.step("nativeAFDelay", ["nativeAFStartDelay": 30.0])
+    let waiting = try fixture.step("nativeAFRun", ["nativeAFMark": "B"])
+    #expect(waiting.nativeAF.busy && waiting.nativeAFChange == nil)
+    _ = try fixture.step("interrupt")
+    let covered = try fixture.step("observe")
+    #expect(!covered.canNativeAutofocus && !covered.nativeAF.busy)
+    let returned = try fixture.step("resumeAFSettings")
+    #expect(returned.canNativeAutofocus)
+    #expect(!returned.nativeAF.busy && returned.nativeAFChange == nil)
+    #expect(returned.nativeAF.a?.x == 0.25 && returned.nativeAF.b?.x == 0.75)
+    #expect(fixture.camera.drives == 0)
+}
+
+@Test(arguments: ["complete", "defer", "manual"])
+func rackWireReopeningDuringRestorationWaitsForThePendingEffect(disposition: String)
+    async throws
+{
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    var input = try #require(fixture.fields()["afSettings"] as? [String: Any])
+    input["restorationFocusSettled"] = true
+    _ = try fixture.step("closePanel", ["afSettings": input])
+    let restoring = try #require(
+        try await waitForRackWire(fixture.wire, fixture.owner) {
+            $0.afSettingsChange != nil
+        }.afSettingsChange)
+    #expect(restoring.restoring && restoring.value == "AF-S")
+    _ = try fixture.step("openPanel", ["afSettings": input])
+    let reopened = try fixture.step()
+    #expect(reopened.afSettingsFailure == nil && reopened.afSettingsPending)
+    if disposition == "manual" {
+        fixture.camera.manualArea("Wide-S")
+        _ = try fixture.step("manualAFSetting", ["afProperty": "area"])
+    }
+    let changeJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(restoring))
+    if disposition == "defer" {
+        _ = try fixture.step("afSettingsDeferred", ["afChange": changeJSON])
+    } else {
+        fixture.camera.apply(restoring)
+        _ = try fixture.step("afSettingsComplete", ["afChange": changeJSON])
+    }
+    let setup = try await waitForRackWire(fixture.wire, fixture.owner) {
+        $0.afSettingsReady || $0.afSettingsChange.map({ $0.id != restoring.id }) == true
+    }
+    if let change = setup.afSettingsChange {
+        #expect(!change.restoring && change.property == .mode && change.value == "AF-F")
+        fixture.camera.apply(change)
+        _ = try fixture.step(
+            "afSettingsComplete",
+            [
+                "afChange": try JSONSerialization.jsonObject(with: JSONEncoder().encode(change))
+            ])
+    }
+    let ready = try await waitForRackWire(fixture.wire, fixture.owner) {
+        $0.afSettingsReady && !$0.afSettingsPending
+    }
+    #expect(ready.afSettingsFailure == nil && fixture.camera.values.mode == "AF-F")
+    #expect(fixture.camera.values.area == (disposition == "manual" ? "Wide-S" : "Auto"))
+    input = try #require(fixture.fields()["afSettings"] as? [String: Any])
+    input["restorationFocusSettled"] = true
+    _ = try fixture.step("closePanel", ["afSettings": input])
+    let closing = try #require(
+        try await waitForRackWire(fixture.wire, fixture.owner) {
+            $0.afSettingsChange != nil
+        }.afSettingsChange)
+    #expect(closing.restoring && closing.property == .mode && closing.value == "AF-S")
+    #expect(fixture.camera.drives == 0)
+}
+
 @Test func nativeRackWireTargetsDelayAndCheckpointKeepMFMarksAndOpticalClaimsSeparate() async throws
 {
     let fixture = try NativeRackWireFixture()
