@@ -373,7 +373,6 @@ internal fun MonitorScreen(
     DisposableEffect(focusRack, rackLifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) focusRack.interrupt()
-            if (event == Lifecycle.Event.ON_RESUME) focusRack.resumeAFSettings()
         }
         rackLifecycle.addObserver(observer)
         onDispose { rackLifecycle.removeObserver(observer) }
@@ -1717,7 +1716,7 @@ internal fun MonitorScreen(
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
         SideEffect { captureReviewFocus.set(feedFocus) }
-        val rackForeground = isMonitorFront && liveViewEnabled && !isCommand &&
+        val rackForeground = isMonitorFront && liveViewEnabled && !isCommand && editingDisplay == null &&
             !controlsSurrendered && !mediaOwnsCommandChannel && availability.cameraControls && frameSource == null &&
             monitorFrameSource === swiftLiveFrameSource && swiftLiveFrameSource != null &&
             lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
@@ -1837,7 +1836,10 @@ internal fun MonitorScreen(
             onDispose { if (liveFeedPresentation.rackFrameAccepted === accepted) liveFeedPresentation.rackFrameAccepted = null }
         }
 
-        SideEffect { focusRack.observe(rackObservation()) }
+        SideEffect {
+            focusRack.observe(rackObservation())
+            focusRack.resumeAFSettings(rackForeground && !locked)
+        }
         LaunchedEffect(rackState.afSettingsPending, rackState.afSettingsFailure, focusRackVisible) {
             if (!focusRackVisible) {
                 rackState.afSettingsFailure?.let { commonControl.onNote(it) }
