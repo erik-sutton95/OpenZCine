@@ -8,6 +8,8 @@ import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
+import OpenCineGyro
+import OpenCineGyroApple
 import OpenCineMedia
 import OpenCineRelay
 import OpenCineRelayApple
@@ -1040,7 +1042,7 @@ final class NativeAppModel {
             syncScreenWakePolicy()
             publishWatchState()
             if oldValue != isMonitorPresented {
-                if !isMonitorPresented { gyroCapture.stop(reason: .disconnected) }
+                if !isMonitorPresented { gyroCapture.setHostEligible(false) }
                 // Record admission follows live-view readiness.
                 refreshCommonControlFacts()
                 updateBluetoothShutter()
@@ -1066,9 +1068,21 @@ final class NativeAppModel {
         get { shell.cover == .media && activePanel != .media }
         set { setStandalone(.media, newValue) }
     }
-    /// Full-screen RED LUT download, presented from the app root (not the LUT picker) so it
-    /// survives the monitor collapsing when the internet hop tears the camera session down.
-    var isRedDownloadPresented = false
+    /// The surface presenting the full-screen RED LUT download, or nil when it is closed. The
+    /// monitor's picker asks the app root (not the LUT picker) so the cover survives the monitor
+    /// collapsing when the internet hop tears the camera session down; the clip player's picker
+    /// asks the player, whose own cover would otherwise hold the root's back (`RedDownloadHost`).
+    var redDownloadHost: RedDownloadHost? {
+        get { redDownloadRequest?.host }
+        set { redDownloadRequest = newValue.map { RedDownloadRequest(host: $0) } }
+    }
+    /// The open request; each ask is a new one, so a closing cover clears only its own.
+    var redDownloadRequest: RedDownloadRequest?
+    /// Whether the RED LUT download is up on any surface. Setting it true asks the app root.
+    var isRedDownloadPresented: Bool {
+        get { redDownloadHost != nil }
+        set { redDownloadHost = newValue ? (redDownloadHost ?? .root) : nil }
+    }
     /// Operator Setup presented standalone from the startup home (no camera connection needed —
     /// e.g. signing in to Frame.io or clearing the media cache before a shoot): the shell's
     /// Settings cover, not the monitor's panel.
@@ -1184,8 +1198,11 @@ final class NativeAppModel {
         }
         didSet {
             if oldValue != videoSource {
-                gyroCapture.invalidateMountCalibration(
-                    message: "Camera source changed. Start calibration again.")
+                nikonGyro.disconnected()
+                if let identity = connectedIdentity, videoSource == .cameraLiveView {
+                    nikonGyro.connected(identity)
+                }
+                reconcileGyroCapture()
             }
         }
     }
@@ -1456,6 +1473,9 @@ final class NativeAppModel {
     var relayFailureReason: String?
     /// The broadcast this viewer joined, kept so retry — manual and automatic — knows its target.
     @ObservationIgnored private var relayJoinTarget: MonitorRelayDiscovery?
+    @ObservationIgnored private var relayJoinGeneration = 0
+    @ObservationIgnored private var relayPendingJoinCount = 0
+    @ObservationIgnored private var relayClientCreationCount = 0
     /// Self-heals a viewer session: rejoins on failure once the broadcast is visible again, and
     /// tears through a connected-but-stalled link (the suspended-broadcaster shape).
     @ObservationIgnored private var relayWatchdogTask: Task<Void, Never>?
@@ -1790,115 +1810,125 @@ final class NativeAppModel {
         // AWDL browsing under the decoding stream costs the watcher the same periodic radio
         // locks it costs a broadcaster, and a rejoin only re-finds a path that already worked.
         startRelayBrowsing(includePeerToPeer: false)
-        disconnectCameraSession(resetConnection: false)
-        cameraState = .blank
-        relayedBatteryReading = nil
-        relayedBatteryExhausted = nil
-        resetCameraPropertyState()
-        resetLinkHealthMeasurements()
-        discoveredCameras = []
-        connectedIdentity = nil
-        liveFrameImage = nil
-        videoSource = .relay
-        isMonitorPresented = wasWatching
-        connection = .connected
-        connectionMessage = "Joining \(discovery.name)…"
-        relayJoinDenied = false
-        linkMeter.restart()
-        applyLinkChip()
-        operatorSession.declare(modes: displayModes)
-
-        let client = MonitorRelayClient()
-        client.onStateChanged = { [weak self, weak client] state in
-            guard let self, let client, self.relayClient === client else { return }
-            self.relayClientState = state
-            // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
-            // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
-            // that never comes up is indistinguishable from a connected feed with no frames,
-            // which is exactly how it was reported from set.
-            self.applyLinkChip()
-            switch state {
-            case .connecting:
-                break
-            case .waiting(let reason):
-                self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
-                self.relayFailureReason = reason
-            case .connected(let hostName, let cameraName):
-                self.showsWatcherBrowse = false
-                self.shell.dismissCover()
-                self.isMonitorPresented = true
-                self.connectionMessage =
-                    cameraName.map { "Watching \(hostName) (\($0))." }
-                    ?? "Watching \(hostName)."
-                self.relayFailureReason = nil
-            case .failed(let reason):
-                // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
-                // client-to-client traffic, which camera APs typically do not — the honest
-                // remedy is leaving that network (nearby broadcasts reach this device
-                // directly, no shared network needed). Say so instead of a bare "couldn't
-                // reach".
-                let hint =
-                    self.isOnCameraAccessPointNetwork
-                    ? " This device is on the camera's own Wi-Fi. Leave that network and "
-                        + "watch from your regular Wi-Fi; nearby broadcasts reach this "
-                        + "device directly."
-                    : ""
-                self.connectionMessage = reason + hint
-                self.relayFailureReason = reason + hint
-                // A frozen frame that still looks live is the one failure mode a set monitor
-                // must never have — blank it so the reason overlay says what actually happened.
-                self.liveFrameImage = nil
-            case .idle:
-                break
-            }
-        }
-        client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
-        client.onControlToken = { [weak self] token in
+        relayJoinGeneration &+= 1
+        let joinGeneration = relayJoinGeneration
+        relayPendingJoinCount += 1
+        Task { [weak self] in
+            defer { self?.relayPendingJoinCount -= 1 }
             guard let self else { return }
-            self.relayHoldsControl = token.holderIsRecipient
-            self.relayControlHolderName = token.holderIsRecipient ? nil : token.holderName
-            // Losing control mid-gesture must not leave a drum open over a camera that has stopped
-            // listening to this device.
-            if !token.holderIsRecipient { self.dismissActivePanel() }
-        }
-        client.onFrame = { [weak self, weak client] metadata, image in
-            guard let self, let client, self.relayClient === client else { return }
-            self.applyRelayFrame(metadata: metadata, image: image, client: client)
-        }
-        client.onJoinDenied = { [weak self, weak client] denial in
-            guard let self, let client, self.relayClient === client else { return }
-            // Denied while WATCHING is the broadcaster ending the session deliberately —
-            // exit to the camera list. Only a pre-join refusal is a join failure.
-            if case .connected = self.relayClientState, !denial.passcodeRequired {
-                self.leaveRelay()
-                self.connectionMessage = denial.reason
-                return
+            await prepareGyroForDisconnect()
+            guard relayJoinGeneration == joinGeneration else { return }
+            disconnectCameraSession(resetConnection: false, gyroPreparationCompleted: true)
+            cameraState = .blank
+            relayedBatteryReading = nil
+            relayedBatteryExhausted = nil
+            resetCameraPropertyState()
+            resetLinkHealthMeasurements()
+            discoveredCameras = []
+            connectedIdentity = nil
+            liveFrameImage = nil
+            videoSource = .relay
+            isMonitorPresented = wasWatching
+            connection = .connected
+            connectionMessage = "Joining \(discovery.name)…"
+            relayJoinDenied = false
+            linkMeter.restart()
+            applyLinkChip()
+            operatorSession.declare(modes: displayModes)
+
+            let client = MonitorRelayClient()
+            relayClientCreationCount += 1
+            client.onStateChanged = { [weak self, weak client] state in
+                guard let self, let client, self.relayClient === client else { return }
+                self.relayClientState = state
+                // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
+                // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
+                // that never comes up is indistinguishable from a connected feed with no frames,
+                // which is exactly how it was reported from set.
+                self.applyLinkChip()
+                switch state {
+                case .connecting:
+                    break
+                case .waiting(let reason):
+                    self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
+                    self.relayFailureReason = reason
+                case .connected(let hostName, let cameraName):
+                    self.showsWatcherBrowse = false
+                    self.shell.dismissCover()
+                    self.isMonitorPresented = true
+                    self.connectionMessage =
+                        cameraName.map { "Watching \(hostName) (\($0))." }
+                        ?? "Watching \(hostName)."
+                    self.relayFailureReason = nil
+                case .failed(let reason):
+                    // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
+                    // client-to-client traffic, which camera APs typically do not — the honest
+                    // remedy is leaving that network (nearby broadcasts reach this device
+                    // directly, no shared network needed). Say so instead of a bare "couldn't
+                    // reach".
+                    let hint =
+                        self.isOnCameraAccessPointNetwork
+                        ? " This device is on the camera's own Wi-Fi. Leave that network and "
+                            + "watch from your regular Wi-Fi; nearby broadcasts reach this "
+                            + "device directly."
+                        : ""
+                    self.connectionMessage = reason + hint
+                    self.relayFailureReason = reason + hint
+                    // A frozen frame that still looks live is the one failure mode a set monitor
+                    // must never have — blank it so the reason overlay says what actually happened.
+                    self.liveFrameImage = nil
+                case .idle:
+                    break
+                }
             }
-            self.relayJoinNeedsPasscode = denial.passcodeRequired
-            // A second denial after a code was sent means the CODE was wrong — say that,
-            // not the generic ask.
-            self.relayFailureReason =
-                denial.passcodeRequired && self.relayPasscodeWasAttempted
-                ? "That passcode wasn't accepted. Check it with the broadcasting device."
-                : denial.reason
-            self.relayJoinDenied = true
-            self.applyLinkChip()
-            self.liveFrameImage = nil
+            client.onRelayState = { [weak self] state in self?.applyRelayState(state) }
+            client.onControlToken = { [weak self] token in
+                guard let self else { return }
+                self.relayHoldsControl = token.holderIsRecipient
+                self.relayControlHolderName = token.holderIsRecipient ? nil : token.holderName
+                // Losing control mid-gesture must not leave a drum open over a camera that has stopped
+                // listening to this device.
+                if !token.holderIsRecipient { self.dismissActivePanel() }
+            }
+            client.onFrame = { [weak self, weak client] metadata, image in
+                guard let self, let client, self.relayClient === client else { return }
+                self.applyRelayFrame(metadata: metadata, image: image, client: client)
+            }
+            client.onJoinDenied = { [weak self, weak client] denial in
+                guard let self, let client, self.relayClient === client else { return }
+                // Denied while WATCHING is the broadcaster ending the session deliberately —
+                // exit to the camera list. Only a pre-join refusal is a join failure.
+                if case .connected = self.relayClientState, !denial.passcodeRequired {
+                    self.leaveRelay()
+                    self.connectionMessage = denial.reason
+                    return
+                }
+                self.relayJoinNeedsPasscode = denial.passcodeRequired
+                // A second denial after a code was sent means the CODE was wrong — say that,
+                // not the generic ask.
+                self.relayFailureReason =
+                    denial.passcodeRequired && self.relayPasscodeWasAttempted
+                    ? "That passcode wasn't accepted. Check it with the broadcasting device."
+                    : denial.reason
+                self.relayJoinDenied = true
+                self.applyLinkChip()
+                self.liveFrameImage = nil
+            }
+            relayHoldsControl = false
+            relayControlHolderName = nil
+            relayClient = client
+            lastGoodFrameAt = Date()
+            client.connect(to: discovery.endpoint)
+            var joinPasscode =
+                relaySubmittedPasscodes[discovery.name]
+                ?? Self.storedRelayPasscode(forHost: discovery.name)
+            #if DEBUG
+                joinPasscode = joinPasscode ?? demoRelayJoinPasscode
+            #endif
+            relayPasscodeWasAttempted = joinPasscode?.isEmpty == false
+            client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
+            startRelayWatchdog(for: discovery)
         }
-        relayHoldsControl = false
-        relayControlHolderName = nil
-        relayClient = client
-        lastGoodFrameAt = Date()
-        client.connect(to: discovery.endpoint)
-        var joinPasscode =
-            relaySubmittedPasscodes[discovery.name]
-            ?? Self.storedRelayPasscode(forHost: discovery.name)
-        #if DEBUG
-            joinPasscode = joinPasscode ?? demoRelayJoinPasscode
-        #endif
-        relayPasscodeWasAttempted = joinPasscode?.isEmpty == false
-        client.introduce(deviceName: UIDevice.current.name, passcode: joinPasscode)
-        startRelayWatchdog(for: discovery)
     }
 
     /// Watcher passcodes, remembered per broadcaster in the Keychain so a set's code is typed
@@ -1980,6 +2010,7 @@ final class NativeAppModel {
     }
 
     func leaveRelay() {
+        relayJoinGeneration &+= 1
         showsWatcherBrowse = false
         relayJoinNeedsPasscode = false
         relayPasscodeWasAttempted = false
@@ -2559,7 +2590,23 @@ final class NativeAppModel {
     var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
-    let gyroCapture = GyroCaptureCoordinator()
+    let gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator
+    @ObservationIgnored lazy var nikonGyro = NikonGyroCameraAdapter(write: { [weak self] writes in
+        await self?.writeGyroStabilization(writes) ?? false
+    })
+    @ObservationIgnored private var gyroDisconnectTask: Task<Void, Never>?
+
+    static func gyroHostConfiguration(
+        logDirectory: URL = URL.applicationSupportDirectory.appendingPathComponent(
+            "GyroLogs", isDirectory: true)
+    ) -> GyroHostConfiguration {
+        GyroHostConfiguration(
+            appName: "OpenZCine", logDirectory: logDirectory,
+            preferenceKeys: .namespaced("gyro.v2."),
+            legacyKeys: GyroLegacyPreferenceKeys(
+                enabled: "gyroLoggingEnabled.v1", mountPreset: "gyroMountPreset.v1",
+                calibration: "gyroMountCalibration.v1"))
+    }
 
     var isRecording = false {
         didSet {
@@ -2590,8 +2637,10 @@ final class NativeAppModel {
         lutFileStore: CustomLUTStore = CustomLUTStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
         assist: NikonAssistState? = nil,
-        scopePanels: NikonScopePanels? = nil
+        scopePanels: NikonScopePanels? = nil,
+        gyroCapture: OpenCineGyroApple.GyroCaptureCoordinator? = nil
     ) {
+        self.gyroCapture = gyroCapture ?? .init(host: Self.gyroHostConfiguration())
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
         mediaCacheDirectory = .init(
@@ -3952,6 +4001,7 @@ final class NativeAppModel {
         // released by whichever comes first: this attempt finishing, or a teardown replacing it
         // (`clearCameraSessionState`), so a failed or cancelled attempt never blocks the retry.
         guard !isEstablishingConnection else { return }
+        relayJoinGeneration &+= 1
         // An auto-reconnect behind a preserved monitor keeps the operator on the frozen frame with
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
@@ -4230,6 +4280,12 @@ final class NativeAppModel {
                 // gaps — see `isCameraControlSession`.
                 isCameraControlSession = true
                 connectedIdentity = session.identity
+                if !isDemoSession, multicam.lentMember == nil {
+                    gyroCapture.attach(nikonGyro)
+                    nikonGyro.connected(session.identity)
+                    nikonGyro.receive(snapshot: reportedPropertySnapshot)
+                    reconcileGyroCapture()
+                }
                 startKeepAlive(session: session)
                 startEventDraining(session: session)
                 startLinkHealthMonitoring()
@@ -4563,9 +4619,19 @@ final class NativeAppModel {
             startDiscoveryLoop(resetResults: false)
             return
         }
+        relayJoinGeneration &+= 1
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
         recoveryEpisode.resetStorm()
+        if gyroCapture.isArmed || gyroDisconnectTask != nil {
+            Task { [weak self] in
+                guard let self else { return }
+                await prepareGyroForDisconnect()
+                disconnectCameraSession(resetConnection: true, gyroPreparationCompleted: true)
+                startDiscoveryLoop(resetResults: false)
+            }
+            return
+        }
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
@@ -4740,6 +4806,9 @@ final class NativeAppModel {
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
+        var debugHasDiscoveryLoop: Bool { discoveryLoopTask != nil }
+        var debugRelayClientCreationCount: Int { relayClientCreationCount }
+        var debugRelayJoinTaskCompleted: Bool { relayPendingJoinCount == 0 }
         /// Adopts an already-established SIMULATED transport session for hosted media tests.
         /// The real session supplies deletion authority; no connection flag bypasses admission.
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
@@ -4864,7 +4933,21 @@ final class NativeAppModel {
 
         func startDemoSession() {
             stopDiscoveryLoop()
+            if gyroDisconnectTask != nil || gyroCapture.isArmed {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await prepareGyroForDisconnect()
+                    disconnectCameraSession(
+                        resetConnection: false, gyroPreparationCompleted: true)
+                    finishStartDemoSession()
+                }
+                return
+            }
             disconnectCameraSession(resetConnection: false)
+            finishStartDemoSession()
+        }
+
+        private func finishStartDemoSession() {
             isDemoSession = true
             isMonitorPresented = true
             connectedIdentity = nil
@@ -4883,6 +4966,10 @@ final class NativeAppModel {
             discoveredCameras = []
             connectionMessage = "Demo UI session. No camera commands are being sent."
             connection = .connected
+            gyroCapture.receive(
+                .connected(.init(id: "demo-session", name: "SIMULATED demo camera")))
+            gyroCapture.receive(.videoMode(true))
+            reconcileGyroCapture()
             refreshLinkHealth()
         }
 
@@ -5635,15 +5722,20 @@ final class NativeAppModel {
         let write: PTPCameraPropertyWrite
         let admission: NikonCommandAdmission?
         let focusAFChange: FocusAFSettingChange?
+        let completion: ((Bool) -> Void)?
+        let gyroRestore: Bool?
         init(
             picker: CameraPicker, value: String, write: PTPCameraPropertyWrite,
-            admission: NikonCommandAdmission? = nil, focusAFChange: FocusAFSettingChange? = nil
+            admission: NikonCommandAdmission? = nil, focusAFChange: FocusAFSettingChange? = nil,
+            completion: ((Bool) -> Void)? = nil, gyroRestore: Bool? = nil
         ) {
             self.picker = picker
             self.value = value
             self.write = write
             self.admission = admission
             self.focusAFChange = focusAFChange
+            self.completion = completion
+            self.gyroRestore = gyroRestore
         }
     }
 
@@ -5660,10 +5752,30 @@ final class NativeAppModel {
     private func dropPendingCameraWrites(
         where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
     ) {
-        for pending in pendingCameraWrites where shouldDrop(pending) {
+        let dropped = pendingCameraWrites.filter(shouldDrop)
+        for pending in dropped {
             if let change = pending.focusAFChange { focusRack?.defersAFChange(change) }
+            pending.completion?(false)
         }
         pendingCameraWrites.removeAll(where: shouldDrop)
+    }
+
+    func writeGyroStabilization(_ writes: [PTPCameraPropertyWrite]) async -> Bool {
+        guard !isDemoSession, cameraSession != nil else { return false }
+        for write in writes {
+            let succeeded = await withCheckedContinuation { continuation in
+                enqueueCameraWrite(
+                    PendingCameraWrite(
+                        picker: .stabilization,
+                        value: write.property == .movieVibrationReduction
+                            ? "IBIS" : "Electronic VR",
+                        write: write, completion: { continuation.resume(returning: $0) },
+                        gyroRestore: gyroDisconnectTask != nil || !gyroCapture.enabled))
+                drainPendingWritesIfIdle()
+            }
+            guard succeeded else { return false }
+        }
+        return true
     }
 
     private struct FocusResetContext: Equatable {
@@ -6245,8 +6357,10 @@ final class NativeAppModel {
         stopDiscoveryLoop()
         // The open Media or Settings page stays, with its view state, over the cameras page
         // (A2-07); support and report links leave nothing behind.
+        await prepareGyroForDisconnect()
         disconnectCameraSession(
-            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss)
+            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss,
+            gyroPreparationCompleted: true)
         connection = .disconnected
         // The session is gone, so the return is owed even when the hop ended meanwhile.
         guard current() else { return left }
@@ -7406,9 +7520,25 @@ final class NativeAppModel {
         continuation?.resume(returning: accepted)
     }
 
+    private func prepareGyroForDisconnect() async {
+        if let task = gyroDisconnectTask {
+            await task.value
+            return
+        }
+        guard gyroCapture.isArmed else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.gyroCapture.prepareForDisconnect()
+        }
+        gyroDisconnectTask = task
+        await task.value
+        gyroDisconnectTask = nil
+    }
+
     private func disconnectCameraSession(
         resetConnection: Bool, preserveMonitorSurface: Bool = false,
-        cover: ShellModel.CoverRetention = .dismiss
+        cover: ShellModel.CoverRetention = .dismiss,
+        gyroPreparationCompleted: Bool = false
     ) {
         // A lent multicam member returns to its tile instead of closing; a recovery
         // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
@@ -7416,6 +7546,28 @@ final class NativeAppModel {
             returnToMulticam()
             return
         }
+        if !preserveMonitorSurface, !gyroPreparationCompleted {
+            if gyroDisconnectTask != nil { return }
+            if gyroCapture.isArmed {
+                let task = Task { [weak self] in
+                    guard let self else { return }
+                    await self.gyroCapture.prepareForDisconnect()
+                }
+                gyroDisconnectTask = task
+                Task { [weak self] in
+                    await task.value
+                    self?.gyroDisconnectTask = nil
+                    self?.disconnectCameraSession(
+                        resetConnection: resetConnection,
+                        preserveMonitorSurface: preserveMonitorSurface, cover: cover,
+                        gyroPreparationCompleted: true)
+                }
+                return
+            }
+        }
+        if isDemoSession { gyroCapture.receive(.disconnected) }
+        gyroCapture.detachAdapter()
+        nikonGyro.disconnected()
         let session = cameraSession
         let runtime = monitorRuntime
         if !preserveMonitorSurface, shell.monitor != nil { shell.close(cover) }
@@ -7709,7 +7861,7 @@ final class NativeAppModel {
         cameras.consent.retire(source: "native-connect")
         feedIncidentProducer?.end()
         feedIncidentProducer = nil
-        gyroCapture.stop(reason: .disconnected)
+        gyroCapture.setHostEligible(false)
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
         // publishing a session, so a handshake finishing after this clear can't resurrect state.
         connectionGeneration += 1
@@ -8227,7 +8379,7 @@ final class NativeAppModel {
     /// timecode rides the live-view frame header only — there is no PTP timecode property — so
     /// ending live view froze it (#271). Command uses `streamsHeaderOnly` instead.
     private var shouldPauseLiveFeed: Bool {
-        activePanelHidesLiveFeed && !gyroCapture.calibrationInProgress
+        activePanelHidesLiveFeed && gyroCapture.ring == nil && gyroCapture.setupSteps.isEmpty
     }
 
     /// Command mode (DISP 3): the dashboard hides the image but shows live timecode and record
@@ -8404,7 +8556,7 @@ final class NativeAppModel {
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
-                    gyroCapture.stop(reason: .interrupted)
+                    gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
                     applyCameraRecordState(isRecording: false, force: true)
                     let error =
                         event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
@@ -8444,7 +8596,9 @@ final class NativeAppModel {
         case .objectAdded, .captureComplete:
             handleBodyFiredCapture(session: session)
         case .movieRecordStarted, .movieRecordComplete, .movieRecordInterrupted:
-            if event.eventCode == .movieRecordInterrupted { gyroCapture.stop(reason: .interrupted) }
+            if event.eventCode == .movieRecordInterrupted {
+                gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
+            }
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
@@ -8510,7 +8664,7 @@ final class NativeAppModel {
     func enterBackground() {
         focusRack?.interrupt("App entered the background.")
         retireOperatorQuickPresentation()
-        gyroCapture.stop(reason: .backgrounded)
+        gyroCapture.appDidEnterBackground()
         AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
@@ -8617,22 +8771,14 @@ final class NativeAppModel {
 
     /// Publishes the integration pump's picture/header delivery. JPEG decoding and native
     /// scopes, relay, watch and display processing stay with their presentation owner.
-    private func consumeCameraFrame(
+    func consumeCameraFrame(
         _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
         session: NativeCameraSession, incident: NikonFeedIncidentProducer.Preview?
     ) async -> Bool {
         guard !Task.isCancelled, cameraSession === session else { return false }
         // Calibration needs the raw header at arrival, before decode or display smoothing.
-        reconcileGyroCapture(recording: frame.isRecording)
-        let cameraDown = frame.level.flatMap { level in
-            level.hasPitch
-                ? GyroCameraGravity.down(
-                    rollDegrees: PTPLevelAngles.signedDegrees(level.roll),
-                    pitchDegrees: PTPLevelAngles.signedDegrees(level.pitch)) : nil
-        }
-        gyroCapture.receiveCalibrationCamera(
-            cameraDown,
-            at: ProcessInfo.processInfo.systemUptime, sourceID: connectionGeneration)
+        nikonGyro.receive(frame: frame, at: ProcessInfo.processInfo.systemUptime)
+        reconcileGyroCapture()
         if delivery.headerOnly {
             liveViewFocus = frame.focus
             applyLiveViewHeaderState(frame)
@@ -9274,7 +9420,10 @@ final class NativeAppModel {
         isRecording recording: Bool, force: Bool = false, observeGyro: Bool = true
     ) {
         if recording { focusRack?.revokeAFSettingsWrite() }
-        if observeGyro { reconcileGyroCapture(recording: recording) }
+        if observeGyro {
+            gyroCapture.receive(.recording(recording, at: ProcessInfo.processInfo.systemUptime))
+            reconcileGyroCapture()
+        }
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
@@ -9306,7 +9455,9 @@ final class NativeAppModel {
     /// Single-flight and bound to the session: rapid picker taps extend the one running drain
     /// instead of stacking tasks on the transaction gate, and a drain never outlives its session.
     private func drainPendingWritesIfIdle() {
-        guard !isMonitorPresented, let session = cameraSession else { return }
+        guard let session = cameraSession,
+            !isMonitorPresented || pendingCameraWrites.contains(where: { $0.gyroRestore != nil })
+        else { return }
         guard pendingWriteDrainTask == nil else { return }
         pendingWriteDrainTask = Task { [weak self] in
             defer { self?.pendingWriteDrainTask = nil }
@@ -9320,6 +9471,13 @@ final class NativeAppModel {
     private func performNextPendingCameraWrite(session: NativeCameraSession) async -> Bool {
         guard !pendingCameraWrites.isEmpty else { return false }
         let pending = pendingCameraWrites.removeFirst()
+        var completed = false
+        func finish(_ succeeded: Bool) {
+            guard !completed else { return }
+            completed = true
+            pending.completion?(succeeded)
+        }
+        defer { finish(false) }
         let sourceGeneration = connectionGeneration
         guard cameraSession === session else { return true }
         let externalFocusWrite = pending.picker == .focus
@@ -9337,6 +9495,7 @@ final class NativeAppModel {
             || pending.write.property == .stillISOAutoControl
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
+        var confirmed = false
         do {
             let writeStarted = ContinuousClock.now
             if let change = pending.focusAFChange {
@@ -9394,6 +9553,7 @@ final class NativeAppModel {
                 return true
             }
             if let readback {
+                confirmed = pending.gyroRestore == nil || readback == pending.write.data
                 applyCameraRead(pending.write.property, readback)
             } else {
                 cameraPropertySnapshot = cameraPropertySnapshot.applying(
@@ -9448,7 +9608,12 @@ final class NativeAppModel {
             if !isShutterLockWrite {
                 lockedControls.remove(pending.picker)
             }
-            if isShutterLockWrite {
+            if let gyroRestore = pending.gyroRestore {
+                connectionMessage =
+                    !confirmed
+                    ? "Gyro: stabilization change was not confirmed"
+                    : gyroRestore ? "Gyro: IBIS restored" : "Gyro: IBIS OFF"
+            } else if isShutterLockWrite {
                 let unlocking = pending.write.data.first == 0
                 connectionMessage =
                     unlocking
@@ -9584,6 +9749,7 @@ final class NativeAppModel {
                         : "\(pending.picker.title) is locked on the camera (Control lock).")
             }
         }
+        finish(confirmed)
         return true
     }
 
@@ -9805,7 +9971,7 @@ final class NativeAppModel {
     }
 
     /// A value the camera returned, applied to the display snapshot and the reported one.
-    private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
+    func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
         let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
@@ -9833,6 +9999,7 @@ final class NativeAppModel {
             }
             focusRack?.observesAFSettings(reportedFocusAFSettings)
         }
+        nikonGyro.receive(snapshot: reportedPropertySnapshot)
         if property == .movieFileType {
             stabilizationFileTypeReadback = reportedPropertySnapshot.fileType
         }
@@ -12237,6 +12404,7 @@ final class NativeAppModel {
             // `updating` preserves every other field — crucially `mediaStatus`, so the top-bar MEDIA
             // cell keeps toggling capacity ↔ duration after a record start/stop.
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
+            gyroCapture.receive(.recording(start, at: ProcessInfo.processInfo.systemUptime))
             return
         }
         guard shell.control.session != nil, !pictureOnlyMonitor else {
@@ -14819,23 +14987,13 @@ struct NativeAppRoot: View {
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
-        // when the RED internet hop tears the camera session down mid-download.
-        .fullScreenCover(isPresented: redDownloadPresented) {
-            RedDownloadView { url in await model.importRedZip(from: url) }
-                .environment(model)
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { model.gyroCapture.logsPresented },
-                set: { model.gyroCapture.logsPresented = $0 }
-            )
-        ) { GyroLogsView(coordinator: model.gyroCapture) }
-        .sheet(
-            isPresented: Binding(
-                get: { model.gyroCapture.mountPresented },
-                set: { model.gyroCapture.mountPresented = $0 }
-            )
-        ) { GyroMountView(coordinator: model.gyroCapture) }
+        // when the RED internet hop tears the camera session down mid-download. The clip player
+        // mounts its own (`MediaPlayerView`).
+        .redDownloadCover(model, host: .root)
+        .gyroFeature(
+            model.gyroCapture,
+            haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled })
+        )
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
         .monitorAppStartup(startup, splashVisible: $showsLaunchSplash) { choice in
             ReliabilityConsentPrompt(onChoice: choice)
@@ -14912,13 +15070,6 @@ struct NativeAppRoot: View {
             await DemoHarness.applyLaunchEnvironment(to: model)
         }
     }
-    private var redDownloadPresented: Binding<Bool> {
-        Binding(
-            get: { model.isRedDownloadPresented },
-            set: { model.isRedDownloadPresented = $0 }
-        )
-    }
-
     private var bugReportPresented: Binding<Bool> {
         Binding(
             get: { model.isBugReportPresented },
@@ -15298,9 +15449,9 @@ extension NativeAppModel {
             let url = try? mediaClipStore.localURL(
                 cameraID: clip.cameraID, filename: clip.filename)
         else { return false }
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        let onDisk = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+        // One stat(2): playback asks this on every body pass (see MediaFileFacts).
+        guard let facts = MediaFileFacts.read(url.path, followingLinks: true) else { return false }
+        let onDisk = facts.size
         // A local-only legacy row can use the existing nonempty-file fact without claiming a
         // camera extent. Active unknown/sentinel objects cannot establish transfer completion.
         if clip.sizeBytes == 0 {
@@ -15684,24 +15835,23 @@ extension LiveHDRDisplay {
     static let app = LiveHDRDisplay()
 }
 extension NativeAppModel {
+    var gyroSettingsAvailable: Bool {
+        gyroCapture.isArmed || gyroCapture.canCalibrate || gyroCapture.enabled
+    }
+
     /// Keeps the opt-in local to the phone while recording authority remains with the camera.
     func setGyroCaptureEnabled(_ enabled: Bool) {
         gyroCapture.enabled = enabled
-        reconcileGyroCapture(recording: reportedRecording)
+        reconcileGyroCapture()
     }
 
-    private func reconcileGyroCapture(recording: Bool?) {
-        let eligible =
-            isConnected && cameraSession != nil && isMonitorPresented
-            && UIApplication.shared.applicationState == .active
-            && !isDemoSession && videoSource != .relay
-            && !multicam.isPresented && multicam.lentMember == nil
-            && GyroCaptureCoordinator.selectorArms(cameraPropertySnapshot.captureSelector)
-        gyroCapture.configure(
-            eligible: eligible,
-            cameraLabel: connectedIdentity?.model ?? "Nikon camera", recording: recording,
-            calibrationSourceID: eligible && videoSource == .cameraLiveView
-                ? connectionGeneration : nil)
+    func reconcileGyroCapture() {
+        nikonGyro.receive(snapshot: reportedPropertySnapshot)
+        gyroCapture.setHostEligible(
+            isConnected && (cameraSession != nil || isDemoSession) && isMonitorPresented
+                && UIApplication.shared.applicationState == .active
+                && (isDemoSession || videoSource != .relay)
+                && !multicam.isPresented && multicam.lentMember == nil)
     }
 }
 

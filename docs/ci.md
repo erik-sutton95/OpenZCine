@@ -11,9 +11,9 @@ platforms it touches; a skipped job counts as passed in the gate.
 
 | Job | Checks |
 | --- | --- |
-| Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
-| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; serial, no simulator clones; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main |
-| Android | `assembleDebug`, UI test compile, `test lint`, release native library and Wear checks |
+| Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, CI timing summary, `ios-test` option and Swift Android SDK install recovery tests, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
+| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; serial, no simulator clones; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main. The job summary lists per-suite times for the package and unit tests |
+| Android | three parallel jobs: JVM tests (`test`); debug build, lint and device-test compile (`assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest lint`); release closure (`:app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact`: release APK/AAB, R8 registrar check, native library and Wear pair checks). Together they schedule exactly the task graph of the former single Gradle step, and the gate fails if any of them fails. Each job summary lists per-task times (`scripts/ci-gradle-task-timing.gradle`), and the JVM tests job per-suite times |
 | Anonymous bug relay, Handbook | relay `npm run check`; static site build |
 
 No simulator UI suite, iPad oracle, portrait header layout matrix
@@ -33,6 +33,7 @@ next passing night.
 
 ## QUARANTINE
 
+A test that flakes twice, locally or in hosted CI, is quarantined the same day.
 Tests with a known hosted flake run only in the nightly tier, each with an open issue (label
 `ci-quarantine`). There are no accepted reds in pull requests: fix the failure, or quarantine
 the test here with its issue in the same pull request.
@@ -40,7 +41,8 @@ the test here with its issue in the same pull request.
 | Test | Job | Issue |
 | --- | --- | --- |
 | Shared conformance scenarios, iOS (never passed hosted; `simctl list` timeouts) | `conformance` | [#450](https://github.com/erik-sutton95/OpenZCine/issues/450), [OpenCine#111](https://github.com/erik-sutton95/OpenCine/issues/111) |
-| `NikonPlaybackOwnerAdoptionTests` and two `NikonMediaOpeningAdmissionTests` (burst cover, retired video close); hosted timing | `native`, step "Quarantined Nikon playback tests" (nightly, non-blocking) | [#467](https://github.com/erik-sutton95/OpenZCine/issues/467) |
+| `NikonPlaybackOwnerAdoptionTests` and two `NikonMediaOpeningAdmissionTests` (burst cover, retired video close); hosted timing | `native`, step "Quarantined hosted-timing tests" (nightly, non-blocking) | [#467](https://github.com/erik-sutton95/OpenZCine/issues/467) |
+| `LutPackDownloadLifetimeTests/testProgressCoverRetainsWebOwnerAndDeliversTheArchiveToImport`; hosted WebKit page process stalls before `about:blank` loads | `native`, step "Quarantined hosted-timing tests" (nightly, non-blocking) | [#531](https://github.com/erik-sutton95/OpenZCine/issues/531) |
 
 A test leaves quarantine after its issue is fixed and several consecutive nightlies pass.
 

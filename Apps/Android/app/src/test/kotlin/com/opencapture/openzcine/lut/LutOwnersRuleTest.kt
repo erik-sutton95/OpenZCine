@@ -36,4 +36,17 @@ class LutOwnersRuleTest {
             assertEquals(emptyList(), sourcesContaining(token).filter { it.startsWith("Red") }, token)
         }
     }
+
+    /**
+     * OpenZCine #521: Download from RED in the clip player did nothing (an empty action), while the
+     * monitor's own download screen sits under the full-screen player. Every LUT menu wires the
+     * download, and the player draws the download screen over itself.
+     */
+    @Test
+    fun everyLutMenuOpensTheRedDownloadOnItsOwnSurface() {
+        assertEquals(emptyList(), sourcesContaining("onOpenRedDownload = {}"), "an empty RED download action")
+        val playback = sources.resolve("com/opencapture/openzcine/media/MediaPlaybackScreen.kt").readText()
+        assertEquals(true, "RedLutDownloadScreen(" in playback, "the clip player must draw the RED download")
+        assertEquals(true, "redDownloadPresented = true" in playback, "the playback LUT menu must open it")
+    }
 }

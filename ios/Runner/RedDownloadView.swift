@@ -74,6 +74,74 @@ final class RedLutPackHop: MonitorLutPackInternetHop {
     }
 }
 
+/// Which surface presents the RED download. UIKit presents one cover at a time from each
+/// controller, so a cover requested at the app root while the clip player's own full-screen cover
+/// is up waits until the player closes. The LUT picker therefore names the surface it lives on
+/// and only that surface's mount presents.
+enum RedDownloadHost: Equatable, Sendable {
+    /// The app root: the monitor, its panels and the standalone covers. The cover survives the
+    /// monitor collapsing when the internet hop tears the camera session down mid-download.
+    case root
+    /// The clip player's cover: the download presents over the playing clip.
+    case playback
+}
+
+/// One ask for the RED download on a surface.
+struct RedDownloadRequest: Equatable, Identifiable {
+    let host: RedDownloadHost
+    let id = UUID()
+}
+
+extension View {
+    /// The RED download cover for one surface. It presents only while `model.redDownloadHost`
+    /// names `host`, and closing it clears that request and no other.
+    func redDownloadCover(
+        _ model: NativeAppModel, host: RedDownloadHost
+    ) -> some View {
+        redDownloadCover(model, host: host) {
+            RedDownloadView { url in await model.importRedZip(from: url) }
+        }
+    }
+
+    /// `content` stands in for the download screen in tests.
+    func redDownloadCover(
+        _ model: NativeAppModel, host: RedDownloadHost,
+        @ViewBuilder content: @escaping () -> some View
+    ) -> some View {
+        fullScreenCover(
+            item: Binding<RedDownloadRequest?>(
+                get: {
+                    model.redDownloadRequest?.host == host ? model.redDownloadRequest : nil
+                },
+                set: { _ in })
+        ) { request in
+            content()
+                .environment(model)
+                .modifier(RedDownloadDismissGuard(model: model, request: request))
+        }
+    }
+}
+
+/// SwiftUI can update the closing cover's captured request before its disappearance arrives.
+/// Lifecycle state keeps the request that actually appeared, so a late dismissal cannot clear a successor.
+private struct RedDownloadDismissGuard: ViewModifier {
+    let model: NativeAppModel
+    let request: RedDownloadRequest
+    @State private var presentedRequest: RedDownloadRequest?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                if presentedRequest == nil { presentedRequest = request }
+            }
+            .onDisappear {
+                if model.redDownloadRequest == presentedRequest {
+                    model.redDownloadRequest = nil
+                }
+            }
+    }
+}
+
 extension RedLUTDownloadAvailability {
     /// The policy verdict in the pack flow's terms.
     var packReadiness: MonitorLutPackReadiness {

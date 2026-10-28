@@ -54,24 +54,40 @@ toolchain_bin="$(dirname "$swift_real")"
 [[ -x "$toolchain_bin/llvm-objcopy" ]] || fail "llvm-objcopy is missing beside $swift_real"
 [[ -x "$toolchain_bin/llvm-objdump" ]] || fail "llvm-objdump is missing beside $swift_real"
 
-if ! "$swift_cmd" sdk list 2>/dev/null | grep -Fxq "$SDK_ID"; then
-  "$swift_cmd" sdk install "$SDK_URL" --checksum "$SDK_CHECKSUM"
-fi
-
-sdk_home=""
-candidates=(
-  "${HOME}/.swiftpm/swift-sdks/${SDK_ID}.artifactbundle/swift-android"
-  "${HOME}/.config/swiftpm/swift-sdks/${SDK_ID}.artifactbundle/swift-android"
+# Where `swift sdk install` may put the bundle, depending on the SwiftPM configuration path.
+bundles=(
+  "${HOME}/.swiftpm/swift-sdks/${SDK_ID}.artifactbundle"
+  "${HOME}/.config/swiftpm/swift-sdks/${SDK_ID}.artifactbundle"
 )
 if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-  candidates+=("${XDG_CONFIG_HOME}/swiftpm/swift-sdks/${SDK_ID}.artifactbundle/swift-android")
+  bundles+=("${XDG_CONFIG_HOME}/swiftpm/swift-sdks/${SDK_ID}.artifactbundle")
 fi
-for candidate in "${candidates[@]}"; do
-  if [[ -x "${candidate}/scripts/setup-android-sdk.sh" ]]; then
-    sdk_home="$candidate"
-    break
+sdk_home=""
+# Sets sdk_home to the installed SDK when SwiftPM lists it and its setup script is in place.
+find_sdk() {
+  sdk_home=""
+  "$swift_cmd" sdk list 2>/dev/null | grep -Fxq "$SDK_ID" || return 1
+  local bundle
+  for bundle in "${bundles[@]}"; do
+    if [[ -x "${bundle}/swift-android/scripts/setup-android-sdk.sh" ]]; then
+      sdk_home="${bundle}/swift-android"
+      return 0
+    fi
+  done
+  return 1
+}
+if ! find_sdk; then
+  # `swift sdk install` has crashed on a hosted runner after the download (signal 11 in
+  # swift-package, 2026-10-28). When an install fails and leaves no complete SDK, remove this
+  # SDK's partial bundle (a listed but incomplete one, or a directory that blocks a reinstall)
+  # and install once more.
+  if ! "$swift_cmd" sdk install "$SDK_URL" --checksum "$SDK_CHECKSUM" && ! find_sdk; then
+    echo "warning: swift sdk install failed; removing any partial $SDK_ID bundle and trying once more" >&2
+    rm -rf "${bundles[@]}"
+    "$swift_cmd" sdk install "$SDK_URL" --checksum "$SDK_CHECKSUM"
   fi
-done
+  find_sdk || true
+fi
 [[ -n "$sdk_home" ]] || fail "setup-android-sdk.sh is missing after installing $SDK_ID"
 
 : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must point at NDK 27}"

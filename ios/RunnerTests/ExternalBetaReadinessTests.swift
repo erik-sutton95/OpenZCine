@@ -19,6 +19,15 @@ struct ExternalBetaDiagnosticsTests {
         osVersion: "18.0"
     )
 
+    @Test("Packaged app declares why Wi-Fi network identification needs location access")
+    func locationPurposeString() throws {
+        let purpose = try #require(
+            Bundle.main.object(forInfoDictionaryKey: "NSLocationWhenInUseUsageDescription")
+                as? String)
+        #expect(purpose.contains("Wi-Fi"))
+        #expect(purpose.contains("Nikon camera"))
+    }
+
     @Test("Support destinations keep the account-backed feature form and the privacy policy")
     func supportDestinations() {
         #expect(SupportLinkCatalog.support.absoluteString == "https://openzcine.app/support/")

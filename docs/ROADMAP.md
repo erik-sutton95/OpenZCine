@@ -37,7 +37,7 @@ camera over PTP-IP and provides record control and live-view monitoring.
 - `PTPIPClient`: typed MTP operation send/receive with error mapping.
 - Stable `appGUID` API consumed by the shell from Keychain.
 - `MonitorLayoutPolicy`: layout logic for live-view overlay positioning.
-- Unit tests at ≥ 80 % line coverage in `Tests/OpenZCineCoreTests`.
+- Behavior tests in `Tests/OpenZCineCoreTests` (no line-coverage target; see `AGENTS.md`).
 
 **Key constraint:** No UIKit, SwiftUI, or platform imports. All network I/O via Network.framework
 abstracted behind a protocol so it is testable without a live camera.
@@ -374,5 +374,4 @@ The native-iOS milestone (Phases 1–3) is complete when:
 - A Nikon ZR connects, records, and streams live view from the production iOS app on a physical
   device.
 - `just native-check` passes with no failures.
-- Core line coverage ≥ 80 %.
 - No known crashes on iOS 17+ hardware.

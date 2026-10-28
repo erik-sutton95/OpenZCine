@@ -35,7 +35,6 @@ streams live view, and fits into their production workflow.
 | Camera connection time | < 3 s on local Wi-Fi | From tap "Connect" to confirmed ready state |
 | Record command round-trip | < 500 ms | Tap record → camera acknowledges REC state |
 | Live-view frame latency | < 500 ms | First frame visible after live-view activation |
-| Core unit-test coverage | ≥ 80 % line | `Sources/OpenZCineCore` measured by `just test` |
 | Crash-free sessions | ≥ 99 % | On supported iOS 17+ and Android 10+ hardware |
 | App package size | ≤ 100 MB | Per-platform release artifact before optional media |
 

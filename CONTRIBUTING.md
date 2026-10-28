@@ -36,8 +36,8 @@ committed to this repo**.
 - Branch off `main` (e.g. `feat/live-view`, `fix/usb-reconnect`, `chore/...`).
 - Make focused commits using **[Conventional Commits](https://www.conventionalcommits.org/)**:
   `feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `build:`, `test:`, `refactor:`.
-- Run `just check` before pushing. For native production changes to Swift/iOS code, run
-  `just native-check`.
+- Run `just check` before pushing. For native production changes to Swift/iOS code, run both in
+  one invocation, `just check native-check`, so the checks they share run once.
 - Open a pull request into `main`. The required check **CI gate** (the fast PR tier) must pass and
   the PR template must be filled in. The full suite runs nightly ([`docs/ci.md`](docs/ci.md)).
   CodeRabbit reviews are advisory: address every finding, but it never blocks a merge.

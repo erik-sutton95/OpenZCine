@@ -1,0 +1,69 @@
+// Records how long every task of a Gradle build took, for the CI job summary
+// (scripts/ci-test-timing.py gradle). CI applies it with --init-script; it writes nothing unless
+// CI_GRADLE_TASK_TIMING names the output file. One line per finished task, tab-separated:
+// task path, milliseconds, outcome. A shared build service receives the finish events, so the
+// listener holds no project state and the configuration cache stays usable.
+import javax.inject.Inject
+import org.gradle.api.provider.Property
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+import org.gradle.build.event.BuildEventsListenerRegistry
+import org.gradle.tooling.events.FinishEvent
+import org.gradle.tooling.events.OperationCompletionListener
+import org.gradle.tooling.events.task.TaskFailureResult
+import org.gradle.tooling.events.task.TaskFinishEvent
+import org.gradle.tooling.events.task.TaskSkippedResult
+
+abstract class CiTaskTimingService
+        implements BuildService<CiTaskTimingService.Params>, OperationCompletionListener {
+    interface Params extends BuildServiceParameters {
+        Property<String> getOutput()
+    }
+
+    @Override
+    void onFinish(FinishEvent event) {
+        if (!(event instanceof TaskFinishEvent)) {
+            return
+        }
+        def result = event.result
+        String outcome
+        if (result instanceof TaskFailureResult) {
+            outcome = 'FAILED'
+        } else if (result instanceof TaskSkippedResult) {
+            outcome = 'SKIPPED'
+        } else if (result.fromCache) {
+            // A task restored from the build cache also reports upToDate, so this check comes first.
+            outcome = 'FROM-CACHE'
+        } else if (result.upToDate) {
+            outcome = 'UP-TO-DATE'
+        } else {
+            outcome = 'EXECUTED'
+        }
+        String line = "${event.descriptor.taskPath}\t${result.endTime - result.startTime}\t${outcome}\n"
+        // Tasks finish on parallel workers; one append at a time keeps every line whole.
+        synchronized (CiTaskTimingService) {
+            new File(parameters.output.get()).append(line)
+        }
+    }
+}
+
+abstract class CiTaskTimingPlugin implements Plugin<Gradle> {
+    @Inject
+    abstract BuildEventsListenerRegistry getListeners()
+
+    @Override
+    void apply(Gradle gradle) {
+        String output = System.getenv('CI_GRADLE_TASK_TIMING')
+        // Init scripts also run for included builds; the root build's listener already receives
+        // every task of the build tree, so only it registers one.
+        if (!output || gradle.parent != null) {
+            return
+        }
+        def service = gradle.sharedServices.registerIfAbsent('ciTaskTiming', CiTaskTimingService) {
+            it.parameters.output.set(output)
+        }
+        listeners.onTaskCompletion(service)
+    }
+}
+
+apply plugin: CiTaskTimingPlugin

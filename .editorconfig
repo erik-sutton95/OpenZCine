@@ -29,3 +29,6 @@ trim_trailing_whitespace = false
 
 [*.{yml,yaml,json,jsonc}]
 indent_size = 2
+
+[*.py]
+indent_size = 4

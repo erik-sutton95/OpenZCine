@@ -79,10 +79,7 @@
 		DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000031B /* NikonCapturePopupParts.swift */; };
 		DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000021B /* NikonFocusMarks.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
-		3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */; };
-		074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */; };
-		DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */; };
-		A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */; };
+		GYR000000000000000000005 /* GyroAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = GYR000000000000000000006 /* GyroAdoptionTests.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
 		F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000002 /* ReliabilityDiagnostics.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
@@ -109,8 +106,6 @@
 		TEST00000000000000000120 /* BackgroundLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000121 /* BackgroundLifecycleTests.swift */; };
 		TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000105 /* ShellAdoptionTests.swift */; };
 		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
-		D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */; };
-		9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */; };
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
 		RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVID00000000000000000001 /* MonitorRelayVideo.swift */; };
@@ -133,6 +128,8 @@
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N02000000000000000000006 /* OpenCineCameraControls in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000005 /* OpenCineCameraControls */; };
+		GYR000000000000000000001 /* OpenCineGyro in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000002 /* OpenCineGyro */; };
+		GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000004 /* OpenCineGyroApple */; };
 		F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000022 /* OpenCineFrameIOApple */; };
 		F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000012 /* OpenCineAppKitApple */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
@@ -285,10 +282,7 @@
 		DZ105000000000000000031B /* NikonCapturePopupParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCapturePopupParts.swift; sourceTree = "<group>"; };
 		DZ105000000000000000021B /* NikonFocusMarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFocusMarks.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
-		3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneMotionDriver.swift; sourceTree = "<group>"; };
-		E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogsView.swift; sourceTree = "<group>"; };
-		0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStore.swift; sourceTree = "<group>"; };
-		36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureCoordinator.swift; sourceTree = "<group>"; };
+		GYR000000000000000000006 /* GyroAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroAdoptionTests.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
 		F2D000000000000000000002 /* ReliabilityDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityDiagnostics.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
@@ -314,8 +308,6 @@
 		TEST00000000000000000121 /* BackgroundLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundLifecycleTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000105 /* ShellAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellAdoptionTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
-		EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStoreTests.swift; sourceTree = "<group>"; };
-		5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
 		RVID00000000000000000001 /* MonitorRelayVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayVideo.swift; sourceTree = "<group>"; };
@@ -377,6 +369,8 @@
 				N01000000000000000000004 /* MonitorUI in Frameworks */,
 				N02000000000000000000004 /* OpenCineAppKit in Frameworks */,
 				N02000000000000000000006 /* OpenCineCameraControls in Frameworks */,
+				GYR000000000000000000001 /* OpenCineGyro in Frameworks */,
+				GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */,
 				F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */,
 				F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */,
 				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
@@ -445,8 +439,7 @@
 				TEST00000000000000000121 /* BackgroundLifecycleTests.swift */,
 				TEST00000000000000000105 /* ShellAdoptionTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
-				EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */,
-				5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */,
+				GYR000000000000000000006 /* GyroAdoptionTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */,
 				A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */,
@@ -536,10 +529,6 @@
 				F0C05AAB0000000000000014 /* FocusRackModel.swift */,
 				F0C05AAB0000000000000012 /* FocusRackView.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
-				3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */,
-				E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */,
-				0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */,
-				36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
 				F2D000000000000000000002 /* ReliabilityDiagnostics.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
@@ -647,6 +636,8 @@
 				N01000000000000000000003 /* MonitorUI */,
 				N02000000000000000000003 /* OpenCineAppKit */,
 				N02000000000000000000005 /* OpenCineCameraControls */,
+				GYR000000000000000000002 /* OpenCineGyro */,
+				GYR000000000000000000004 /* OpenCineGyroApple */,
 				F13D00000000000000000022 /* OpenCineFrameIOApple */,
 				F13D00000000000000000012 /* OpenCineAppKitApple */,
 				N01000000000000000000001 /* MonitorPresentation */,
@@ -849,8 +840,7 @@
 				TEST00000000000000000120 /* BackgroundLifecycleTests.swift in Sources */,
 				TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
-				D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */,
-				9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */,
+				GYR000000000000000000005 /* GyroAdoptionTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */,
 				A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */,
@@ -905,10 +895,6 @@
 				F0C05AAB0000000000000013 /* FocusRackModel.swift in Sources */,
 				F0C05AAB0000000000000011 /* FocusRackView.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
-				3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */,
-				074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */,
-				DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */,
-				A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
 				F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
@@ -1546,6 +1532,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineCameraControls;
+		};
+		GYR000000000000000000002 /* OpenCineGyro */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineGyro;
+		};
+		GYR000000000000000000004 /* OpenCineGyroApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineGyroApple;
 		};
 		F13D00000000000000000022 /* OpenCineFrameIOApple */ = {
 			isa = XCSwiftPackageProductDependency;
