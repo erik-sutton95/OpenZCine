@@ -11,7 +11,7 @@ Fixes
 
 - Live View stays smooth after connecting, warm restarts and Quality Bias changes, preserving camera readouts and timecode frames. Diagnostics distinguish incoming video, decoding and display interruptions.
 - Background recovery keeps your stills or video mode and no longer keeps the camera busy.
-- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it. A silent camera says it may be asleep instead of showing a connection error.
+- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it. A silent camera says it may be asleep instead of showing a connection error. A connect that never starts live view ends after about 40 s with Try again instead of spinning.
 - Take Over asks first, and the phone that loses the camera stops reconnecting. A refused camera Wi-Fi join offers Settings and an explicit retry; abandoned setup connections stop.
 - Exposure readouts are restored: Auto ISO shows its limit, camera-owned values are dimmed and locked, hold on SHUTTER toggles its lock, and Reading camera settings shows while live view starts.
 - Photo mode turns the LUT and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo and hold takes a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
