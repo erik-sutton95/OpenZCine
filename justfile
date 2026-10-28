@@ -15,7 +15,7 @@ setup:
 
 # ── Meta checks (run today; mirrored in CI) ─────────────────────────────────
 # Run every repository quality check.
-check: hygiene testflight-notes-check play-notes-check ci-timing-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
+check: hygiene testflight-notes-check play-notes-check ci-timing-test ios-test-script-test typos lint-md check-links check-editorconfig lint-actions secrets bug-relay-check check-demo-isolation check-vulkan-shaders check-gles-shaders swift-lint swift-test
 
 # Reject tracked proprietary, secret-bearing, generated, or machine-specific files.
 hygiene:
@@ -33,6 +33,10 @@ play-notes-check:
 # Test the CI job-summary timing tables (scripts/ci-test-timing.py) on recorded output shapes.
 ci-timing-test:
     python3 scripts/ci-test-timing-test.py
+
+# Test how scripts/ios-test.sh splits options between the build and the test run.
+ios-test-script-test:
+    ./scripts/ios-test-test.sh
 
 # Spell-check the repository.
 typos:
@@ -104,34 +108,11 @@ ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
 # Build the iOS app and its unit tests once for the first available iPhone simulator
-# (IOS_TEST_DEVICE_ID picks another), then run them there without rebuilding. Arguments go to both
-# xcodebuild calls: `just ios-test -only-testing:RunnerTests/SomeTests` builds once, runs one suite.
+# (IOS_TEST_DEVICE_ID picks another), then run them there without rebuilding. Extra xcodebuild
+# options are allowed: `just ios-test -only-testing:RunnerTests/SomeTests` builds once and runs
+# one suite (scripts/ios-test.sh says which options reach which call).
 ios-test *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    device_id="${IOS_TEST_DEVICE_ID:-}"
-    if [ -z "$device_id" ]; then
-        device_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && !found { print $2; found = 1 }')"
-    fi
-    if [ -z "$device_id" ]; then
-        echo "No available iPhone simulator found." >&2
-        exit 1
-    fi
-    destination="platform=iOS Simulator,id=$device_id"
-    build_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "$destination" {{args}} build-for-testing)
-    test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "$destination" {{args}})
-    if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
-        test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
-    fi
-    test_command+=(test-without-building)
-    build_and_test() { "${build_command[@]}" && "${test_command[@]}"; }
-    if [ -n "${IOS_TEST_LOG_PATH:-}" ]; then
-        build_and_test 2>&1 | tee "$IOS_TEST_LOG_PATH"
-    else
-        build_and_test
-    fi
+    ./scripts/ios-test.sh {{args}}
 
 # Build the watchOS companion app for the simulator.
 watch-build:

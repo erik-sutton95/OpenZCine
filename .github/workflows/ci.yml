@@ -70,6 +70,9 @@ jobs:
       - name: CI timing summaries
         run: python3 scripts/ci-test-timing-test.py
 
+      - name: iOS test recipe options
+        run: ./scripts/ios-test-test.sh
+
       - name: Spell check
         uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
 

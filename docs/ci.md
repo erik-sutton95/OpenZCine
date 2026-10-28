@@ -11,7 +11,7 @@ platforms it touches; a skipped job counts as passed in the gate.
 
 | Job | Checks |
 | --- | --- |
-| Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, CI timing summary tests, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
+| Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, CI timing summary and `ios-test` option tests, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
 | Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; serial, no simulator clones; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main. The job summary lists per-suite times for the package and unit tests |
 | Android | three parallel jobs: JVM tests (`test`); debug build, lint and device-test compile (`assembleDebug :app:assembleDebugAndroidTest :wear:assembleDebugAndroidTest lint`); release closure (`:app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact`: release APK/AAB, R8 registrar check, native library and Wear pair checks). Together they schedule exactly the task graph of the former single Gradle step, and the gate fails if any of them fails. Each job summary lists per-task times (`scripts/ci-gradle-task-timing.gradle`), and the JVM tests job per-suite times |
 | Anonymous bug relay, Handbook | relay `npm run check`; static site build |
