@@ -252,6 +252,8 @@ def main(argv: list[str]) -> int:
     elif command == "xcresult":
         for bundle in map(Path, inputs):
             if not bundle.exists():
+                # A step that never ran (the nightly-only quarantine run on a PR) leaves none.
+                print(f"### {bundle.name}\n\nNo result bundle: that run did not happen.\n")
                 continue
             raw = subprocess.run(
                 ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)],

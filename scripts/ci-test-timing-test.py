@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for scripts/ci-test-timing.py, on fixtures shaped like real CI output."""
 
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -133,6 +135,15 @@ class XcresultTests(unittest.TestCase):
         self.assertIn("| MediaTimecodeTests | 2 | 0 | 1 | 35.5 |", out)
         self.assertIn("| PeakingTests | 1 | 1 | 0 | 2.0 |", out)
         self.assertIn("| MediaTimecodeTests/testExport() | Passed | 35.4 |", out)
+
+    def test_missing_bundle_says_so(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing = Path(root, "Quarantined.xcresult")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(timing.main(["xcresult", str(missing)]), 0)
+        self.assertIn("### Quarantined.xcresult", output.getvalue())
+        self.assertIn("did not happen", output.getvalue())
 
     def test_empty_bundle_says_so(self):
         self.assertIn("No test cases", timing.xcresult("x.xcresult", {"testNodes": []}))
