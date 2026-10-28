@@ -182,34 +182,79 @@ import Testing
 
         // MARK: Characterisation
 
-        /// Records where the detector stands on real frames. The numbers are deliberately loose
-        /// bounds around today's behaviour, not targets — their job is to make the next change
-        /// state what it moved and in which direction.
-        @Test("The sweep is scored end to end, and the numbers are recorded")
+        /// The reviewed baseline: what the detector painted on the sweep at Medium on 2026-10-28,
+        /// measured identically on hosted macOS 26 and local macOS 27. Ink is a percentage of the
+        /// frame, fragmentation a percentage of painted pixels.
+        private static let sweepBaseline: [(frame: String, ink: Double, fragmentation: Double)] = [
+            ("zr-sweep-00", 0.000, 0.0),
+            ("zr-sweep-12", 0.013, 78.8),
+            ("zr-sweep-19", 2.309, 14.8),
+            ("zr-sweep-24", 0.032, 83.1),
+        ]
+
+        /// The same day's ink on best focus (frame 19) per sensitivity step.
+        private static let focusedInkBaseline: [(sensitivity: Peaking.Sensitivity, ink: Double)] =
+            [(.low, 0.524), (.medium, 2.309), (.high, 5.173)]
+
+        /// How far ink may move from the baseline, relative to it: a detector that paints twice
+        /// (or half) as much on any recorded frame fails.
+        private static let inkTolerance = 0.4
+
+        /// How far fragmentation may move, in percentage points.
+        private static let fragmentationTolerance = 10.0
+
+        /// A measured ink value is within ``inkTolerance`` of its baseline; a zero baseline stays
+        /// exactly zero, because a frame that painted nothing must not start painting.
+        private static func inkMatchesBaseline(_ measured: Double, _ recorded: Double) -> Bool {
+            recorded == 0 ? measured == 0 : abs(measured - recorded) <= recorded * inkTolerance
+        }
+
+        /// Keeps the detector where it was reviewed on real frames. The bounds are deliberately
+        /// loose around today's behaviour, not targets: their job is to make the next change state
+        /// what it moved and in which direction. A change that moves a number out of its band
+        /// re-measures (the report below is printed on every run), updates the tables above and
+        /// says in its pull request what moved and why.
+        @Test("The sweep stays within its reviewed baseline")
         func corpusBaseline() throws {
             var report: [String] = ["frame          ink     fragmented"]
-            for name in ["zr-sweep-00", "zr-sweep-12", "zr-sweep-19", "zr-sweep-24"] {
+            for (name, recordedInk, recordedFragmentation) in Self.sweepBaseline {
                 let frame = try Self.load(name)
                 let mask = Self.overlay(frame)
+                let ink = Self.ink(mask)
+                let fragmentation = Self.fragmentation(
+                    mask, width: frame.width, height: frame.height)
                 report.append(
-                    String(
-                        format: "%@   %6.3f%%      %4.1f%%",
-                        name, Self.ink(mask),
-                        Self.fragmentation(mask, width: frame.width, height: frame.height)))
+                    String(format: "%@   %6.3f%%      %4.1f%%", name, ink, fragmentation))
+                #expect(
+                    Self.inkMatchesBaseline(ink, recordedInk),
+                    "\(name) ink \(ink)% left the band around \(recordedInk)%")
+                #expect(
+                    abs(fragmentation - recordedFragmentation) <= Self.fragmentationTolerance,
+                    "\(name) fragmentation \(fragmentation)% left the band around \(recordedFragmentation)%"
+                )
             }
-            for step in Peaking.Sensitivity.allCases {
-                let frame = try Self.load("zr-sweep-19")
-                let quiet = try Self.load("zr-sweep-00")
+            let focused = try Self.load("zr-sweep-19")
+            let quiet = try Self.load("zr-sweep-00")
+            var focusedInks: [Double] = []
+            for (step, recordedInk) in Self.focusedInkBaseline {
+                let focusedInk = Self.ink(Self.overlay(focused, sensitivity: step))
+                let quietInk = Self.ink(Self.overlay(quiet, sensitivity: step))
                 report.append(
                     String(
                         format: "%-4@ gate %.5f  focused ink %6.3f%%  defocused ink %6.3f%%",
-                        step.rawValue as NSString, step.noiseGate,
-                        Self.ink(Self.overlay(frame, sensitivity: step)),
-                        Self.ink(Self.overlay(quiet, sensitivity: step))))
+                        step.rawValue as NSString, step.noiseGate, focusedInk, quietInk))
+                #expect(
+                    Self.inkMatchesBaseline(focusedInk, recordedInk),
+                    "\(step) focused ink \(focusedInk)% left the band around \(recordedInk)%")
+                #expect(quietInk == 0, "\(step) painted the fully defocused frame")
+                focusedInks.append(focusedInk)
             }
-            // Surfaces in the test log; `swift test` prints it on failure and with --verbose.
+            // Each step up paints more of the same focused frame.
+            #expect(focusedInks == focusedInks.sorted() && Set(focusedInks).count == 3)
+            // The baseline table covers every sensitivity the app offers.
+            #expect(Self.focusedInkBaseline.map(\.sensitivity) == Peaking.Sensitivity.allCases)
+            // Surfaces in the test log on every run, so a re-measure needs no extra tooling.
             print(report.joined(separator: "\n"))
-            #expect(report.count == 8)
         }
 
         /// The reported failure, as an assertion against the frame that shows it.
