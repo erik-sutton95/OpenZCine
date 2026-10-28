@@ -1159,6 +1159,12 @@ final class NativeAppModel {
         owner.onEditingWillBegin = { [weak self] in
             self?.focusRack?.interrupt("Monitor layout editing opened.")
         }
+        owner.onLockWillChange = { [weak self] locked in
+            if locked {
+                self?.focusRack?.cancelNativeTarget()
+                self?.focusRack?.revokeAFWrite()
+            }
+        }
         return owner
     }()
     var displayMode: MonitorDisplayMode { operatorSession.mode }
@@ -1166,13 +1172,7 @@ final class NativeAppModel {
     /// changes by accident on set, record included. It lasts one monitor lifetime.
     var interfaceLocked: Bool {
         get { operatorSession.locked }
-        set {
-            if newValue {
-                focusRack?.cancelNativeTarget()
-                focusRack?.revokeAFWrite()
-            }
-            operatorSession.locked = newValue
-        }
+        set { operatorSession.locked = newValue }
     }
     /// App-only lock on the live-view focus point (long-press the AF box). Stops a stray tap from
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
@@ -9496,6 +9496,7 @@ final class NativeAppModel {
         let isFocusModeWrite = pending.write.property == .movieFocusMode
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         var confirmed = false
+        var focusAFWriteSent = false
         do {
             let writeStarted = ContinuousClock.now
             if let change = pending.focusAFChange {
@@ -9522,6 +9523,7 @@ final class NativeAppModel {
                     return true
                 }
             }
+            focusAFWriteSent = true
             if let admission = pending.admission {
                 try await session.writeCameraProperty(pending.write, admission: admission)
             } else {
@@ -9644,7 +9646,7 @@ final class NativeAppModel {
                 } else {
                     focusRack?.failsAFChange(
                         change, message: "Camera AF setup failed: \(error.localizedDescription)")
-                    if error is FocusAFSettingsError { return true }
+                    if !focusAFWriteSent { return true }
                 }
             }
             if case NativeCameraSessionError.commandAuthorityExpired = error {

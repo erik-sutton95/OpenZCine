@@ -32,6 +32,9 @@ Target coordinates use the camera picture, so rotating or mirroring the monitor 
 them. A mode or lifecycle interruption cancels unsent work while retaining the saved targets.
 Each target explicitly shows **A set / B set** or **not set**. Go requires its saved target;
 directional transitions require both. Unavailable actions remain visible with a dimmed appearance.
+Locking the interface cancels unsent targets and revokes queued target commands. Unlocking does
+not restart them. Returning from Settings, Media, Command view or layout editing resumes AF
+settings service once the live monitor is eligible again; cancelled movements remain cancelled.
 Switching from Timed Rack to Native AF releases the app's focus-point lock so the picture can accept targets.
 If the point is locked again, **Unlock focus point** is available in the panel, even without an AF
 box. Unlocking does not select a target, move focus, or release the main interface lock.
@@ -60,6 +63,9 @@ restoration. Lens position is never restored. If recording or focus work is acti
 the panel and retains pending restoration until the camera is idle. Unknown recording/readiness
 or setting values do not permit a write. Errors are reported without an automatic retry loop.
 Disconnecting retires the pending restoration; it is never replayed on a replacement connection.
+Reopening during an in-flight restoration waits for that write to settle before preparing the
+selected focus mode again. A failed setup read reports a setup error without marking the camera's
+FOCUS control as locked.
 
 ## Set the marks
 

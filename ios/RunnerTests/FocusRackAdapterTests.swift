@@ -459,8 +459,8 @@ struct FocusRackAdapterTests {
         #expect(rack.nativeRack.lastSelectedMark == nil)
         #expect(model.liveViewFocus?.boxes.first?.centerX == 500)
         rack.selectNativeTarget(.b, delayed: true)
-        model.interfaceLocked = true
-        model.interfaceLocked = false
+        model.operatorSession.locked = true
+        model.operatorSession.locked = false
         #expect(rack.nativeRack.pendingRequest == nil)
         rack.selectNativeTarget(.a, delayed: true)
         model.focusPointLocked = true
@@ -629,7 +629,7 @@ struct FocusAFSettingsAdapterTests {
             await Task.yield()
         }
         #expect(await wire.targetHeld)
-        model.interfaceLocked = true
+        model.operatorSession.locked = true
         await wire.releaseTargetResponse()
         #expect(await service.value)
         #expect(rack.nativeRack.dispatchedRequest == nil)
@@ -673,14 +673,14 @@ struct FocusAFSettingsAdapterTests {
         model.debugSetNativeRecordPending(false)
         #expect(rack.allowsAutofocus)
         rack.selectNativeTarget(.a, delayed: false)
-        model.interfaceLocked = true
+        model.operatorSession.locked = true
         model.debugApplyNativeRecordingReadback(true)
         #expect(await model.debugServiceNativeFocusTarget())
         #expect(await wire.targetCommands.count == 2)
         #expect(rack.nativeRack.dispatchedRequest == nil)
         #expect(rack.nativeRack.lastSelectedMark == nil)
         #expect(rack.notice != nil)
-        model.interfaceLocked = false
+        model.operatorSession.locked = false
         model.debugSeedFocusAF(recording: true, result: .notFocused)
         rack.selectNativeTarget(.a, delayed: false)
         rack.recordingWillStop()
@@ -1108,8 +1108,10 @@ struct FocusAFSettingsAdapterTests {
         #expect(rack.nativeRack.dispatchedRequest?.mark == .b)
     }
 
-    @Test("A short AF pre-write read fails setup without inventing a camera control lock")
-    func shortAFPrewriteReadDoesNotLockFocusControl() async throws {
+    @Test(
+        "An invalid or throwing AF pre-write read fails setup without inventing a camera control lock",
+        arguments: [false, true])
+    func failedAFPrewriteReadDoesNotLockFocusControl(readThrows: Bool) async throws {
         let (model, native, wire, rack) = try await fixture()
         defer {
             model.debugAdoptEstablishedMediaSession(nil)
@@ -1119,7 +1121,11 @@ struct FocusAFSettingsAdapterTests {
         #expect(await model.debugServiceFocusAFSettings())
         let change = try #require(rack.afSettings.pending)
         let write = try #require(change.property.write(change.value))
-        await wire.shortNextRead(write.property)
+        if readThrows {
+            await wire.failNextRead(write.property)
+        } else {
+            await wire.shortNextRead(write.property)
+        }
         #expect(await model.debugServiceNextCameraWrite())
         #expect(await wire.writeCount == 0)
         #expect(rack.afSettingsFailure != nil)
@@ -1201,6 +1207,7 @@ private actor FocusAFQueueTransport: CameraTransport {
     private var readiness = PTPResponseCode.ok
     private var ignoreWrites = false
     private var shortRead: PTPPropertyCode?
+    private var failedRead: PTPPropertyCode?
     private var expiredWrite: PTPPropertyCode?
     private var holdRead = false
     private var readCompletion: CheckedContinuation<Void, Never>?
@@ -1229,6 +1236,7 @@ private actor FocusAFQueueTransport: CameraTransport {
     func setReadiness(_ value: PTPResponseCode) { readiness = value }
     func setIgnoreWrites(_ value: Bool) { ignoreWrites = value }
     func shortNextRead(_ property: PTPPropertyCode) { shortRead = property }
+    func failNextRead(_ property: PTPPropertyCode) { failedRead = property }
     func expireNextWrite(_ property: PTPPropertyCode) { expiredWrite = property }
     func holdNextTargetResponse() { holdTarget = true }
     func releaseTargetResponse() {
@@ -1279,6 +1287,12 @@ private actor FocusAFQueueTransport: CameraTransport {
                 dataPhase: phase, dataOut: output, deadline: deadline)
         }
         let property = parameters.first ?? 0
+        if failedRead?.rawValue == property,
+            operation == .getDevicePropValue || operation == .getDevicePropValueEx
+        {
+            failedRead = nil
+            throw CocoaError(.fileReadUnknown)
+        }
         if operation == .setDevicePropValue || operation == .setDevicePropValueEx {
             if expiredWrite?.rawValue == property {
                 expiredWrite = nil
