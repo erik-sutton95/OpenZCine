@@ -2712,6 +2712,9 @@ final class NativeAppModel {
     var mediaDownloadProgress: [String: Double] = [:]
     /// The one camera stream running per clip id; a second caller joins it.
     @ObservationIgnored private var mediaDownloadFlights: [String: MediaDownloadFlight] = [:]
+    /// Clip ids whose last camera stream ended because the camera stopped answering (the link
+    /// died mid-transfer), so delivery can say so instead of the generic connection advice.
+    @ObservationIgnored private(set) var mediaStreamsLostCamera: Set<String> = []
     /// Deletion progress while a batch delete runs — non-nil hides the per-item grid churn behind
     /// one progress bar, and the grid refreshes once when it clears.
     private var mediaDeletionProgressOverride: MonitorMediaDeletionProgress?
@@ -15215,6 +15218,7 @@ extension NativeAppModel {
         else { return }
         let flight = MediaDownloadFlight()
         mediaDownloadFlights[clip.id] = flight
+        mediaStreamsLostCamera.remove(clip.id)
         defer {
             if mediaDownloadFlights[clip.id] === flight { mediaDownloadFlights[clip.id] = nil }
             flight.finish()
@@ -15242,6 +15246,9 @@ extension NativeAppModel {
                 return
             }
             mediaDownloadProgress[clip.id] = nil
+            if NativeCameraSessionError.isLinkFailure(error) {
+                mediaStreamsLostCamera.insert(clip.id)
+            }
             mediaLibraryLogger.error(
                 "streamClip(\(clip.filename, privacy: .private(mask: .hash))) failed: \(error.localizedDescription, privacy: .private(mask: .hash))"
             )
