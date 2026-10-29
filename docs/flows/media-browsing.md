@@ -223,8 +223,10 @@ flowchart TD
 - **Status:** shipped
 - **Detail:** `startClipStream` → `streamClip`: resumes partial file at existing byte offset;
   `GetPartialObject` in **4 MiB** chunks; progress published on `mediaDownloadProgress` and
-  `clipBufferedFraction`. Single-flight per clip (`mediaDownloadInFlight`); concurrent callers
-  wait **50 ms** polls. Failure removes partial file. Thumbnails use separate single-worker queue
+  `clipBufferedFraction`. Single-flight per clip (`mediaDownloadFlights`); a concurrent caller
+  (Share, Download) joins the running stream and resumes the clip itself when that stream ended
+  short, such as a player stream cancelled on Back. Failure removes partial file. Thumbnails use
+  separate single-worker queue
   (not the data stream). Listing and streaming share one PTP data channel — sequential by design.
 - **Code:** `NativeAppRoot.streamClip`, `NativeCameraSession.getPartialObject` / `getThumb`,
   `MediaClipStore.openForStreaming`.
