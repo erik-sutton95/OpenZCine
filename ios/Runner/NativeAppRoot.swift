@@ -15149,12 +15149,18 @@ extension NativeAppModel {
         // (the player was closed and cancelled it) is resumed below from its partial bytes, so
         // Share or Download of that clip never fails on the cancelled stream (owner report
         // 2026-10-28).
+        // The clip's handle belongs to the camera session admitted now; a stream started after
+        // the wait must still use that session, never a replacement that reuses the handle.
+        let admitted = cameraSession
+        let generation = connectionGeneration
         while let running = mediaDownloadFlights[clip.id] {
             await running.wait()
             if Task.isCancelled { return }
         }
         if isClipDownloaded(clip) { return }
-        guard let session = cameraSession, let handle = clip.handle else { return }
+        guard let session = admitted, cameraSession === session,
+            connectionGeneration == generation, let handle = clip.handle
+        else { return }
         let flight = MediaDownloadFlight()
         mediaDownloadFlights[clip.id] = flight
         defer {

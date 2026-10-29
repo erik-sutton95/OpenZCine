@@ -106,6 +106,73 @@ import XCTest
         XCTAssertEqual(offsets, [0, 2, 2], "Share resumes at the player's partial bytes")
     }
 
+    /// A Share that joined the player's stream must not resume the clip on a camera session that
+    /// replaced the one it was admitted on: the old object handle would address another camera.
+    func testShareDoesNotResumeTheClipOnAReplacementCameraSession() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SIMULATED-delivery-replaced-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let clip = MediaClip(
+            cameraID: "SIMULATED", filename: "PLAYER.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 4, captureDate: "20261028T120000")
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        let camera = LargeTransferTransport(
+            operations: [.getPartialObject], chunks: [Data([1, 2]), Data([3, 4])], holdRead: true)
+        let session = try await NativeCameraSession.establish(
+            transport: camera, host: "usb:SIMULATED-share", cameraName: "SIMULATED",
+            requestPairing: false)
+        defer { session.close() }
+        let other = LargeTransferTransport(
+            operations: [.getPartialObject], chunks: [Data([9, 9]), Data([9, 9])], holdRead: true)
+        let replacement = try await NativeCameraSession.establish(
+            transport: other, host: "usb:SIMULATED-other", cameraName: "SIMULATED",
+            requestPairing: false)
+        defer { replacement.close() }
+        await camera.clear()
+        await other.clear()
+        let model = NativeAppModel(mediaClipStore: store)
+        model.debugAdoptEstablishedMediaSession(session)
+        model.connection = .connected
+        defer {
+            model.connection = .disconnected
+            model.debugAdoptEstablishedMediaSession(nil)
+        }
+        model.prepareMediaLibrary(rows: [clip], bucket: clip.cameraID, service: nil)
+        let url = try store.localURL(cameraID: clip.cameraID, filename: clip.filename)
+
+        let player = try XCTUnwrap(model.startClipStream(clip))
+        await camera.waitUntilReads(1)
+        await camera.release()
+        await camera.waitUntilReads(2)
+        model.cancelClipStream(player)
+        let capture = try XCTUnwrap(NikonMediaDeliveryCapture(model: model, clips: [clip]))
+        let started = NikonDeliveryFirstEvent()
+        let first = NikonDeliveryFirstEvent()
+        let share = Task {
+            started.fire("joined")
+            await capture.originals.acquire(clip)
+            first.fire("share ended")
+        }
+        _ = await started.wait()
+        model.debugAdoptEstablishedMediaSession(replacement)
+        Task {
+            await other.waitUntilReads(1)
+            first.fire("replacement camera read")
+        }
+        await camera.release()
+        await player.task.value
+        let event = await first.wait()
+        XCTAssertEqual(event, "share ended")
+        if event != "share ended" {
+            share.cancel()
+            await other.release()
+        }
+        await share.value
+        XCTAssertEqual(try Data(contentsOf: url), Data([1, 2]))
+        XCTAssertFalse(capture.originals.available(clip))
+    }
+
     func testCapturedCanonicalReplacementCannotBorrowTheSuccessorRecord() throws {
         try fixture { model, clip, url in
             let capture = try XCTUnwrap(NikonMediaDeliveryCapture(model: model, clips: [clip]))
