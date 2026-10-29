@@ -71,7 +71,10 @@ import os
                 guard action.sourceIsCurrent, let model else { return }
                 _ = await model.cacheClipFromCamera(clip)
             },
-            progress: { [self] clip in model?.mediaDownloadProgress[clip.id] })
+            progress: { [self] clip in model?.mediaDownloadProgress[clip.id] },
+            cameraStoppedResponding: { [self] clip in
+                model?.mediaStreamsLostCamera.contains(clip.id) == true
+            })
     }
     func update(_ clip: MediaClip, _ change: (inout MediaClip) -> Void) {
         guard isCurrent else { return }

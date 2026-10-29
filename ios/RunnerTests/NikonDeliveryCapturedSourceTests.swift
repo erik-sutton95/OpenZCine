@@ -106,6 +106,44 @@ import XCTest
         XCTAssertEqual(offsets, [0, 2, 2], "Share resumes at the player's partial bytes")
     }
 
+    /// Owner hardware report 2026-10-29: when the camera stops answering partway through the
+    /// clip, Share says the camera stopped responding; a camera that refuses the read does not.
+    func testShareSaysWhenTheCameraStoppedRespondingMidClip() async throws {
+        for failure in [LargeTransferTransport.ReadFailure.linkLost, .refused] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SIMULATED-delivery-stopped-\(UUID())", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = MediaClipStore(root: root)
+            let clip = MediaClip(
+                cameraID: "SIMULATED", filename: "STOPPED.MOV", handle: 7,
+                storageID: 65_537, sizeBytes: 4, captureDate: "20261029T120000")
+            store.upsertBatch([clip], cameraID: clip.cameraID)
+            let camera = LargeTransferTransport(
+                operations: [.getPartialObject], chunks: [Data([1, 2]), Data([3, 4])])
+            let session = try await NativeCameraSession.establish(
+                transport: camera, host: "usb:SIMULATED-stopped", cameraName: "SIMULATED",
+                requestPairing: false)
+            defer { session.close() }
+            await camera.failRead(2, failure)
+            let model = NativeAppModel(mediaClipStore: store)
+            model.debugAdoptEstablishedMediaSession(session)
+            model.connection = .connected
+            defer {
+                model.connection = .disconnected
+                model.debugAdoptEstablishedMediaSession(nil)
+            }
+            model.prepareMediaLibrary(rows: [clip], bucket: clip.cameraID, service: nil)
+
+            let capture = try XCTUnwrap(NikonMediaDeliveryCapture(model: model, clips: [clip]))
+            await capture.originals.acquire(clip)
+
+            XCTAssertFalse(capture.originals.available(clip))
+            XCTAssertEqual(
+                capture.originals.cameraStoppedResponding(clip), failure == .linkLost,
+                "\(failure)")
+        }
+    }
+
     /// A Share that joined the player's stream must not resume the clip on a camera session that
     /// replaced the one it was admitted on: the old object handle would address another camera.
     func testShareDoesNotResumeTheClipOnAReplacementCameraSession() async throws {

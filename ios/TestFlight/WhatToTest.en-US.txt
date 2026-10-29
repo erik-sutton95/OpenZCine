@@ -15,7 +15,7 @@ Fixes
 - Take Over asks first, and the phone that loses the camera stops reconnecting. A refused camera Wi-Fi join offers Settings and an explicit retry; abandoned setup connections stop.
 - Exposure readouts are restored: Auto ISO shows its limit, camera-owned values are dimmed and locked, hold on SHUTTER toggles its lock, and Reading camera settings shows while live view starts.
 - Photo mode turns the LUT and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo and hold takes a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
-- Media sharing treats photos as photos and finishes a clip's copy first, including a clip you left mid-download in the player. Playback stays paused after Share or app return. Download from RED opens over the clip player. The GYRO pill avoids screen lock, and focus pulls no longer leave tap-to-focus busy.
+- Media sharing treats photos as photos and finishes a clip's copy first, including a clip you left mid-download in the player; leaving the player no longer drops the camera on Wi-Fi, and a camera that stops answering is named. Playback stays paused after Share or app return. Download from RED opens over the clip player. The GYRO pill avoids screen lock, and focus pulls no longer leave tap-to-focus busy.
 - VoiceOver skips collapsed or covered controls and shutter labels describe the action. Setup asks for Local Network at its own step. The open landscape View Assist palette hides covered values.
 
 What to test
