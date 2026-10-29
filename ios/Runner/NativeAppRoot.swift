@@ -4936,6 +4936,16 @@ final class NativeAppModel {
                 .property(
                     .movieFileType,
                     PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data))
+            // The movie AF modes and the stills speeds a body enumerates, so their readouts
+            // press-drag over an advertised set as on a camera.
+            for (property, picker) in [
+                (PTPPropertyCode.movieFocusMode, CameraPicker.focus),
+                (.stillShutterSpeed, .stillShutter),
+            ] {
+                let options = picker.modes.first?.options ?? []
+                applyBootstrapObservation(
+                    .options(property, options.isEmpty ? picker.options : options))
+            }
             let driver = NikonQuickDemoDriver(model: self)
             let session = NikonCameraSession(driver: driver, serialNumber: "SIMULATED-quick")
             driver.session = session
@@ -13588,6 +13598,15 @@ final class NativeAppModel {
             return held
         }
         return family.depths.first
+    }
+
+    /// One release from the shared compact drum on a ladder value, written through the path the
+    /// picker's drawer writes (the tab the drag started on), while the monitor is in front.
+    func applyQuickLadder(_ identity: NikonLadderQuickIdentity, value: String) {
+        guard identity.snapshot.options.contains(value), isMonitorPresented,
+            !screenWakeSuppressedForBackground
+        else { return }
+        applyPicker(identity.picker, mode: identity.mode, value: value)
     }
 
     /// One release from the shared compact picker, bounded through the native safe-point queue.
