@@ -940,6 +940,9 @@ actor LargeTransferTransport: CameraTransport {
     private var readWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var entered: CheckedContinuation<Void, Never>?
     private var releaseRead: CheckedContinuation<Void, Never>?
+    /// How a scripted object read fails: the link dies, or the camera refuses it.
+    enum ReadFailure: Sendable { case linkLost, refused }
+    private var readFailures: [Int: ReadFailure] = [:]
     init(
         operations: [PTPOperationCode], chunks: [Data] = [],
         totalBytes: UInt64 = UInt64(UInt32.max) + 700, holdRead: Bool = false,
@@ -953,6 +956,8 @@ actor LargeTransferTransport: CameraTransport {
     }
     func clear() { calls = [] }
     func refuseNextWrite() { refuseWrite = true }
+    /// The `number`th object read (counting from 1) fails this way.
+    func failRead(_ number: Int, _ failure: ReadFailure) { readFailures[number] = failure }
     func executeTransaction(
         operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
         dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
@@ -985,6 +990,17 @@ actor LargeTransferTransport: CameraTransport {
             let ready = readWaiters.filter { $0.count <= readsEntered }
             readWaiters.removeAll { $0.count <= readsEntered }
             for waiter in ready { waiter.continuation.resume() }
+            switch readFailures.removeValue(forKey: readsEntered) {
+            case .linkLost: throw NativeCameraSessionError.connectionClosed
+            case .refused:
+                let refusal =
+                    ByteCoding.uint16LE(PTPResponseCode.deviceBusy.rawValue)
+                    + ByteCoding.uint32LE(transactionID ?? 1)
+                return PTPIPTransactionResult(
+                    operationResponse: try PTPOperationResponse(payloadBytes: refusal),
+                    data: Data())
+            case nil: break
+            }
             if holdRead {
                 readEntered = true
                 entered?.resume()
