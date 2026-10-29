@@ -3337,6 +3337,9 @@ final class NativeAppModel {
         connectionFailureDetail = ""
         connectionPhase = .joiningWiFi
         isConnectionProgressPresented = true
+        // A join that fails before it dials retries the way it always did; only a dial it makes
+        // records a target for Try again.
+        failedCardRetryTarget = nil
         connectionMessage = ConnectionProgressCopy.statusDetail(
             phase: .joiningWiFi,
             deviceName: deviceName,
@@ -3531,6 +3534,13 @@ final class NativeAppModel {
         return saved.host
     }
 
+    /// Whether a redialling loop's last dial is resolved: connected, or established and
+    /// preparing live view, which has its own bounded exit (the first frame, or the phase
+    /// watchdog failing the attempt with Try again). Redialling then tears the session down.
+    private var dialResolved: Bool {
+        isConnected || connection == .preparingLiveView
+    }
+
     /// Dials one known host through the single-flighted connect until it lands or attempts run
     /// out. Returns whether this loop resolved the card — connected, or handed off to the
     /// post-pairing wait; the last attempt's failure card stays up.
@@ -3539,6 +3549,7 @@ final class NativeAppModel {
         viaCameraAccessPointJoin: Bool = false
     ) async -> Bool {
         cameraHost = host
+        let clock = connectionHostClock
         for attempt in 1...maxAttempts {
             // `isConnectionProgressPresented` goes false when the operator taps Cancel/Close
             // on the card — stop retrying then, even though the .handshaking phase isn't one
@@ -3547,10 +3558,12 @@ final class NativeAppModel {
             connectToCamera(viaCameraAccessPointJoin: viaCameraAccessPointJoin)
             // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
             while isEstablishingConnection {
-                try? await Task.sleep(for: .milliseconds(200))
+                try? await clock.sleep(.milliseconds(200))
                 guard !Task.isCancelled else { return false }
             }
-            if isConnected { return true }
+            // Redialling over a session preparing live view tore it down, and the reconnect
+            // phase written below hid the stall from the live view budget.
+            if dialResolved { return true }
             // Pairing just handed the card to the "Confirm on camera" wait (the only thing that
             // arms this). Retrying over that hand-off is what overwrote the instruction before
             // the operator could read it and then redialled a body busy rebooting its access
@@ -3563,7 +3576,7 @@ final class NativeAppModel {
             connectionProgressShowsFailure = false
             connectionPhase = .discovering
             connectionMessage = "Reconnecting to \(deviceName)…"
-            try? await Task.sleep(for: .seconds(2))
+            try? await clock.sleep(.seconds(2))
         }
         return false
     }
@@ -3971,6 +3984,7 @@ final class NativeAppModel {
                 discoveredCamera: discoveredCamera,
                 setup: setup
             )
+            failedCardRetryTarget = .init(host: host, camera: discoveredCamera, setup: setup)
         }
 
         stopDiscoveryLoop()
@@ -4000,6 +4014,7 @@ final class NativeAppModel {
         }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
         let previousTeardown = sessionTeardownTask
+        let clock = connectionHostClock
         establishmentTask = Task { [weak self] in
             // Only this generation's owner may release the latch — a stale attempt finishing late
             // must not unlatch the attempt that replaced it.
@@ -4032,7 +4047,7 @@ final class NativeAppModel {
             // a cold first connect has nothing to wait for. [verify-on-HW: tune this settle to the
             // camera's real slot-release time.]
             if hadPriorSession {
-                try? await Task.sleep(for: .milliseconds(1200))
+                try? await clock.sleep(.milliseconds(1200))
             }
             guard self?.connectionGeneration == generation else { return }
             let store = NativeCameraConnectionStore.shared
@@ -4427,23 +4442,24 @@ final class NativeAppModel {
     /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
     private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
         connectionTimeoutTask?.cancel()
+        let clock = connectionHostClock
         connectionTimeoutTask = Task { [weak self] in
             var watchedPhase = self?.connectionPhase ?? .idle
-            var phaseStartedAt = ContinuousClock.now
+            var phaseStartedAt = clock.now()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await clock.sleep(.milliseconds(500))
                 guard !Task.isCancelled, let self, self.connectionGeneration == generation else {
                     return
                 }
                 let phase = self.connectionPhase
                 if phase != watchedPhase {
                     watchedPhase = phase
-                    phaseStartedAt = .now
+                    phaseStartedAt = clock.now()
                     continue
                 }
                 guard
                     let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
-                    ContinuousClock.now - phaseStartedAt >= .seconds(budget)
+                    clock.now() - phaseStartedAt >= .seconds(budget)
                 else { continue }
                 var message = CameraConnectionTimeout.timeoutMessage(
                     phase: phase, deviceName: self.connectionProgressDeviceName)
@@ -4471,6 +4487,15 @@ final class NativeAppModel {
         }
     }
 
+    /// The clock a connection attempt waits on: the phase watchdog's budgets and the reconnect
+    /// settle before a fresh Init.
+    private var connectionHostClock: HostClock {
+        #if DEBUG
+            if let connectionClock { return connectionClock }
+        #endif
+        return .live
+    }
+
     /// Ends the in-flight attempt with exactly the disposal an explicit cancel performs — stale
     /// transport, PTP session, sockets, tasks, queued writes and camera identity released, and the
     /// single-flight latch freed — then surfaces a retryable failure.
@@ -4482,7 +4507,10 @@ final class NativeAppModel {
         diagnostic: AppDiagnosticEvent,
         logReason: String
     ) {
-        guard isEstablishingConnection else { return }
+        // The connect task ends at `enterLiveView`, releasing the latch while the attempt is
+        // still preparing live view. That phase keeps its budget: without it a stall after the
+        // handshake left "Starting live view" up forever (hardware pass 2026-10-28).
+        guard isEstablishingConnection || connectionPhase == .preparingLiveView else { return }
         logConnection("attempt failed host=\(cameraHost) — \(logReason)")
         AppDiagnostics.shared.record(diagnostic)
         disconnectCameraSession(resetConnection: false)
@@ -4499,8 +4527,27 @@ final class NativeAppModel {
     /// backing out and tapping the camera again — without making them do it.
     func retryConnectionAttempt() {
         guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
-        connectToCamera(operatorRequested: true)
+        guard let target = failedCardRetryTarget else {
+            connectToCamera(operatorRequested: true)
+            return
+        }
+        // The camera and setup that failed, not whatever discovery selected since: the failure
+        // restarts discovery, which can move `cameraHost` to another body. The camera's current
+        // discovery entry keeps the held-by-another-device check up to date.
+        cameraHost = target.host
+        let camera = target.camera.map { failed in
+            discoveredCameras.first { $0.id == failed.id } ?? failed
+        }
+        connectToCamera(camera, setup: target.setup, operatorRequested: true)
     }
+
+    /// What the operator's latest connect dialled, so Try again repeats exactly that attempt.
+    private struct ConnectionRetryTarget {
+        let host: String
+        let camera: DiscoveredCamera?
+        let setup: PTPIPSavedCameraRecord?
+    }
+    @ObservationIgnored private var failedCardRetryTarget: ConnectionRetryTarget?
 
     private func startupConnectionMessage(
         for strategy: CameraConnectionStrategy,
@@ -4759,6 +4806,11 @@ final class NativeAppModel {
                 )? = nil
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
+
+        /// SIMULATED time for a connection attempt (the phase watchdog and the reconnect settle),
+        /// so a test crosses a phase budget or a retry without waiting in real time. `nil` keeps
+        /// the real clocks.
+        @ObservationIgnored var connectionClock: HostClock?
 
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
@@ -6145,7 +6197,7 @@ final class NativeAppModel {
                     while self.isEstablishingConnection, !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(200))
                     }
-                    if self.isConnected { return }
+                    if self.dialResolved { return }
                     // Give the ZR a moment to release its stale session before the next Init.
                     try? await Task.sleep(for: .seconds(2))
                 } else {
