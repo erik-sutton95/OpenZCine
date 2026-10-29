@@ -225,7 +225,11 @@ flowchart TD
   `GetPartialObject` in **4 MiB** chunks; progress published on `mediaDownloadProgress` and
   `clipBufferedFraction`. Single-flight per clip (`mediaDownloadFlights`); a concurrent caller
   (Share, Download) joins the running stream and resumes the clip itself when that stream ended
-  short, such as a player stream cancelled on Back. Failure removes partial file. Thumbnails use
+  short, such as a player stream cancelled on Back. Cancelling a stream lets its chunk in flight
+  finish on the PTP/IP transport, so Back never drops the camera session. A stream that ends
+  because the camera stopped answering marks the clip, and Share then says "The camera stopped
+  responding while caching" instead of the generic connection advice. Failure removes partial file.
+  Thumbnails use
   separate single-worker queue
   (not the data stream). Listing and streaming share one PTP data channel — sequential by design.
 - **Code:** `NativeAppRoot.streamClip`, `NativeCameraSession.getPartialObject` / `getThumb`,
