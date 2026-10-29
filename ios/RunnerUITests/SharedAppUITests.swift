@@ -1008,3 +1008,47 @@ final class GroupedStabilizationInputUITests: XCTestCase {
         add(receipt)
     }
 }
+
+/// SIMULATED owner hardware pass 2026-10-28: a photography value slides straight into a new
+/// value in one motion (press, drag, lift), as every readout does in the other apps.
+final class NikonPhotoQuickDragUITests: SharedAppUITestCase {
+    @MainActor
+    func testSIMULATEDPhotoValuesPressAndDragInOneMotion() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("SIMULATED quick staging requires a private simulator")
+        #endif
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment.merge(
+            [
+                "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+                "ZC_DEMO_GRAPHICAL_REVIEW": "1", "ZC_DEMO_PHOTO": "1",
+            ]
+        ) { _, value in value }
+        app.launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            for identifier in ["monitor.capture.stillISO", "monitor.capture.stillShutter"] {
+                let readout = app.buttons[identifier]
+                XCTAssertTrue(readout.waitForExistence(timeout: 20), identifier)
+                rotate(orientation, settling: readout)
+                let before = try XCTUnwrap(readout.value as? String)
+                let start = readout.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(
+                    forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: -120, dy: 0)))
+                let changed = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "value != %@", before), object: readout)
+                XCTAssertEqual(
+                    XCTWaiter.wait(for: [changed], timeout: 5), .completed,
+                    "\(identifier) must take the dragged value without a second touch")
+                XCTAssertFalse(
+                    app.buttons["monitor.capture.close"].exists,
+                    "A press-drag never leaves the drawer open")
+                capture("SIMULATED-photo-quick-drag-\(identifier)-\(orientation.rawValue)")
+            }
+        }
+    }
+}

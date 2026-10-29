@@ -3,7 +3,7 @@ New and changed
 - Camera setup, settings, View Assist and Media controls are closer to the other OpenCine apps. Cameras > Add setup offers USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
 - DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap a tile to change it; hold and drag to reorder.
 - Media and playback are much faster on large cards: listing, selection, transfer progress and controls stay responsive. With Full Resolution Caching on, a played clip keeps downloading after you close it and reads CACHED. Playback scopes update more evenly.
-- Readouts are clearer: tap storage for free space, percentage or estimated time; Photo SHOTS shows a short count. FPS reads LINK until the first picture, colour sits beside codec in landscape, and portrait uses a three-column grid.
+- Readouts are clearer: tap storage for free space, percentage or estimated time; Photo SHOTS shows a short count. FPS reads LINK until the first picture, colour sits beside codec in landscape, and portrait uses a three-column grid. Press any value and slide to change it, in Photo too.
 - Instant review reads the preview stored inside RAW photos, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
 - Experimental gyro logging adds guided ring calibration, IBIS and Electronic VR setup and restore, mount-move warnings and one shareable Gyroflow log per take.
 
