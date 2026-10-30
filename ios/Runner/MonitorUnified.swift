@@ -645,7 +645,8 @@ struct NikonMonitorShell: View {
             ?? FieldMonitorLayout(width: context.viewportWidth, height: context.viewportHeight)
         MonitorOperatorLiveSurface(
             host: model, control: model.shell.control, session: model.operatorSession,
-            layout: live, source: source, assists: Self.liveAssists(model), views: bodyViews(layout),
+            layout: live, source: source, assists: Self.liveAssists(model),
+            views: bodyViews(layout),
             portraitAspect: portraitAspect,
             picture: {
                 GeometryReader { picture in
