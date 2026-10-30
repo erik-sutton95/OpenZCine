@@ -432,18 +432,35 @@ struct MediaClipStore: @unchecked Sendable {
     /// portrait stills sideways. Once per library, removes the cached thumbnail of every camera
     /// still whose row has not learned its orientation (a learned row still turns its old
     /// thumbnail upright), so the grid fetches it again through the orientation-tagging read.
+    /// The library is marked done only after a complete pass: a bucket whose index cannot be read
+    /// or a thumbnail that could not be removed is tried again on the next launch.
     func retireUnorientedStillThumbnails() {
         let marker = root.appendingPathComponent(Self.orientedThumbnailsMarker)
         guard !fileManager.fileExists(atPath: marker.path) else { return }
+        var complete = true
         for bucket in allBucketIDs() where bucket != Self.localBucketID {
-            for clip in list(cameraID: bucket)
+            let indexed: [MediaClip]
+            do {
+                indexed = try observedIndex(cameraID: bucket)
+            } catch {
+                complete = false
+                continue
+            }
+            let names =
+                (try? fileManager.contentsOfDirectory(atPath: directory(for: bucket).path)) ?? []
+            for clip in reconciledRows(cameraID: bucket, indexed: indexed, diskNames: names).values
             where clip.mediaKind == .photo && clip.exifOrientation == nil {
-                guard let thumb = try? thumbURL(cameraID: bucket, filename: clip.filename) else {
-                    continue
+                guard let thumb = try? thumbURL(cameraID: bucket, filename: clip.filename),
+                    fileManager.fileExists(atPath: thumb.path)
+                else { continue }
+                do {
+                    try fileManager.removeItem(at: thumb)
+                } catch {
+                    if fileManager.fileExists(atPath: thumb.path) { complete = false }
                 }
-                try? fileManager.removeItem(at: thumb)
             }
         }
+        guard complete else { return }
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         _ = fileManager.createFile(atPath: marker.path, contents: Data())
     }

@@ -1194,4 +1194,29 @@ struct NikonUnorientedThumbnailRetirementTests {
         store.retireUnorientedStillThumbnails()
         #expect(store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
     }
+
+    @Test func aLibraryWhoseIndexCannotBeReadIsRetiredOnceItCanBe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let portrait = Self.row("_NZR2887.JPG")
+        MediaClipStore(root: root).upsertBatch([portrait], cameraID: Self.camera)
+        try MediaClipStore(root: root).saveThumbnail(
+            cameraID: Self.camera, filename: portrait.filename,
+            data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+        let index = root.appendingPathComponent(Self.camera).appendingPathComponent("index.json")
+        let readable = try Data(contentsOf: index)
+        try Data("{ not an index".utf8).write(to: index)
+
+        // Which cached thumbnails belong to stills is unknown, so nothing is decided yet.
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+
+        try readable.write(to: index)
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            !MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+    }
 }
