@@ -1,7 +1,6 @@
 package com.opencapture.openzcine.media
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -135,13 +134,11 @@ private class NikonStillPictureIO(
         val value = request.record.payload
         val bitmap = withContext(Dispatchers.IO) {
             if (!cameraTransferAvailable || !SwiftCore.isAvailable || connectionOwner == null || !request.isCurrent()) null
-            else NikonNative.sessionThumbnail(connectionOwner, value.clip.handle.toInt())?.let { jpeg ->
-                if (!request.isCurrent()) null else {
-                    val key = value.clip.libraryKey(value.bucket)
-                    val orientation = MediaExifOrientation.fromBytes(jpeg)?.also { MediaExifOrientation.learn(key, it) }
-                        ?: MediaExifOrientation.learned(key)
-                    BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.upright(orientation)
-                }
+            else NikonNative.sessionUprightThumbnail(connectionOwner, value.clip.handle.toInt(), value.clip.filename)?.let { jpeg ->
+                if (!request.isCurrent()) null else MonitorBitmapDecoder.decode(
+                    jpeg, MonitorBitmapDecoder.PAGE_EDGE,
+                    fallbackOrientation = MediaExifOrientation.learned(value.clip.libraryKey(value.bucket)),
+                )
             }
         }
         if (!request.isCurrent()) return null
@@ -213,7 +210,7 @@ private class NikonStillPictureIO(
                     val value = request.record.payload
                     val bitmap = withContext(Dispatchers.IO) {
                         val decoded = decodeCacheBitmap(entry)
-                        if (request.isCurrent()) MediaExifOrientation.fromFile(entry.finalPath)?.let {
+                        if (request.isCurrent()) MonitorBitmapDecoder.exifOrientation(entry.finalPath.toFile())?.let {
                             MediaExifOrientation.learn(value.clip.libraryKey(value.bucket), it)
                         }
                         decoded
@@ -250,5 +247,5 @@ private fun decodeCacheBitmap(entry: MediaCacheEntry): Bitmap? =
 
 private fun decodeBitmap(path: Path): Bitmap? {
     if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return null
-    return MonitorBitmapDecoder.decode(path.toFile(), MonitorBitmapDecoder.PAGE_EDGE)?.upright(MediaExifOrientation.fromFile(path))
+    return MonitorBitmapDecoder.decode(path.toFile(), MonitorBitmapDecoder.PAGE_EDGE)
 }

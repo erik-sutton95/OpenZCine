@@ -847,17 +847,13 @@ private fun ClipArtwork(
                             SwiftCore.isAvailable &&
                             connectionOwner != null
                     ) {
-                        NikonNative.sessionThumbnail(connectionOwner, clip.handle.toInt())?.let { jpeg ->
-                            // The body's thumb bytes may be EXIF-stripped — fall back to the
-                            // orientation this session learned from the object's full file.
-                            val key = clip.libraryKey(cameraID)
-                            val orientation =
-                                MediaExifOrientation.fromBytes(jpeg)
-                                    ?.also { MediaExifOrientation.learn(key, it) }
-                                    ?: MediaExifOrientation.learned(key)
-                            MonitorBitmapDecoder.decode(jpeg, MonitorBitmapDecoder.THUMBNAIL_EDGE)
-                                ?.upright(orientation)
-                                ?.asImageBitmap()
+                        // Tagged with the still's own orientation by the shared Nikon layer; one that
+                        // carries none falls back to what this session learned from the full file.
+                        NikonNative.sessionUprightThumbnail(connectionOwner, clip.handle.toInt(), clip.filename)?.let { jpeg ->
+                            MonitorBitmapDecoder.decode(
+                                jpeg, MonitorBitmapDecoder.THUMBNAIL_EDGE,
+                                fallbackOrientation = MediaExifOrientation.learned(clip.libraryKey(cameraID)),
+                            )?.asImageBitmap()
                         }
                     } else {
                         null
@@ -886,12 +882,9 @@ private fun cachedStillThumbnail(
             )
         }.getOrNull() ?: return null
     if (!java.nio.file.Files.isRegularFile(entry.finalPath, LinkOption.NOFOLLOW_LINKS)) return null
-    // The full file carries the orientation header: learn it for the object so the
-    // connected grid's (possibly EXIF-stripped) camera thumbs rotate too.
-    val orientation =
-        MediaExifOrientation.fromFile(entry.finalPath)?.also {
-            MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
-        }
-    return MonitorBitmapDecoder.decode(entry.finalPath.toFile(), MonitorBitmapDecoder.THUMBNAIL_EDGE)
-        ?.upright(orientation)?.asImageBitmap()
+    // The full file carries the orientation header: learn it for the object so the connected
+    // grid's camera thumbnails that carry none rotate too. The decoder turns the file itself.
+    val file = entry.finalPath.toFile()
+    MonitorBitmapDecoder.exifOrientation(file)?.let { MediaExifOrientation.learn(clip.libraryKey(cameraID), it) }
+    return MonitorBitmapDecoder.decode(file, MonitorBitmapDecoder.THUMBNAIL_EDGE)?.asImageBitmap()
 }
