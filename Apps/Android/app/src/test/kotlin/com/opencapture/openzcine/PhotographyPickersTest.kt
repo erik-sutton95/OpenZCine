@@ -86,16 +86,17 @@ class PhotographyPickersTest {
     }
 
     /**
-     * A landscape photo monitor shows exposure along the bottom and the shot's setup in the status
-     * row's trailing corner, so nine tiles no longer run off a compact phone (hardware pass
-     * 2026-10-30). Portrait and video keep every tile in the strip.
+     * A landscape photo monitor keeps the ridden values along the bottom and shows the scene's
+     * setup in the status row's trailing corner, so nine tiles no longer run off a compact phone
+     * (hardware pass 2026-10-30, grouping from the owner's review). Portrait and video keep every
+     * tile in the strip.
      */
     @Test
-    fun `landscape photo moves drive focus white balance and profile to the status corner`() {
+    fun `landscape photo moves mode drive metering and profile to the status corner`() {
         val tiles = settings()
         val (strip, corner) = com.opencapture.monitorui.MonitorStatusCorner.split(tiles, holdsSetup = true) { it.kind.captureGroup }
-        assertEquals(listOf("MODE", "ISO", "SHUTTER", "IRIS", "METER"), strip.map { it.label })
-        assertEquals(listOf("DRIVE", "FOCUS", "WB", "PROFILE"), corner.map { it.label })
+        assertEquals(listOf("ISO", "SHUTTER", "IRIS", "FOCUS", "WB"), strip.map { it.label })
+        assertEquals(listOf("MODE", "DRIVE", "METER", "PROFILE"), corner.map { it.label })
         val portrait = com.opencapture.monitorui.MonitorStatusCorner.holdsSetup(photo = true, portrait = true,
             statusShown = true, valuesShown = true)
         assertEquals(tiles, com.opencapture.monitorui.MonitorStatusCorner.split(tiles, portrait) { it.kind.captureGroup }.first)

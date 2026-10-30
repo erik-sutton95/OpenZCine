@@ -321,13 +321,14 @@ final class NikonPictureSourceSession: CameraSession {
 }
 
 extension CameraPicker {
-    /// What the value is for: drive, focus mode, white balance and Picture Control set the
-    /// camera up; the rest is exposure. A landscape photo monitor shows setup values in the status
-    /// row's trailing corner and keeps exposure along the bottom (OpenCine `MonitorStatusCorner`).
+    /// How often the value changes: shooting mode, drive, metering and Picture Control set the
+    /// scene up; ISO, shutter, aperture, white balance and focus are ridden. A landscape photo
+    /// monitor shows setup values in the status row's trailing corner and keeps the ridden values
+    /// along the bottom (OpenCine `MonitorStatusCorner`).
     var captureGroup: MonitorCaptureReadoutGroup {
         switch self {
-        case .stillDrive, .stillFocus, .whiteBalance, .stillPicture, .focus: .setup
-        default: .exposure
+        case .stillMode, .stillDrive, .stillMeter, .stillPicture: .setup
+        default: .ridden
         }
     }
 }
