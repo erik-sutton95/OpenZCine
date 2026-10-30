@@ -1145,3 +1145,97 @@ extension NikonMediaLibraryAdoptionTests {
         }
     }
 #endif
+
+/// REQ-MEDIA-THUMB-ORIENTATION: camera thumbnails now arrive tagged with their still's
+/// orientation. Ones cached earlier drew portrait stills sideways in the Media grid and stayed
+/// cached, so they are retired once and fetched again upright.
+@Suite("Camera thumbnails cached without their still's orientation")
+struct NikonUnorientedThumbnailRetirementTests {
+    private static let camera = "6002199"
+
+    private static func row(_ filename: String, orientation: Int? = nil) -> MediaClip {
+        var clip = MediaClip(
+            cameraID: camera, filename: filename, handle: 0x1001, storageID: 0x0001_0001,
+            sizeBytes: 5_000_000, captureDate: "20261025T111844")
+        clip.exifOrientation = orientation
+        return clip
+    }
+
+    @Test func aStillsOldThumbnailIsFetchedAgainOnceAndOthersAreKept() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let portrait = Self.row("_NZR2887.JPG")
+        let raw = Self.row("_NZR1697.NEF")
+        let learned = Self.row("_NZR2811.JPG", orientation: 8)
+        let clip = Self.row("C0001.MOV")
+        store.upsertBatch([portrait, raw, learned, clip], cameraID: Self.camera)
+        let local = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "IMG_0001.JPG", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261025T111844")
+        store.upsertBatch([local], cameraID: local.cameraID)
+        let thumbnail = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        for row in [portrait, raw, learned, clip, local] {
+            try store.saveThumbnail(cameraID: row.cameraID, filename: row.filename, data: thumbnail)
+        }
+
+        store.retireUnorientedStillThumbnails()
+
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: raw.filename))
+        // A row that learned its orientation still turns its old thumbnail upright.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: learned.filename))
+        // A clip's thumbnail has no orientation to gain; a local photo has no camera to ask.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: clip.filename))
+        #expect(store.hasThumbnail(cameraID: local.cameraID, filename: local.filename))
+
+        // Thumbnails fetched afterwards carry the orientation and are never retired again.
+        try store.saveThumbnail(cameraID: Self.camera, filename: portrait.filename, data: thumbnail)
+        store.retireUnorientedStillThumbnails()
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
+    }
+
+    @Test func aLibraryWhoseIndexCannotBeReadIsRetiredOnceItCanBe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let portrait = Self.row("_NZR2887.JPG")
+        MediaClipStore(root: root).upsertBatch([portrait], cameraID: Self.camera)
+        try MediaClipStore(root: root).saveThumbnail(
+            cameraID: Self.camera, filename: portrait.filename,
+            data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+        let index = root.appendingPathComponent(Self.camera).appendingPathComponent("index.json")
+        let readable = try Data(contentsOf: index)
+        try Data("{ not an index".utf8).write(to: index)
+
+        // Which cached thumbnails belong to stills is unknown, so nothing is decided yet.
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+
+        try readable.write(to: index)
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            !MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+    }
+}
+
+/// The staggered grid sizes a card from its row: a still's listed pixel size is the stored
+/// sensor frame, so a portrait still's card turns tall once its orientation is learned.
+@Suite("A media card's shape in the staggered grid")
+struct NikonMediaCardShapeTests {
+    @Test func aPortraitStillsCardTurnsTallOnceItsOrientationIsKnown() {
+        var still = MediaClip(
+            cameraID: "6002199", filename: "_NZR2887.JPG", handle: 0x1001,
+            storageID: 0x0001_0001, sizeBytes: 5_000_000, captureDate: "20261028T111844")
+        #expect(still.uprightAspectRatio == nil)
+        still.pixelWidth = 6048
+        still.pixelHeight = 4032
+        #expect(still.uprightAspectRatio == 1.5)
+        still.exifOrientation = 8
+        #expect(still.uprightAspectRatio == 4032.0 / 6048.0)
+        still.exifOrientation = 3
+        #expect(still.uprightAspectRatio == 1.5)
+    }
+}

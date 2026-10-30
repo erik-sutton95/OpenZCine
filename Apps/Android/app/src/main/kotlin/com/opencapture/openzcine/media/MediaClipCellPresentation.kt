@@ -1,8 +1,15 @@
 package com.opencapture.openzcine.media
 
 import com.opencapture.monitorui.MonitorClipValue
+import com.opencapture.monitorui.MonitorMediaMasonry
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
+
+/** Width over height as the grid shows it: the listed pixel size, turned for a still whose
+ * orientation this session has learned (from its tagged thumbnail or its full file). */
+internal fun mediaClipAspectRatio(value: NikonLibraryClip): Double? =
+    MonitorMediaMasonry.uprightAspect(value.clip.pixelWidth, value.clip.pixelHeight,
+        MediaExifOrientation.learned(value.clip.libraryKey(value.bucket)))
 
 /** Source facts only; cache bytes, command admission and rating writes stay with the host. */
 internal fun mediaClipCellPresentation(
