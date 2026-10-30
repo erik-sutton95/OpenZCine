@@ -1,4 +1,5 @@
 import Foundation
+import MonitorPresentation
 import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
@@ -242,6 +243,14 @@ extension MediaClip {
     /// during the shoot lands under the Favorites tab without a per-cell camera round-trip.
     var isFavorited: Bool {
         isFavorite || (starRating ?? 0) >= 1
+    }
+
+    /// Width over height as the grid shows it: the listed pixel size, turned for a still whose
+    /// orientation the row has learned (from its tagged thumbnail or its full file).
+    var uprightAspectRatio: Double? {
+        MonitorMediaMasonry.uprightAspect(
+            width: pixelWidth.map(Int.init), height: pixelHeight.map(Int.init),
+            exifOrientation: exifOrientation)
     }
 
     /// This clip as a burst-detection frame: capture identity plus a format/dimensions signature

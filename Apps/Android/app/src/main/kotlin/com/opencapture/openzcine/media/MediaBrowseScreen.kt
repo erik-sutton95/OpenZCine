@@ -605,6 +605,7 @@ internal fun MediaBrowseScreen(
                     }, dismiss = { deliveryPopup = null; exitSelection() }),
                 presentation = sourcePresentation,
                 sourceFilter = { action -> updateFilters(filters.applying(action, filterOptions)) },
+                aspectRatio = { record -> mediaClipAspectRatio(record.payload) },
                 cell = { record, cell -> mediaClipCellPresentation(record.payload.clip, record.payload.bucket,
                     record.favorite, projection.hasRawSibling(record.payload.clip, ::clipKey),
                     burstByRepresentative[clipKey(record.payload.clip)]?.count, cell.list, cell.selecting, cell.selected) },
@@ -850,6 +851,10 @@ private fun ClipArtwork(
                         // Tagged with the still's own orientation by the shared Nikon layer; one that
                         // carries none falls back to what this session learned from the full file.
                         NikonNative.sessionUprightThumbnail(connectionOwner, clip.handle.toInt(), clip.filename)?.let { jpeg ->
+                            // The tag answers the still's orientation, which also sizes its grid card.
+                            MonitorBitmapDecoder.exifOrientation(jpeg)?.let {
+                                MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
+                            }
                             MonitorBitmapDecoder.decode(
                                 jpeg, MonitorBitmapDecoder.THUMBNAIL_EDGE,
                                 fallbackOrientation = MediaExifOrientation.learned(clip.libraryKey(cameraID)),

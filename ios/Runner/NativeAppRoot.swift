@@ -15216,6 +15216,13 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
+                // The tag answers the still's orientation: the row keeps it, so the staggered
+                // grid sizes a portrait card tall from metadata on every later layout.
+                if let url = try? mediaClipStore.thumbURL(
+                    cameraID: clip.cameraID, filename: clip.filename)
+                {
+                    resolveEXIFOrientation(for: clip, at: url)
+                }
             } else {
                 thumblessClipIDs.insert(clip.id)
             }

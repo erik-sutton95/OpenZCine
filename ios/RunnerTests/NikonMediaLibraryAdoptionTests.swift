@@ -1220,3 +1220,22 @@ struct NikonUnorientedThumbnailRetirementTests {
                 cameraID: Self.camera, filename: portrait.filename))
     }
 }
+
+/// The staggered grid sizes a card from its row: a still's listed pixel size is the stored
+/// sensor frame, so a portrait still's card turns tall once its orientation is learned.
+@Suite("A media card's shape in the staggered grid")
+struct NikonMediaCardShapeTests {
+    @Test func aPortraitStillsCardTurnsTallOnceItsOrientationIsKnown() {
+        var still = MediaClip(
+            cameraID: "6002199", filename: "_NZR2887.JPG", handle: 0x1001,
+            storageID: 0x0001_0001, sizeBytes: 5_000_000, captureDate: "20261028T111844")
+        #expect(still.uprightAspectRatio == nil)
+        still.pixelWidth = 6048
+        still.pixelHeight = 4032
+        #expect(still.uprightAspectRatio == 1.5)
+        still.exifOrientation = 8
+        #expect(still.uprightAspectRatio == 4032.0 / 6048.0)
+        still.exifOrientation = 3
+        #expect(still.uprightAspectRatio == 1.5)
+    }
+}

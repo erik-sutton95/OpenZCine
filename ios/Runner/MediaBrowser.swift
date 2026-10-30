@@ -161,7 +161,9 @@ struct MediaBrowserView: View {
                         model.mediaCellItem(
                             record.payload, list: context.list, selecting: context.selecting,
                             duration: context.duration, projection: projection)
-                    }, begin: begin, refresh: model.refreshCameraMediaInventory,
+                    },
+                    aspectRatio: { record in record.payload.uprightAspectRatio }, begin: begin,
+                    refresh: model.refreshCameraMediaInventory,
                     close: model.dismissMediaLibrary, open: open,
                     share: { records, token in
                         guard library.isCurrent(token),

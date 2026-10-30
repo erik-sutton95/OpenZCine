@@ -109,7 +109,7 @@ flowchart TD
 ### MEDIA-05 — Clip grid / list
 
 - **Status:** shipped
-- **Screen:** Lazy grid (S/M/L density) or list rows; per-cell thumbnail, filename, favorite star;
+- **Screen:** Staggered lazy grid (S/M/L density) or list rows; per-cell thumbnail, filename, favorite star;
   cache ring overlay when streaming or partially cached. Header: FILTER + SORT pills; optional
   “CACHING filename N%” bar for the active stream.
 - **Code:** `MediaBrowser.swift` (`MediaClipCell`, `MediaClipListRow`, `MediaCellImageLoader`),
@@ -122,7 +122,11 @@ flowchart TD
   queues PTP `GetThumb` with **max 48** queued fetches (drops oldest on fast scroll). A JPEG or RAW
   still's thumbnail is tagged with the still's EXIF orientation from one 8 KB head read
   (OpenCine `NikonThumbnailOrientation`), so portrait stills draw upright in the grid, list, strip
-  and viewer preview; thumbnails cached before that are retired once at launch. Cells decode
+  and viewer preview; thumbnails cached before that are retired once at launch. The grid is
+  staggered (OpenCine `MonitorMediaMasonry`): each card goes, in sort order, into the shortest
+  column, sized by the picture shape the row knows (listed pixel size, turned once the still's
+  orientation is learned from its tagged thumbnail), so loading thumbnails never moves a card.
+  Cells decode
   downsampled stills off the main actor. Long-press (**0.4 s**) enters selection; horizontal drag in
   selection mode sweep-selects (Photos-style, no edge auto-scroll).
 - 📝 Notes:
