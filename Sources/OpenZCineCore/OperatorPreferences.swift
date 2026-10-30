@@ -63,8 +63,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         }
     }
 
-    /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
-    /// portrait-fit) and subject to the portrait-fit 2-scope display cap.
+    /// Scope-type tools: rendered as floating panels in landscape and in portrait fit and fill.
     public static let scopeTools: [MonitorAssistTool] = [
         .waveform, .parade, .histogram, .vectorscope, .trafficLights,
     ]
@@ -459,7 +458,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// Which aspect the portrait feed renders at (operator pinch, persisted).
     public var portraitFeedAspect: PortraitFeedAspect
     /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
-    /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
+    /// newest activation. Kept for saved documents; no layout reads it now that every scope floats.
     public var scopeActivationOrder: [MonitorAssistTool]
     /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
     public var cleanChrome: DisplayChromeVisibility
@@ -531,12 +530,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         guard MonitorAssistTool.scopeTools.contains(tool) else { return }
         scopeActivationOrder.removeAll { $0 == tool }
         if on { scopeActivationOrder.append(tool) }
-    }
-
-    /// First two eligible active scopes in the common canonical order. Remaining selections
-    /// stay active and return in fill or landscape; stored activation history does not choose fit.
-    public func displayedFitScopes(on: Set<MonitorAssistTool>) -> [MonitorAssistTool] {
-        Array(MonitorAssistTool.scopeTools.filter { on.contains($0) }.prefix(2))
     }
 
     private enum CodingKeys: String, CodingKey {

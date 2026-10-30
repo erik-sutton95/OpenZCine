@@ -145,10 +145,6 @@ private val AndroidThermalTier.scopeMultiplier: Double
         AndroidThermalTier.CRITICAL -> 4
     })
 
-/** First two eligible selections, without changing the active set or floating-scope order. */
-fun portraitDisplayedScopes(selected: Set<ScopeKind>): List<ScopeKind> =
-    ScopeKind.canonical.filter(selected::contains).take(2)
-
 /** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
 fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
     val width = min(frame.width, bounds.width)
@@ -272,19 +268,6 @@ private fun rememberScopeVectorLut(
  */
 @Composable
 internal fun rememberNikonLiveScopeBundles(
-    selectedScopes: Set<ScopeKind>, portraitScopes: List<ScopeKind>, assist: MonitorAssistState,
-    cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
-    thermalTier: AndroidThermalTier, source: LiveFrameSource, isPortrait: Boolean,
-    portraitFloating: Boolean, scopeZone: MonitorRect?,
-): Flow<ScopeAssistBundle>? {
-    val displayed = displayedScopeKinds(selectedScopes, portraitScopes, isPortrait, portraitFloating)
-    if (displayed.isEmpty() || (isPortrait && !portraitFloating && scopeZone == null)) return null
-    return rememberNikonLiveScopeBundles(displayed.toSet(), assist, cameraInput, lutSelection,
-        lutLibrary, thermalTier, source)
-}
-
-@Composable
-internal fun rememberNikonLiveScopeBundles(
     selectedScopes: Set<ScopeKind>, assist: MonitorAssistState,
     cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
     thermalTier: AndroidThermalTier, source: LiveFrameSource,
@@ -330,19 +313,6 @@ internal fun rememberNikonPlaybackScopeConfiguration(
     return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist, mapping, vector,
         scopePeriodNanos(selected.size, thermalTier)), look)
 }
-
-/** Resolves stacked portrait-fit scopes versus uncapped floating fill/landscape scopes. */
-internal fun displayedScopeKinds(
-    selectedScopes: Set<ScopeKind>,
-    portraitScopes: List<ScopeKind>,
-    isPortrait: Boolean,
-    portraitFloating: Boolean,
-): List<ScopeKind> =
-    if (isPortrait && !portraitFloating) {
-        portraitScopes.filter(selectedScopes::contains)
-    } else {
-        ScopeKind.canonical.filter(selectedScopes::contains)
-    }
 
 /**
  * Absolute-schedule live sampler: never gates by source-frame cadence, so it
