@@ -14592,6 +14592,15 @@ struct NativeAppRoot: View {
         .statusBarHidden(true)
         .monitorBrowserHandoffReturn(model.browserHandoff)
         .task {
+            // Thumbnails cached before they carried their still's orientation draw portrait
+            // stills sideways: retire them once, off the main actor, so the grid fetches them
+            // again upright.
+            let store = model.mediaClipStore
+            await Task.detached(priority: .utility) {
+                store.retireUnorientedStillThumbnails()
+            }.value
+        }
+        .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
             _ = model.shell
@@ -15197,7 +15206,9 @@ extension NativeAppModel {
         guard !thumblessClipIDs.contains(clip.id) else { return }
         guard !mediaClipStore.hasThumbnail(cameraID: clip.cameraID, filename: clip.filename)
         else { return }
-        if let data = try? await session.getThumb(handle: handle) {
+        // The shared Nikon layer tags a still's thumbnail with the still's own orientation (one
+        // small head read), so the cached file draws upright in every cell, strip and preview.
+        if let data = try? await session.getUprightThumb(handle: handle, filename: clip.filename) {
             // Validate before caching: the body occasionally returns truncated/garbage thumb
             // bytes (seen on-device as repeated ImageIO 'JPEG err=7' spam); caching them would
             // poison the cell decode on every realisation. Invalid data is remembered in-memory
@@ -15205,13 +15216,6 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
-                // A thumb that DOES carry EXIF answers the orientation for free — grid cells
-                // fall back to this row value when a later decode meets stripped bytes.
-                if clip.exifOrientation == nil,
-                    let orientation = MediaCellImageLoader.exifOrientation(in: data)
-                {
-                    cacheEXIFOrientation(orientation, for: clip)
-                }
             } else {
                 thumblessClipIDs.insert(clip.id)
             }

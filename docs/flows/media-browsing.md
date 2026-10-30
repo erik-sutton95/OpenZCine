@@ -119,7 +119,10 @@ flowchart TD
   category tab (All / Videos / Photos / Favorites); format chips (MOV/MP4 for video, JPEG/HEIF/NEF
   for stills); resolution buckets (video) or L/M/S size (stills); date window; storage slot. Sort
   cycles newest → oldest → name (persisted). Thumbnails: `ensureThumbnail`
-  queues PTP `GetThumb` with **max 48** queued fetches (drops oldest on fast scroll). Cells decode
+  queues PTP `GetThumb` with **max 48** queued fetches (drops oldest on fast scroll). A JPEG or RAW
+  still's thumbnail is tagged with the still's EXIF orientation from one 8 KB head read
+  (OpenCine `NikonThumbnailOrientation`), so portrait stills draw upright in the grid, list, strip
+  and viewer preview; thumbnails cached before that are retired once at launch. Cells decode
   downsampled stills off the main actor. Long-press (**0.4 s**) enters selection; horizontal drag in
   selection mode sweep-selects (Photos-style, no edge auto-scroll).
 - 📝 Notes:
