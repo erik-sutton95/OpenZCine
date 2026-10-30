@@ -161,7 +161,10 @@ struct MediaBrowserView: View {
                                 ? record.payload.sizeBytes : nil,
                             durationSeconds: nil, dateKey: nil, colorLabel: nil,
                             progress: model.isClipStreaming(record.payload)
-                                ? model.mediaDownloadProgress[record.payload.id] : nil)
+                                ? model.mediaDownloadProgress[record.payload.id] : nil,
+                            // Every running camera stream has a reading (the player's, the
+                            // gallery's Download, a Share), and none outlives its stream.
+                            transferRate: model.mediaDownloadRates.rate(record.payload.id))
                     },
                     cell: { record, context in
                         model.mediaCellItem(

@@ -181,6 +181,7 @@ internal fun MediaPlaybackScreen(
                 }
                 val item = (captured?.preparation as? MediaTransferPreparation.Ready)?.entry
                 MonitorPlaybackSourceValues(progress = item?.progress,
+                    transferRate = item?.transferRate()?.label,
                     colorLabel = record.asset.colorLabel,
                     transfer = picture?.transfer, clipByte = picture?.clipByte,
                     clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS,

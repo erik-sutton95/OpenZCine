@@ -214,7 +214,8 @@ struct NikonPlaybackTailPresentation {
             transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
             metadata: rows,
             bufferedThroughSeconds: presentation.bufferedThroughSeconds(
-                record: record, owner: owner))
+                record: record, owner: owner),
+            transferRate: model.mediaDownloadRates.rate(clip.id)?.label)
     }
 
     /// The share popup's request: captured while this item and its camera source are current.

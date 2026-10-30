@@ -234,6 +234,7 @@ internal class NikonDeliveryOriginals(
             }
         },
         progress = { resolved[it]?.progress },
+        rate = { resolved[it]?.transferRate() },
     )
     fun workItem(item: MediaDeliverySelection): MediaDeliveryWorkItem? = resolved[item]?.let {
         if (it.state == MediaCacheState.COMPLETE) MediaDeliveryWorkItem(item.cameraID, item.clip, it) else null
