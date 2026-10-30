@@ -161,7 +161,9 @@ struct MediaBrowserView: View {
                                 ? record.payload.sizeBytes : nil,
                             durationSeconds: nil, dateKey: nil, colorLabel: nil,
                             progress: model.isClipStreaming(record.payload)
-                                ? model.mediaDownloadProgress[record.payload.id] : nil)
+                                ? model.mediaDownloadProgress[record.payload.id] : nil,
+                            transferRate: model.isClipStreaming(record.payload)
+                                ? model.mediaDownloadRates.rate(record.payload.id) : nil)
                     },
                     cell: { record, context in
                         model.mediaCellItem(

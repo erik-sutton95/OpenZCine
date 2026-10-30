@@ -2710,6 +2710,9 @@ final class NativeAppModel {
     }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
+    /// Per-clip download speed while a clip streams from the camera (OpenCine's one rate source,
+    /// the same the shared library feeds for its own transfers).
+    @ObservationIgnored let mediaDownloadRates = MonitorTransferRates<String>()
     /// The one camera stream running per clip id; a second caller joins it.
     @ObservationIgnored private var mediaDownloadFlights: [String: MediaDownloadFlight] = [:]
     /// Clip ids whose last camera stream ended because the camera stopped answering (the link
@@ -15240,6 +15243,7 @@ extension NativeAppModel {
         mediaStreamsLostCamera.remove(clip.id)
         defer {
             if mediaDownloadFlights[clip.id] === flight { mediaDownloadFlights[clip.id] = nil }
+            mediaDownloadRates.end(clip.id)
             flight.finish()
         }
         let bucket = clip.cameraID
@@ -15250,6 +15254,8 @@ extension NativeAppModel {
                 cameraID: bucket, filename: clip.filename,
                 onProgress: { offset in
                     mediaDownloadProgress[clip.id] = Double(offset) / Double(total)
+                    // The first report is the resumed offset: the reading starts from it.
+                    mediaDownloadRates.record(clip.id, totalBytes: offset)
                 })
             if Task.isCancelled {
                 mediaDownloadProgress[clip.id] = nil
