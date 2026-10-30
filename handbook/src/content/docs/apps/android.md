@@ -159,4 +159,4 @@ with plain-language tester notes. Maintainer setup:
 10 and newer is attached to
 [GitHub Releases](https://github.com/erik-sutton95/OpenZCine/releases). Remove a
 copy installed from Play or an APK mirror first. That copy is signed by Google
-and cannot be updated by the APK. Release window: [0.2.5](../../releases/0-2-5/).
+and cannot be updated by the APK. Release window: [0.2.8](../../releases/0-2-8/).

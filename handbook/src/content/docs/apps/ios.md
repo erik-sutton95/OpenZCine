@@ -197,7 +197,7 @@ that change `Sources/`, `Tests/`, `ios/`, `Package.swift`, `scripts/` or the
 [`ios/TestFlight/WhatToTest.en-US.txt`](https://github.com/erik-sutton95/OpenZCine/blob/main/ios/TestFlight/WhatToTest.en-US.txt)
 with plain-language tester notes; CI rejects stale or developer-centric copy.
 Maintainer setup: [`docs/testflight-ci.md`](https://github.com/erik-sutton95/OpenZCine/blob/main/docs/testflight-ci.md).
-Release window: [0.2.5](../../releases/0-2-5/).
+Release window: [0.2.8](../../releases/0-2-8/).
 
 If something fails, use **Operator Setup → System → Report a Problem** or
 **Settings → Share Diagnostics** ([Troubleshooting](../../guides/troubleshooting/)).
