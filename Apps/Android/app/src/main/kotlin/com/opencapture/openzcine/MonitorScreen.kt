@@ -1308,15 +1308,6 @@ internal fun MonitorScreen(
                 !isVerticalFeed && !isCommand, liveBackdrop::setActive)
             DisposableEffect(liveBackdrop, pictureFrameSource) { onDispose { liveBackdrop.sourceChanged() } }
         }
-        // Portrait fit stacks the first two eligible scopes in canonical order under the picture; the
-        // others stay active and return in fill and landscape.
-        val portraitScopes =
-            if (isPortrait && !isPortraitFill && !isCommand) {
-                assists.shared.portraitScopes(scopesShown {
-                    assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
-                })
-            } else { emptyList() }
-        val scopeZone = monitorOperatorFittedScopeZone(fieldLayout)
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
@@ -1868,8 +1859,8 @@ internal fun MonitorScreen(
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
         val emptyScopes = remember { MutableStateFlow(com.opencapture.opencine.media.ScopeAssistBundle.EMPTY) }
         val scopeSource = monitorFrameSource?.let { source -> rememberNikonLiveScopeBundles(scopes,
-            portraitScopes, assists.shared, exposureAssistCameraInput, renderedEffects.lut, lutLibrary,
-            thermalTier, source, isPortrait, isPortraitFill, scopeZone) } ?: emptyScopes
+            assists.shared, exposureAssistCameraInput, renderedEffects.lut, lutLibrary, thermalTier,
+            source) } ?: emptyScopes
         val floating = MonitorAnalysisPanelLayout(physicalViewport, geometry.scopePlacement)
         val reference = liveFeedEffectsPresentation.falseColorReference?.let { value ->
             value.referenceValues().takeIf { it.segments.isNotEmpty() }
@@ -2112,22 +2103,18 @@ internal fun MonitorScreen(
                 audioMeterStateDescription(resources.phoneStringResolver(), liveAudioLevels,
                     cameraProperties.microphoneSensitivity)) else null,
         )
-        // Scopes that are not fitted float; GUIDES, GRID and CROSS ride the picture in the camera's own
-        // orientation (they rotate with a vertical body), so the shared overlay leaves them alone.
-        val rendered = liveAssistTools.filter { tool ->
-            tool !in setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS) &&
-                assists.shared.rendersLive(tool, effectiveDisplayMode, isPhotographyMode) &&
-                (tool !in ScopeKind.canonical.map { it.assistTool } ||
-                    (scopeSource !== emptyScopes && (!isPortrait || isPortraitFill || tool.scopeKind in portraitScopes)))
-        }.toSet()
+        // GUIDES, GRID and CROSS ride the picture in the camera's own orientation (they rotate with a
+        // vertical body), so the shared overlay leaves them alone.
+        val rendered = nikonLiveRenderedTools(liveAssistTools, scopesSampled = scopeSource !== emptyScopes) {
+            assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
+        }
         key(session) {
             // The instant review covers the whole monitor (iOS): the floating assist palette moves
             // into this window beneath it rather than staying in its popup window above it.
             com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
-                    { usage = it; usageStore.value = it }, nikonUsageSeed,
-                    fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
+                    { usage = it; usageStore.value = it }, nikonUsageSeed),
                 MonitorOperatorBodyViews(
                     dashboard = { accepts ->
                         // DISP 3 hero: the header's status, with no hero digits when nothing feeds

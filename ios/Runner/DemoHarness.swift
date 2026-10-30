@@ -577,10 +577,8 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_FEED_ASPECT"],
                     let aspect = PortraitFeedAspect(rawValue: raw)
                 {
-                    // Demo/screenshot affordance: stage the portrait feed aspect (fit16x9/fill).
-                    // Applied BEFORE the scope seeding below so that seeding >2 scopes in fill isn't
-                    // refused by the portrait-fit 2-scope cap (which keys on `.fit16x9`); the cap is
-                    // inactive in fill, so all requested scopes activate and persist their order.
+                    // Demo/screenshot affordance: stage the portrait feed aspect (fit16x9/fill)
+                    // before the scope seeding below.
                     model.preferences.portraitFeedAspect = aspect
                 }
                 if let raw = env["ZC_DEMO_PARADE_MODE"],
