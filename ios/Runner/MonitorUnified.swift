@@ -320,6 +320,18 @@ final class NikonPictureSourceSession: CameraSession {
     }
 }
 
+extension CameraPicker {
+    /// What the value is for: drive, focus mode, white balance and Picture Control set the
+    /// camera up; the rest is exposure. A landscape photo monitor shows setup values in the status
+    /// row's trailing corner and keeps exposure along the bottom (OpenCine `MonitorStatusCorner`).
+    var captureGroup: MonitorCaptureReadoutGroup {
+        switch self {
+        case .stillDrive, .stillFocus, .whiteBalance, .stillPicture, .focus: .setup
+        default: .exposure
+        }
+    }
+}
+
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -401,7 +413,8 @@ struct NikonMonitorShell: View {
                     + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue),
                 dimmed: cue.dimmed,
                 holdAction: cue.holdsShutterLock && model.videoSource != .relay
-                    ? { model.toggleShutterLockOnCamera() } : nil)
+                    ? { model.toggleShutterLockOnCamera() } : nil,
+                group: picker.captureGroup)
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.

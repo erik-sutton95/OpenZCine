@@ -1863,6 +1863,7 @@ internal fun MonitorScreen(
                 badgeIcon = cue.badge, dimmed = cue.dimmed,
                 // Where no quick adjust owns the hold, holding SHUTTER toggles the camera lock.
                 holdAction = if (cue.holdTogglesShutterLock && relayedState == null) shutterLongPressToggle else null,
+                group = setting.kind.captureGroup,
             )
         }
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }

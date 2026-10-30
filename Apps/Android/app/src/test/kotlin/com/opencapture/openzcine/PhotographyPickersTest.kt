@@ -85,6 +85,22 @@ class PhotographyPickersTest {
         assertTrue(nikonCapturePopup(photo).photography)
     }
 
+    /**
+     * A landscape photo monitor shows exposure along the bottom and the shot's setup in the status
+     * row's trailing corner, so nine tiles no longer run off a compact phone (hardware pass
+     * 2026-10-30). Portrait and video keep every tile in the strip.
+     */
+    @Test
+    fun `landscape photo moves drive focus white balance and profile to the status corner`() {
+        val tiles = settings()
+        val (strip, corner) = com.opencapture.monitorui.MonitorStatusCorner.split(tiles, holdsSetup = true) { it.kind.captureGroup }
+        assertEquals(listOf("MODE", "ISO", "SHUTTER", "IRIS", "METER"), strip.map { it.label })
+        assertEquals(listOf("DRIVE", "FOCUS", "WB", "PROFILE"), corner.map { it.label })
+        val portrait = com.opencapture.monitorui.MonitorStatusCorner.holdsSetup(photo = true, portrait = true,
+            statusShown = true, valuesShown = true)
+        assertEquals(tiles, com.opencapture.monitorui.MonitorStatusCorner.split(tiles, portrait) { it.kind.captureGroup }.first)
+    }
+
     @Test
     fun `strip renders the iOS tile order with pinned widths and live values`() {
         val tiles = settings()

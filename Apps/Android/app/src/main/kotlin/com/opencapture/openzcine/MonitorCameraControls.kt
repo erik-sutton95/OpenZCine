@@ -90,6 +90,18 @@ internal enum class MonitorPickerKind {
     QUALITY,
 }
 
+/**
+ * Drive, focus mode, white balance and picture profile set up the shot; the rest ride exposure.
+ * A landscape photo monitor shows the setup values in the status row's trailing corner (Core
+ * `MonitorStatusCorner`; iOS `CameraPicker.captureGroup`).
+ */
+internal val MonitorPickerKind.captureGroup: com.opencapture.monitorui.MonitorCaptureReadoutGroup
+    get() = when (this) {
+        MonitorPickerKind.DRIVE, MonitorPickerKind.FOCUS, MonitorPickerKind.WHITE_BALANCE,
+        MonitorPickerKind.PROFILE -> com.opencapture.monitorui.MonitorCaptureReadoutGroup.SETUP
+        else -> com.opencapture.monitorui.MonitorCaptureReadoutGroup.EXPOSURE
+    }
+
 /** One typed control tab inside an in-monitor picker. */
 internal data class MonitorPickerModePresentation(
     val label: String,
