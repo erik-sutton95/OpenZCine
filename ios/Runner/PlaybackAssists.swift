@@ -89,8 +89,8 @@ extension NativeAppModel {
         value.referenceClipByte = mapping.clipByte
         var tools = assist.playbackTools
         if forceLook { tools.insert(.lut) }
-        if let armed = armedScopeLUT(visibleTools: tools) {
-            let packed = Self.packed(armed, forRenderer: true)
+        if let armed = armedLUT(visibleTools: tools) {
+            let packed = Self.packedForRenderer(armed)
             value.lutDimension = packed.size
             value.lutRGBA = packed.rgba
         } else {
@@ -103,7 +103,7 @@ extension NativeAppModel {
 
     /// The armed look's identity, so a re-imported cube with the same name refreshes previews.
     var nikonPlaybackLookIdentity: AnyHashable? {
-        armedScopeLUT(visibleTools: assist.playbackTools.union([.lut])).map { AnyHashable($0.key) }
+        armedLUT(visibleTools: assist.playbackTools.union([.lut])).map { AnyHashable($0.key) }
     }
 }
 
