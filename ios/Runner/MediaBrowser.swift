@@ -652,6 +652,18 @@ struct MediaPhotoViewer: View {
     @State private var context: NikonPhotoContext?
     @State private var delivery: NikonDeliveryRequest?
 
+    /// The playback page's view assists on a still: the same panel stores, false colour and
+    /// zebra menus, tool order and offered tools as Nikon clip playback.
+    private var photoAssistTools: MonitorPhotoAssistTools<NikonMonitorLooks> {
+        let menus = NikonAssistMenuAdapter(model: model, compact: false, context: .playback)
+        return .init(stores: model.scopePanels.playbackStores, looks: .signal, palette: LiveDesign.self,
+            usage: Binding(get: { [model] in model.assistToolUsage }, set: { [model] in model.assistToolUsage = $0 }),
+            availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
+            signalOptions: .init(falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                reference: menus.falseColorReference),
+            configureDisplay: nikonScopeDisplay)
+    }
+
     var body: some View {
         Group {
             if let context {
@@ -686,7 +698,8 @@ struct MediaPhotoViewer: View {
                             capture.isCurrent
                         else { return }
                         delivery = .init(capture: capture)
-                    }, deletedReturning: onDeletedReturning)
+                    }, deletedReturning: onDeletedReturning,
+                    assistTools: photoAssistTools)
             } else {
                 ProgressView().tint(MonitorTheme.accent).frame(
                     maxWidth: .infinity, maxHeight: .infinity
