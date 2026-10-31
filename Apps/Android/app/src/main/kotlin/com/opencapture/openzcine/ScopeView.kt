@@ -10,7 +10,6 @@ import android.view.TextureView
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -28,9 +27,6 @@ import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.opencine.runtime.ScopeSampleBus
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.monitorui.MonitorRect
-import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.lut.PackedStoredLut
-import com.opencapture.openzcine.lut.StoredLutSelection
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
@@ -163,39 +159,16 @@ fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
     )
 }
 
-/** One immutable native registration request for the vectorscope monitor cube. */
-internal data class ScopeVectorLutRequest(
-    val lookOrdinal: Int,
-    val packedRgba: ByteArray? = null,
-    val cubeSize: Int = 0,
-)
-
 /**
- * Resolves iOS's vectorscope LUT policy: the active operator LUT when enabled,
- * otherwise the camera curve's built-in monitor transform. A selected stored
- * cube that is unavailable fails closed, because substituting the camera curve
- * would plot a different monitor image than the feed. Preparation is retried
- * when the library render generation changes.
+ * The vectorscope's look: the camera curve's built-in log to Rec.709 transform, never the
+ * monitoring LUT, so VECTOR measures the camera signal as every other scope does.
  */
-internal fun scopeVectorLutRequest(
-    selection: FeedLutSelection?,
-    curveOrdinal: Int,
-    packedStored: (StoredLutSelection) -> PackedStoredLut?,
-): ScopeVectorLutRequest? =
-    when (selection) {
-        is FeedLutSelection.BuiltIn -> ScopeVectorLutRequest(selection.value.wireOrdinal)
-        is FeedLutSelection.Stored ->
-            packedStored(selection.value)?.let {
-                ScopeVectorLutRequest(lookOrdinal = -1, packedRgba = it.rgba, cubeSize = it.cubeSize)
-            }
-        null -> ScopeVectorLutRequest(curveOrdinal)
-    }
+internal data class ScopeVectorLutRequest(val lookOrdinal: Int)
 
-/** The vectorscope's monitor look as a shared cube; null fails closed (no trace). */
+/** The vectorscope's camera transform look as a shared cube; null fails closed (no trace). */
 internal fun ScopeVectorLutRequest.cube(): MonitorLUTCube? =
-    packedRgba?.let { runCatching { MonitorLUTCube(cubeSize, it) }.getOrNull() }
-        ?: SwiftCore.takeIf { it.isAvailable }?.bakeLut(lookOrdinal, VECTOR_LUT_SIZE)
-            ?.let { MonitorLUTCube(VECTOR_LUT_SIZE, it) }
+    SwiftCore.takeIf { it.isAvailable }?.bakeLut(lookOrdinal, VECTOR_LUT_SIZE)
+        ?.let { MonitorLUTCube(VECTOR_LUT_SIZE, it) }
 
 /** This camera's level axis for the shared plots (Swift `ScopeFrameWire.levelAxis`). */
 private fun nikonScopeLevelAxis(curveOrdinal: Int, clipNative: Float): ScopeLevelAxis? {
@@ -214,11 +187,11 @@ internal data class ScopeTickInputs(
     /** The camera curve as the shared transfer and its stated clip: the only Nikon facts. */
     val transfer: MonitorTransfer,
     val clipByte: Int,
-    val vectorLut: ScopeVectorLutRequest?,
+    val vectorLut: ScopeVectorLutRequest,
     val periodNanos: Long,
 ) {
     constructor(selected: Set<ScopeKind>, assist: MonitorAssistState, mapping: ExposureAssistMapping,
-        vectorLut: ScopeVectorLutRequest?, periodNanos: Long) : this(selected, assist.histoTrafficLights,
+        vectorLut: ScopeVectorLutRequest, periodNanos: Long) : this(selected, assist.histoTrafficLights,
         assist.crushClipCompensation.pixelFractionThreshold, mapping.transfer, mapping.clipByte, vectorLut, periodNanos)
 
     val ceiling: ScopeClipSnapshot get() = ScopeClipSnapshot(transfer, clipByte)
@@ -244,24 +217,6 @@ internal data class ScopeTickInputs(
 
 }
 
-@Composable
-private fun rememberScopeVectorLut(
-    lutSelection: FeedLutSelection?,
-    lutLibrary: AndroidLutLibrary?,
-    curveOrdinal: Int,
-): ScopeVectorLutRequest? {
-    val lutRenderGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value ?: 0L
-    LaunchedEffect(lutLibrary, lutSelection) {
-        val stored = (lutSelection as? FeedLutSelection.Stored)?.value
-        if (stored != null) lutLibrary?.prepare(stored)
-    }
-    return remember(lutSelection, curveOrdinal, lutLibrary, lutRenderGeneration) {
-        scopeVectorLutRequest(lutSelection, curveOrdinal) { selection ->
-            lutLibrary?.packedCube(selection)
-        }
-    }
-}
-
 // ── Shared monitor coordinator ──
 
 /**
@@ -273,21 +228,19 @@ private fun rememberScopeVectorLut(
 @Composable
 internal fun rememberNikonLiveScopeBundles(
     selectedScopes: Set<ScopeKind>, portraitScopes: List<ScopeKind>, assist: MonitorAssistState,
-    cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
-    thermalTier: AndroidThermalTier, source: LiveFrameSource, isPortrait: Boolean,
+    cameraInput: ExposureAssistCameraInput, thermalTier: AndroidThermalTier, source: LiveFrameSource,
+    isPortrait: Boolean,
     portraitFloating: Boolean, scopeZone: MonitorRect?,
 ): Flow<ScopeAssistBundle>? {
     val displayed = displayedScopeKinds(selectedScopes, portraitScopes, isPortrait, portraitFloating)
     if (displayed.isEmpty() || (isPortrait && !portraitFloating && scopeZone == null)) return null
-    return rememberNikonLiveScopeBundles(displayed.toSet(), assist, cameraInput, lutSelection,
-        lutLibrary, thermalTier, source)
+    return rememberNikonLiveScopeBundles(displayed.toSet(), assist, cameraInput, thermalTier, source)
 }
 
 @Composable
 internal fun rememberNikonLiveScopeBundles(
     selectedScopes: Set<ScopeKind>, assist: MonitorAssistState,
-    cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
-    thermalTier: AndroidThermalTier, source: LiveFrameSource,
+    cameraInput: ExposureAssistCameraInput, thermalTier: AndroidThermalTier, source: LiveFrameSource,
 ): Flow<ScopeAssistBundle>? {
     val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
     // This guard also stops all collection when no displayed panel exists.
@@ -295,7 +248,7 @@ internal fun rememberNikonLiveScopeBundles(
     // A scope cannot honor camera-dependent display mapping without the Swift
     // facade, so fail closed rather than locally selecting a fallback curve.
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val vectorLut = rememberScopeVectorLut(lutSelection, lutLibrary, mapping.curveOrdinal)
+    val vectorLut = ScopeVectorLutRequest(mapping.curveOrdinal)
     val bus = remember { ScopeSampleBus() }
     val inputs = ScopeTickInputs(ScopeKind.canonical.filter(displayed::contains).toSet(), assist, mapping,
         vectorLut, scopePeriodNanos(displayed.size, thermalTier))
@@ -322,11 +275,11 @@ internal data class NikonPlaybackScopeConfiguration(
 @Composable
 internal fun rememberNikonPlaybackScopeConfiguration(
     selected: Set<ScopeKind>, assist: MonitorAssistState, cameraInput: ExposureAssistCameraInput,
-    lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?, thermalTier: AndroidThermalTier,
+    thermalTier: AndroidThermalTier,
 ): NikonPlaybackScopeConfiguration? {
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val vector = rememberScopeVectorLut(lutSelection, lutLibrary, mapping.curveOrdinal)
-    val look = remember(vector) { vector?.cube() }
+    val vector = ScopeVectorLutRequest(mapping.curveOrdinal)
+    val look = remember(vector) { vector.cube() }
     return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist, mapping, vector,
         scopePeriodNanos(selected.size, thermalTier)), look)
 }
@@ -361,7 +314,7 @@ private suspend fun pumpLiveScopes(
     }
     val tap = ScopeFrameTap()
     var lastGeneration = Long.MIN_VALUE
-    val look = if (inputs.policy.includeVectorPoints) inputs.vectorLut?.cube() else null
+    val look = if (inputs.policy.includeVectorPoints) inputs.vectorLut.cube() else null
     try {
         MonitorAssistEngine().run(MonitorAssistScopeSource { includePoints ->
             val next = latest.get() ?: return@MonitorAssistScopeSource null

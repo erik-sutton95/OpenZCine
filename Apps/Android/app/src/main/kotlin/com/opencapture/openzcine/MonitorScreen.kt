@@ -1868,8 +1868,8 @@ internal fun MonitorScreen(
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
         val emptyScopes = remember { MutableStateFlow(com.opencapture.opencine.media.ScopeAssistBundle.EMPTY) }
         val scopeSource = monitorFrameSource?.let { source -> rememberNikonLiveScopeBundles(scopes,
-            portraitScopes, assists.shared, exposureAssistCameraInput, renderedEffects.lut, lutLibrary,
-            thermalTier, source, isPortrait, isPortraitFill, scopeZone) } ?: emptyScopes
+            portraitScopes, assists.shared, exposureAssistCameraInput, thermalTier, source, isPortrait,
+            isPortraitFill, scopeZone) } ?: emptyScopes
         val floating = MonitorAnalysisPanelLayout(physicalViewport, geometry.scopePlacement)
         val reference = liveFeedEffectsPresentation.falseColorReference?.let { value ->
             value.referenceValues().takeIf { it.segments.isNotEmpty() }

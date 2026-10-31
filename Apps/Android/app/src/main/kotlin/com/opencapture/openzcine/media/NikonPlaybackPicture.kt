@@ -351,7 +351,7 @@ internal fun rememberNikonPlaybackPicture(
 
     val thermalTier = rememberAndroidThermalTier()
     val scopeConfiguration = rememberNikonPlaybackScopeConfiguration(playbackScopes, assists.shared,
-        cameraInput, effects.lut, lutLibrary, thermalTier)
+        cameraInput, thermalTier)
     val scopeSession = remember(entry, itemToken, scopeConfiguration?.cadenceMilliseconds) {
         MonitorPlaybackScopeSession<NikonPlaybackScopeConfiguration>(scope,
             cadenceMilliseconds = scopeConfiguration?.cadenceMilliseconds ?: 84,
