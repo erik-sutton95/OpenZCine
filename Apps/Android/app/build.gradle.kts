@@ -335,6 +335,8 @@ dependencies {
     implementation(libs.opencine.camera.controls)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // The still viewer's peaking, false colour and zebra on the photo itself (MonitorBitmapStillLook).
+    implementation("com.opencapture.opencine:appkit-native:0.1.0-SNAPSHOT")
     // Shared Media3 player recipe, port, transport mapping and audio meter tap.
     implementation(libs.opencine.media3)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.

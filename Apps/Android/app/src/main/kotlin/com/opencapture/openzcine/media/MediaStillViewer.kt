@@ -1,10 +1,15 @@
 package com.opencapture.openzcine.media
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import com.opencapture.opencine.appkitnative.MonitorBitmapStillLook
+import com.opencapture.opencine.cameracontrols.AssistHost
+import com.opencapture.opencine.cameracontrols.MonitorOperatorAssistSource
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.cameracontrols.MonitorOperatorPhotoScreen
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
@@ -13,6 +18,7 @@ import com.opencapture.opencine.nikon.NikonStillPhotoClassification
 import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
+import com.opencapture.openzcine.settings.SettingsPalette
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -51,6 +57,7 @@ internal fun MediaStillViewer(
     onShare: ((MonitorMediaRecord<NikonLibraryClip>) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
+    val context = LocalContext.current
     val io = remember(library, record.asset.id, admission, cacheStore, connectionOwner) {
         NikonStillPictureIO(cacheStore, cameraTransferAvailable, connectionOwner, onResolvedObjectSize)
     }
@@ -116,7 +123,14 @@ internal fun MediaStillViewer(
         loaders = MonitorMediaPictureLoaders(preview = io::preview, cached = io::cached, progressive = io::progressive),
         operations = operations, sourceCurrent = sourceCurrent, variants = variants, rating = rating, sharing = sharing,
         share = onShare?.let { open -> { request -> if (request.isCurrent()) open(request.record) } }, collection = collection, selectRecord = selectRecord, collectionThumbnail = thumbnail,
-        deleted = onDeleted, deletedReturning = onDeletedReturning, close = onClose)
+        deleted = onDeleted, deletedReturning = onDeletedReturning, close = onClose,
+        // The playback page's assist bar: the same tool order store and assist host as clip
+        // playback, and the native still look for peaking, false colour and zebra on the photo.
+        usageStore = remember(context) { MonitorToolUsagePreferences(
+            context.getSharedPreferences("assist", Context.MODE_PRIVATE), "assistToolUsage.v1") },
+        assists = remember { MonitorOperatorAssistSource(
+            AssistHost(SettingsPalette.peaking, SettingsPalette.highlight, SettingsPalette.midtone), null, {}, null) },
+        stillLook = remember { MonitorBitmapStillLook() })
 }
 
 /** Only SDK transfer and native bitmap/EXIF facts live here; the shared owner schedules and joins. */
