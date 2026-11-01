@@ -15,13 +15,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.appkit.MonitorBitmapDecoder
 import com.opencapture.opencine.appkit.MonitorReviewOptions
 import com.opencapture.opencine.cameracontrols.MonitorInstantReview
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
-import com.opencapture.openzcine.media.MediaExifOrientation
-import com.opencapture.openzcine.media.upright
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -200,7 +199,7 @@ private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
     // BitmapFactory ignores EXIF — honor it so a portrait capture reviews upright (the full
     // image carries the tag; a stripped embedded thumb stays as-shot until the upgrade).
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        ?.upright(MediaExifOrientation.fromBytes(bytes))
+        ?.let { MonitorBitmapDecoder.upright(it, MonitorBitmapDecoder.exifOrientation(bytes)) }
         ?.asImageBitmap()
 }
 
