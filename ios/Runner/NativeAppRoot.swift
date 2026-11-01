@@ -11960,13 +11960,6 @@ final class NativeAppModel {
         assist.desqueeze(visible: renderedLiveAssistTools.contains(.desqueeze))
     }
 
-    /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
-    /// photography toolset. Eligibility is resolved before choosing the canonical first two.
-    var renderedFitScopes: [MonitorAssistTool] {
-        let rendered = renderedLiveAssistTools
-        return preferences.displayedFitScopes(on: rendered)
-    }
-
     /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take
     /// the camera started (or stopped) while the prompt was up was inverted by "Start" (or "Stop").
     func confirmRecordToggle() {

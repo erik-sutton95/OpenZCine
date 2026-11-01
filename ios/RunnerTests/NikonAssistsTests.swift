@@ -387,7 +387,6 @@ final class NikonAssistsTests: XCTestCase {
             XCTAssertFalse(model.renderedLiveAssistTools.contains(tool), "\(tool) drawn in photo")
             XCTAssertTrue(model.assist.isVisible(tool.selection), "the saved switch stays on")
         }
-        XCTAssertTrue(model.renderedFitScopes.isEmpty)
         model.applyDemoProperty(.liveViewSelector, data: Data([1]))
         XCTAssertFalse(model.isPhotographyMode)
         for tool in analysis {

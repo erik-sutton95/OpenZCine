@@ -18,47 +18,18 @@ import kotlin.test.assertTrue
 /** Pure multi-scope selection, demand, and placement policy checks. */
 class ScopeLayoutTest {
     @Test
-    fun `portrait keeps the first two eligible canonical selections`() {
-        val selected =
-            setOf(
-                ScopeKind.WAVEFORM,
-                ScopeKind.PARADE,
-                ScopeKind.HISTOGRAM,
-                ScopeKind.TRAFFIC_LIGHTS,
-            )
+    fun `every selected scope floats in portrait fit and fill as in landscape`() {
+        val state = MonitorAssistState()
+        val scopes = listOf(MonitorAssistTool.WAVE, MonitorAssistTool.PARADE, MonitorAssistTool.HISTO,
+            MonitorAssistTool.VECTOR)
+        scopes.forEach(state::toggle)
+        val live = scopes + MonitorAssistTool.GRID + MonitorAssistTool.PEAK
 
-        val displayed = portraitDisplayedScopes(selected)
-        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE), displayed)
-        assertEquals(4, selected.size, "Fit placement must not alter the active selection")
-    }
+        val rendered = nikonLiveRenderedTools(live, scopesSampled = true) { state.isOn(it) || it == MonitorAssistTool.PEAK }
 
-    @Test
-    fun `portrait fill keeps every selected scope floating in canonical order`() {
-        val selected =
-            setOf(
-                ScopeKind.HISTOGRAM,
-                ScopeKind.WAVEFORM,
-                ScopeKind.VECTORSCOPE,
-            )
-
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = true,
-            ),
-        )
-        assertEquals(
-            listOf(ScopeKind.HISTOGRAM),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = false,
-            ),
-        )
+        assertEquals(scopes.toSet() + MonitorAssistTool.PEAK, rendered)
+        assertEquals(setOf(MonitorAssistTool.PEAK),
+            nikonLiveRenderedTools(live, scopesSampled = false) { state.isOn(it) || it == MonitorAssistTool.PEAK })
     }
 
     @Test

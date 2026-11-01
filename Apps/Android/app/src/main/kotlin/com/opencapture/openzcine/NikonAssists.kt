@@ -145,9 +145,20 @@ internal fun MonitorAssistState.rendersLive(
 internal fun scopesShown(visible: (MonitorAssistTool) -> Boolean): Set<ScopeKind> =
     ScopeKind.canonical.filter { visible(it.assistTool) }.toSet()
 
-/** The common portrait-fit policy: first two eligible scopes in canonical order. */
-internal fun MonitorAssistState.portraitScopes(selected: Set<ScopeKind>): List<ScopeKind> =
-    portraitDisplayedScopes(selected)
+/**
+ * The tools the shared live surface draws: every tool this DISP mode renders, a scope only while its samples
+ * flow. Every scope floats in landscape and in portrait fit and fill, as in the other apps. GUIDES, GRID and
+ * CROSS ride the picture in the camera's own orientation, so the shared overlay leaves them alone.
+ */
+internal fun nikonLiveRenderedTools(
+    liveTools: Collection<MonitorAssistTool>, scopesSampled: Boolean, rendersLive: (MonitorAssistTool) -> Boolean,
+): Set<MonitorAssistTool> {
+    val scopeTools = ScopeKind.canonical.map { it.assistTool }.toSet()
+    return liveTools.filter { tool ->
+        tool !in setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS) &&
+            rendersLive(tool) && (tool !in scopeTools || scopesSampled)
+    }.toSet()
+}
 
 /** What the GPU chain bakes for one visibility predicate (live or playback). */
 internal fun NikonAssists.feedEffects(visible: (MonitorAssistTool) -> Boolean): FeedEffects =
