@@ -7908,8 +7908,13 @@ final class NativeAppModel {
                     lease.release()
                     break
                 }
-                // A frame captured before the device went away or changed is stale.
-                guard let handoff = await renderer.image(from: lease),
+                // A frame captured before the device went away or changed is stale. Every capture
+                // device decodes with the HDMI capture correction; its identity rides along for
+                // the readout, and a frame of the device before carries an older generation,
+                // which the fence check refuses.
+                guard
+                    let handoff = await renderer.image(
+                        from: lease, device: source.captureDeviceIdentity),
                     source.fence.isCurrent(lease.generation)
                 else { continue }
                 await self.presentHDMIFrame(
