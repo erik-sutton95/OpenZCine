@@ -9,6 +9,7 @@ import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.opencine.nikon.CameraConnectionPhase
 import com.opencapture.opencine.nikon.CameraConnectionProgress
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession
@@ -98,6 +99,20 @@ object DemoHarness {
      * assets under `demo/` (staged from repo `samples/`) are preferred.
      */
     const val EXTRA_DEMO_VIDEO = "zc.demo.video"
+
+    /**
+     * Boolean intent extra that stages the demo feed in photography chrome
+     * (`--ez zc.demo.photo true`), mirroring iOS `ZC_DEMO_PHOTO`: the stills strip, the
+     * photo header and the rail shutter capture headlessly. SIMULATED stills values.
+     */
+    const val EXTRA_DEMO_PHOTO = "zc.demo.photo"
+
+    /**
+     * Boolean intent extra that seeds a still, off-centre AF point on the synthetic feed
+     * (`--ez zc.demo.focusPair true`), mirroring iOS `demoSeedFocusPair`, so the recenter key
+     * shows headlessly. SIMULATED: the point is not camera metadata.
+     */
+    const val EXTRA_DEMO_FOCUS_POINT = "zc.demo.focusPair"
 
     /**
      * Debug-only direct relay watch (`--es zc.demo.relayWatch host:port`): joins a broadcast at
@@ -294,6 +309,8 @@ object DemoHarness {
                     ),
                 startConnected = true,
             )
+        val shown: CameraSession =
+            if (intent.getBooleanExtra(EXTRA_DEMO_PHOTO, false)) PhotoDemoCameraSession(session) else session
         val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
         val videoPath = intent.getStringExtra(EXTRA_DEMO_VIDEO)
         val videoSource =
@@ -306,12 +323,15 @@ object DemoHarness {
             }
         val frameSource =
             videoSource
-                ?: DemoFrameSource(includeDebugCameraLevel = includeDebugCameraLevel).also {
+                ?: DemoFrameSource(
+                    includeDebugCameraLevel = includeDebugCameraLevel,
+                    seededFocusPoint = intent.getBooleanExtra(EXTRA_DEMO_FOCUS_POINT, false),
+                ).also {
                     if (context != null) {
                         Log.i(TAG, "demo feed ← synthetic colour bars (no sample video)")
                     }
                 }
-        return session to frameSource
+        return shown to frameSource
     }
 
     /**
@@ -588,4 +608,30 @@ object DemoHarness {
             const val PHASE_HOLD_MILLIS: Long = 30_000L
         }
     }
+}
+
+/**
+ * The demo camera in photo mode (iOS `demoTogglePhotographyMode`): the fake session's controls
+ * and state, with a SIMULATED stills snapshot (Manual, Single, AF-S, Matrix, FX L, RAW).
+ */
+private class PhotoDemoCameraSession(private val base: CameraSession) : CameraSession by base {
+    override val cameraProperties: StateFlow<CameraPropertySnapshot> =
+        MutableStateFlow(
+            base.cameraProperties.value.copy(
+                captureSelector = "photo",
+                exposureMode = "M",
+                iso = 6_400L,
+                shutterSpeed = "1/200",
+                iris = "f/2.8",
+                stillCaptureMode = "Single",
+                stillFocusMode = "AF-S",
+                stillWhiteBalanceMode = "Auto",
+                meteringMode = "Matrix",
+                pictureControl = "Auto",
+                imageArea = "FX",
+                imageSize = "Size L",
+                compression = "RAW",
+                shotsRemaining = 1_234,
+            ),
+        ).asStateFlow()
 }

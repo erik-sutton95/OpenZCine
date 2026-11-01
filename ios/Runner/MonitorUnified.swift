@@ -320,6 +320,19 @@ final class NikonPictureSourceSession: CameraSession {
     }
 }
 
+extension CameraPicker {
+    /// How often the value changes: shooting mode, drive, metering and Picture Control set the
+    /// scene up; ISO, shutter, aperture, white balance and focus are ridden. A landscape photo
+    /// monitor shows setup values in the status row's trailing corner and keeps the ridden values
+    /// along the bottom (OpenCine `MonitorStatusCorner`).
+    var captureGroup: MonitorCaptureReadoutGroup {
+        switch self {
+        case .stillMode, .stillDrive, .stillMeter, .stillPicture: .setup
+        default: .ridden
+        }
+    }
+}
+
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -401,7 +414,8 @@ struct NikonMonitorShell: View {
                     + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue),
                 dimmed: cue.dimmed,
                 holdAction: cue.holdsShutterLock && model.videoSource != .relay
-                    ? { model.toggleShutterLockOnCamera() } : nil)
+                    ? { model.toggleShutterLockOnCamera() } : nil,
+                group: picker.captureGroup)
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.

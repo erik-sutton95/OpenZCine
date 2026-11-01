@@ -90,6 +90,18 @@ internal enum class MonitorPickerKind {
     QUALITY,
 }
 
+/**
+ * Shooting mode, drive, metering and picture profile set the scene up; ISO, shutter, aperture,
+ * white balance and focus are ridden. A landscape photo monitor shows the setup values in the
+ * status row's trailing corner (Core `MonitorStatusCorner`; iOS `CameraPicker.captureGroup`).
+ */
+internal val MonitorPickerKind.captureGroup: com.opencapture.monitorui.MonitorCaptureReadoutGroup
+    get() = when (this) {
+        MonitorPickerKind.MODE, MonitorPickerKind.DRIVE, MonitorPickerKind.METER,
+        MonitorPickerKind.PROFILE -> com.opencapture.monitorui.MonitorCaptureReadoutGroup.SETUP
+        else -> com.opencapture.monitorui.MonitorCaptureReadoutGroup.RIDDEN
+    }
+
 /** One typed control tab inside an in-monitor picker. */
 internal data class MonitorPickerModePresentation(
     val label: String,

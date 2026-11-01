@@ -46,6 +46,11 @@ class DemoFrameSource(
     private val framesPerSecond: Int = 25,
     /** Omit the synthetic level only when visually exercising device-tilt fallback. */
     private val includeDebugCameraLevel: Boolean = true,
+    /**
+     * A still, off-centre AF point the monitor may act on (iOS `demoSeedFocusPair`), so the
+     * recenter key shows in screenshots. SIMULATED: no camera is behind it.
+     */
+    private val seededFocusPoint: Boolean = false,
 ) : LiveFrameSource {
     private val producerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -66,7 +71,7 @@ class DemoFrameSource(
                         timestampNanos = System.nanoTime(),
                         jpegData = stream.toByteArray(),
                         audioLevels = debugAudioLevels(frameIndex),
-                        focus = debugFocusInfo(frameIndex),
+                        focus = if (seededFocusPoint) seededFocusInfo() else debugFocusInfo(frameIndex),
                         level = debugCameraLevel(frameIndex).takeIf { includeDebugCameraLevel },
                         timecode = debugTimecode(frameIndex),
                         measuredFramesPerSecond = framesPerSecond.toDouble(),
@@ -202,6 +207,26 @@ class DemoFrameSource(
             isDebugFixture = true,
         )
     }
+
+    /** The seeded AF point: one box left of and above centre, so a recenter has work to do. */
+    private fun seededFocusInfo(): LiveFocusInfo =
+        LiveFocusInfo(
+            coordinateWidth = width,
+            coordinateHeight = height,
+            result = LiveFocusResult.FOCUSED,
+            subjectDetectionActive = false,
+            trackingAFActive = false,
+            selectedBoxIndex = 0,
+            boxes = listOf(
+                LiveFocusBox(
+                    centerX = (width * 0.38).roundToInt(),
+                    centerY = (height * 0.40).roundToInt(),
+                    width = (width * 0.12).roundToInt(),
+                    height = (height * 0.18).roundToInt(),
+                ),
+            ),
+            isDebugFixture = false,
+        )
 
     /** Synthetic camera-level substitute, visibly labelled by the overlay as a debug fixture. */
     private fun debugCameraLevel(frameIndex: Long): LiveCameraLevel {
