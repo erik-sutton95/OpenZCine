@@ -65,6 +65,10 @@ extension UVCVideoSourceState {
 /// 1080p60 proves too heavy on hardware, the upgrade is to route the `CVPixelBuffer` straight into
 /// `MetalFeedFrameBaker` and leave `liveFrameImage` for the scope tap alone.
 ///
+/// Leases arrive as YCbCr carrying the matrix OpenCineApple decided (BT.709 for an HD signal
+/// whose dongle reports none or the UVC class default); `CIImage(cvPixelBuffer:)` decodes with
+/// that attachment, so this render is where the HDMI picture becomes RGB.
+///
 /// An actor so the render runs off the main actor, one frame at a time, inside the consumer's
 /// serial loop. Frames the newest-wins stream drops are never rendered.
 actor UVCFrameRenderer {
