@@ -2868,10 +2868,11 @@ extension RunnerTests {
         let buffer = try XCTUnwrap(
             JPEGPixelBufferDecoder().decode(jpeg), "hardware JPEG decode returned nothing")
 
+        // Full range, as the JPEG is: a video-range buffer of the same samples crushed 16 to 0.
         XCTAssertEqual(
             CVPixelBufferGetPixelFormatType(buffer),
-            JPEGPixelBufferDecoder.pixelFormat,
-            "the decoder must land in its planar YCbCr format, not RGB")
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            "the decoder must land in the JPEG's full-range 4:2:0 planes, not video range or RGB")
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
 
