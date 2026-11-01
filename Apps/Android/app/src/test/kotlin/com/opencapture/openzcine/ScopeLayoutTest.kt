@@ -3,16 +3,11 @@ package com.opencapture.openzcine
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorScopePanelMath
 import com.opencapture.monitorui.MonitorScopePoint
-import com.opencapture.openzcine.lut.PackedStoredLut
-import com.opencapture.openzcine.lut.StoredLutCategory
-import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Pure multi-scope selection, demand, and placement policy checks. */
@@ -129,34 +124,5 @@ class ScopeLayoutTest {
             1.6,
             MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.vectorScale,
         )
-    }
-
-    @Test
-    fun `vectorscope LUT request follows active built in and stored selections`() {
-        assertEquals(1, scopeVectorLutRequest(null, curveOrdinal = 1) { null }?.lookOrdinal)
-        assertEquals(
-            2,
-            scopeVectorLutRequest(
-                FeedLutSelection.BuiltIn(FeedLut.MONO),
-                curveOrdinal = 0,
-            ) { null }?.lookOrdinal,
-        )
-        val stored =
-            requireNotNull(StoredLutSelection.fromPersisted(StoredLutCategory.CUSTOM.name, "look-123456789abc.cube"))
-        assertNull(
-            scopeVectorLutRequest(
-                FeedLutSelection.Stored(stored),
-                curveOrdinal = 0,
-            ) { null },
-        )
-        val packed = PackedStoredLut(2, ByteArray(2 * 2 * 2 * 4))
-        val request =
-            requireNotNull(
-                scopeVectorLutRequest(FeedLutSelection.Stored(stored), curveOrdinal = 0) { packed },
-            )
-
-        assertEquals(-1, request.lookOrdinal)
-        assertEquals(2, request.cubeSize)
-        assertTrue(request.packedRgba === packed.rgba)
     }
 }

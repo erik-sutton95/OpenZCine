@@ -677,7 +677,7 @@ struct DrumSideAdjustButton: View {
                         $0)
                 }),
             zoomHelp:
-                "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the monitor image after its active LUT or display tone map.",
+                "Magnifies only the chroma trace; the graticule stays at unity. The vectorscope reads the camera signal through the built-in display tone map, whatever LUT is on.",
             brightnessHelp: "Raise trace intensity when the chroma plot is hard to read.",
             compact: compact, zoomFeedback: selectionFeedback)
     }
