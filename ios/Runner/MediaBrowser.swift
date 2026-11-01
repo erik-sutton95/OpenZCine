@@ -656,12 +656,17 @@ struct MediaPhotoViewer: View {
     /// zebra menus, tool order and offered tools as Nikon clip playback.
     private var photoAssistTools: MonitorPhotoAssistTools<NikonMonitorLooks> {
         let menus = NikonAssistMenuAdapter(model: model, compact: false, context: .playback)
-        return .init(stores: model.scopePanels.playbackStores, looks: .signal, palette: LiveDesign.self,
-            usage: Binding(get: { [model] in model.assistToolUsage }, set: { [model] in model.assistToolUsage = $0 }),
+        let usage = Binding(
+            get: { [model] in model.assistToolUsage },
+            set: { [model] in model.assistToolUsage = $0 })
+        let signal = MonitorOperatorSignalOptions(
+            falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+            reference: menus.falseColorReference)
+        return .init(
+            stores: model.scopePanels.playbackStores, looks: .signal, palette: LiveDesign.self,
+            usage: usage,
             availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
-            signalOptions: .init(falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference),
-            configureDisplay: nikonScopeDisplay)
+            signalOptions: signal, configureDisplay: nikonScopeDisplay)
     }
 
     var body: some View {
