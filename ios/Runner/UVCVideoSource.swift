@@ -69,12 +69,13 @@ extension UVCVideoSourceState {
 ///
 /// ## Capture calibration
 ///
-/// Each frame decodes with the measured correction of the device it came from
-/// (`CaptureCalibration.forDevice`), keyed by the USB identity `UVCVideoSource` reads from the
-/// capture device's model ID. The SandbergCapture dongle (USB 345F:2130) fed the camera's YCbCr
-/// HDMI loses about 1.8 codes of positive Cb and Cr against in-camera recordings (negative chroma
-/// about none), which desaturates flat log pictures most; its measured per-channel Y'CbCr curves
-/// run on the code values inside the same render. Any other device decodes exactly as before.
+/// Each frame decodes with OpenCine's HDMI capture correction (`CaptureCalibration.forDevice`),
+/// which applies to every UVC capture device: the camera's YCbCr HDMI through a USB-C dongle loses
+/// about 1.8 codes of positive Cb and Cr against in-camera recordings (negative chroma about
+/// none), which desaturates flat log pictures most, and every dongle tried showed the same tint.
+/// The measured per-channel Y'CbCr curves run on the code values inside the same render. The USB
+/// identity `UVCVideoSource` reads from the device is passed along for the readout and for a
+/// known-good exception, should a device ever measure clean.
 ///
 /// ponytail: one GPU to CGImage render per frame. That is the honest cost of matching the existing
 /// `liveFrameImage: UIImage?` contract, and it replaces a JPEG decode rather than adding to it. If
