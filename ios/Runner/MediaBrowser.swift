@@ -652,10 +652,11 @@ struct MediaPhotoViewer: View {
     @State private var context: NikonPhotoContext?
     @State private var delivery: NikonDeliveryRequest?
 
-    /// The playback page's view assists on a still: the same panel stores, false colour and
-    /// zebra menus, tool order and offered tools as Nikon clip playback.
+    /// The playback page's view assists on a still: the same panel stores, tool order and
+    /// offered tools as Nikon clip playback, with false colour and zebra menus that read the
+    /// still's own signal.
     private var photoAssistTools: MonitorPhotoAssistTools<NikonMonitorLooks> {
-        let menus = NikonAssistMenuAdapter(model: model, compact: false, context: .playback)
+        let menus = NikonAssistMenuAdapter.photo(model: model)
         let usage = Binding(
             get: { [model] in model.assistToolUsage },
             set: { [model] in model.assistToolUsage = $0 })
