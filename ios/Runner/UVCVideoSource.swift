@@ -57,10 +57,17 @@ extension UVCVideoSourceState {
 /// The monitor's downstream consumers already assume a real bitmap: the scope tap in particular
 /// hard-guards on `image.cgImage` (`LiveFrameProcessor.swift:176`) and silently produces nothing
 /// without one. A `UIImage(ciImage:)` would render on screen and quietly kill every scope, so each
-/// frame is rendered through a `CIContext` to a `CGImage` — the same shape the JPEG path produces
-/// via `preparingForDisplay()`.
+/// frame is rendered through a `CIContext` to a `CGImage`, the same shape the JPEG path produces.
 ///
-/// ponytail: one GPU→CGImage render per frame. That is the honest cost of matching the existing
+/// ## Why the render is `LiveFrameDecoding`
+///
+/// The bitmap holds the camera's own R'G'B' code values, as the camera's JPEG live view does,
+/// because every look, scope and exposure tool reads them as they are. A plain
+/// `CIImage(cvPixelBuffer:)` is colour managed from the colour space the iPad's capture pipeline
+/// writes onto the frame's IOSurface (BT.709 primaries, SMPTE 240M transfer), which re-encoded
+/// the signal before the look saw it: code 128 showed as 138.5 through the dongle.
+///
+/// ponytail: one GPU to CGImage render per frame. That is the honest cost of matching the existing
 /// `liveFrameImage: UIImage?` contract, and it replaces a JPEG decode rather than adding to it. If
 /// 1080p60 proves too heavy on hardware, the upgrade is to route the `CVPixelBuffer` straight into
 /// `MetalFeedFrameBaker` and leave `liveFrameImage` for the scope tap alone.
@@ -76,11 +83,9 @@ actor UVCFrameRenderer {
     /// lease was already released or the render failed.
     func image(from lease: DecodedFrameLease) -> UVCFrameHandoff? {
         defer { lease.release() }
-        guard let pixelBuffer = lease.pixelBuffer else { return nil }
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
-        guard
+        guard let pixelBuffer = lease.pixelBuffer,
             let rendered = autoreleasepool(invoking: {
-                renderContext.createCGImage(source, from: source.extent)
+                LiveFrameDecoding.cgImage(pixelBuffer, context: renderContext)
             })
         else { return nil }
         return UVCFrameHandoff(image: UIImage(cgImage: rendered))
