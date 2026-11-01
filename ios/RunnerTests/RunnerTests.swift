@@ -2856,10 +2856,10 @@ extension RunnerTests {
     }
     // MARK: - Hardware JPEG decode
 
-    /// The camera's live view is motion JPEG, and `420v` is what a JPEG already is inside. This
-    /// decoder is the whole reason the super-resolution input needs no colour conversion — so it
-    /// has to actually produce that format, at the right size, with real content in it.
-    func testHardwareJPEGDecodeProducesA420vBufferWithRealPixels() throws {
+    /// The camera's live view is motion JPEG, and full-range 4:2:0 (`420f`) is what a JPEG already
+    /// is inside. The decoder has to actually produce that format, at the right size, with real
+    /// content in it.
+    func testHardwareJPEGDecodeProducesItsPlanarBufferWithRealPixels() throws {
         let image = try XCTUnwrap(UIImage(named: "MockFeed"), "MockFeed asset missing")
         let jpeg = try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
         let header = try XCTUnwrap(
@@ -2871,7 +2871,7 @@ extension RunnerTests {
         XCTAssertEqual(
             CVPixelBufferGetPixelFormatType(buffer),
             JPEGPixelBufferDecoder.pixelFormat,
-            "the decoder must land in the model's own format, not RGB")
+            "the decoder must land in its planar YCbCr format, not RGB")
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
 
