@@ -1195,6 +1195,31 @@ struct NikonUnorientedThumbnailRetirementTests {
         #expect(store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
     }
 
+    @Test func aThumbnailSharedWithAnOrientedStillOfTheSameStemIsKept() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        // A RAW+JPEG pair lists as two rows that share one cached thumbnail.
+        let raw = Self.row("_NZR2887.NEF")
+        let jpeg = Self.row("_NZR2887.JPG", orientation: 8)
+        let unorientedRaw = Self.row("_NZR2890.NEF")
+        let unorientedJPEG = Self.row("_NZR2890.JPG")
+        store.upsertBatch([raw, jpeg, unorientedRaw, unorientedJPEG], cameraID: Self.camera)
+        let thumbnail = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try store.saveThumbnail(cameraID: Self.camera, filename: jpeg.filename, data: thumbnail)
+        try store.saveThumbnail(
+            cameraID: Self.camera, filename: unorientedJPEG.filename, data: thumbnail)
+
+        store.retireUnorientedStillThumbnails()
+
+        // The JPEG learned its orientation and still draws the shared thumbnail upright.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: jpeg.filename))
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: raw.filename))
+        // A pair where neither row learned its orientation is fetched again.
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: unorientedJPEG.filename))
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: unorientedRaw.filename))
+    }
+
     @Test func aLibraryWhoseIndexCannotBeReadIsRetiredOnceItCanBe() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

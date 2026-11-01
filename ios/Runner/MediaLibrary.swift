@@ -439,8 +439,8 @@ struct MediaClipStore: @unchecked Sendable {
 
     /// Camera thumbnails cached before thumbnails carried their still's orientation draw
     /// portrait stills sideways. Once per library, removes the cached thumbnail of every camera
-    /// still whose row has not learned its orientation (a learned row still turns its old
-    /// thumbnail upright), so the grid fetches it again through the orientation-tagging read.
+    /// still whose rows have not learned its orientation (a learned row still turns its old
+    /// thumbnail upright, and a RAW and JPEG of one stem share a thumbnail), so the grid fetches it again through the orientation-tagging read.
     /// The library is marked done only after a complete pass: a bucket whose index cannot be read
     /// or a thumbnail that could not be removed is tried again on the next launch.
     func retireUnorientedStillThumbnails() {
@@ -457,11 +457,18 @@ struct MediaClipStore: @unchecked Sendable {
             }
             let names =
                 (try? fileManager.contentsOfDirectory(atPath: directory(for: bucket).path)) ?? []
+            // Same-stem stills (a RAW and its JPEG) are separate rows that share one cached
+            // thumbnail, so a thumbnail is kept while any row using it has learned its orientation.
+            var thumbnailIsOriented: [URL: Bool] = [:]
             for clip in reconciledRows(cameraID: bucket, indexed: indexed, diskNames: names).values
-            where clip.mediaKind == .photo && clip.exifOrientation == nil {
+            where clip.mediaKind == .photo {
                 guard let thumb = try? thumbURL(cameraID: bucket, filename: clip.filename),
                     fileManager.fileExists(atPath: thumb.path)
                 else { continue }
+                thumbnailIsOriented[thumb, default: false] =
+                    thumbnailIsOriented[thumb, default: false] || clip.exifOrientation != nil
+            }
+            for (thumb, oriented) in thumbnailIsOriented where !oriented {
                 do {
                     try fileManager.removeItem(at: thumb)
                 } catch {
