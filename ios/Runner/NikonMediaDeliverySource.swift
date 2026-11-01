@@ -74,7 +74,8 @@ import os
             progress: { [self] clip in model?.mediaDownloadProgress[clip.id] },
             cameraStoppedResponding: { [self] clip in
                 model?.mediaStreamsLostCamera.contains(clip.id) == true
-            })
+            },
+            rate: { [self] clip in model?.mediaDownloadRates.rate(clip.id) })
     }
     func update(_ clip: MediaClip, _ change: (inout MediaClip) -> Void) {
         guard isCurrent else { return }
