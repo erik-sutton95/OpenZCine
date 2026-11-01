@@ -4351,12 +4351,14 @@ extension RunnerTests {
 
 extension RunnerTests {
     /// Landscape: the expanded View Assist palette's lower row lies over the camera values bar.
-    /// The shared live surface hides the values while the open palette covers them (hardware pass
-    /// 1.1, OpenCine#251), so no value peeks out under the palette, paints over a chip or takes its
-    /// tap. Reduce Transparency makes the palette glass opaque, so a covered chip's pixels must not
-    /// change when the values do; collapsing the palette shows the values again.
+    /// Owner decision 2026-10-30 (hardware pass A2, OpenCine#303): the palette is only open for a
+    /// moment, so it draws over the values it reaches and leaves them in place. They are neither
+    /// hidden under it (the reversed #251 behavior) nor moved beside it. Every value keeps its
+    /// frame while the palette is open, no value paints over the palette (Reduce Transparency
+    /// makes the glass opaque, so a covered chip's pixels must not change when the values do), and
+    /// collapsing the palette leaves the values where they were.
     @MainActor
-    func testExpandedLandscapePaletteDrawsAboveTheCameraValues() async throws {
+    func testExpandedLandscapePaletteOverlapsTheCameraValuesInPlace() async throws {
         let model = NativeAppModel()
         model.preferences = OperatorPreferences.defaults
         model.startDemoSession()
@@ -4429,7 +4431,32 @@ extension RunnerTests {
         func values() -> [NSObject] {
             elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
         }
-        let bar = values().map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
+        // Each value's identifier and frame, sorted so the accessibility order does not matter.
+        func placements() -> [(id: String, frame: CGRect)] {
+            values().map { (id: identifier($0), frame: $0.accessibilityFrame) }.sorted {
+                ($0.id, $0.frame.minX, $0.frame.minY) < ($1.id, $1.frame.minX, $1.frame.minY)
+            }
+        }
+        func assertInPlace(
+            _ expected: [(id: String, frame: CGRect)], _ message: String,
+            line: UInt = #line
+        ) {
+            let actual = placements()
+            XCTAssertEqual(actual.map(\.id), expected.map(\.id), message, line: line)
+            for (now, before) in zip(actual, expected) {
+                let moved =
+                    abs(now.frame.minX - before.frame.minX) > 1
+                    || abs(now.frame.minY - before.frame.minY) > 1
+                    || abs(now.frame.width - before.frame.width) > 1
+                    || abs(now.frame.height - before.frame.height) > 1
+                XCTAssertFalse(
+                    moved,
+                    "\(message): \(now.id) moved from \(NSCoder.string(for: before.frame)) "
+                        + "to \(NSCoder.string(for: now.frame))", line: line)
+            }
+        }
+        let closed = placements()
+        let bar = closed.map(\.frame).reduce(CGRect.null) { $0.union($1) }
         XCTAssertFalse(bar.isNull, "The collapsed palette leaves the camera values shown")
         let expand = try XCTUnwrap(
             elements(host.view).first { identifier($0) == "monitor.assists.expand" },
@@ -4440,9 +4467,9 @@ extension RunnerTests {
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
         XCTAssertFalse(covered.isEmpty, "The open landscape palette must reach the values bar")
-        XCTAssertEqual(
-            values().map(identifier), [],
-            "The open palette covers the values bar, so its values are hidden, not drawn under it")
+        assertInPlace(
+            closed,
+            "The open palette draws over the camera values and leaves every one shown in place")
         // Copy the regions now: a renderer image read after a later render showed the later frame.
         let regions = covered
         let first = try XCTUnwrap(render())
@@ -4479,13 +4506,17 @@ extension RunnerTests {
                 "A camera value drew over the open palette at \(NSCoder.string(for: rect))")
         }
 
+        // Back to the original readings, so the collapsed values compare with where they began.
+        model.cameraState = state
+        try await settle()
+        assertInPlace(closed, "The open palette leaves the original values in place")
         let collapse = try XCTUnwrap(
             elements(host.view).first {
                 ["monitor.assists.expand", "monitor.assists.collapse"].contains(identifier($0))
             })
         XCTAssertTrue(collapse.accessibilityActivate())
         try await settle()
-        XCTAssertFalse(values().isEmpty, "Collapsing the palette shows the camera values again")
+        assertInPlace(closed, "Collapsing the palette leaves the camera values where they were")
     }
 }
 
