@@ -67,6 +67,14 @@ extension UVCVideoSourceState {
 /// writes onto the frame's IOSurface (BT.709 primaries, SMPTE 240M transfer), which re-encoded
 /// the signal before the look saw it: code 128 showed as 138.5 through the dongle.
 ///
+/// ## Capture calibration
+///
+/// Each frame decodes with the measured correction of the device it came from
+/// (`CaptureCalibration.forDevice`), keyed by the USB identity `UVCVideoSource` reads from the
+/// capture device's model ID. The SandbergCapture dongle (USB 345F:2130) fed the camera's YCbCr
+/// HDMI sits about 1 code toward green against an in-camera recording; its correction runs on the
+/// code values inside the same render. Any other device decodes exactly as before.
+///
 /// ponytail: one GPU to CGImage render per frame. That is the honest cost of matching the existing
 /// `liveFrameImage: UIImage?` contract, and it replaces a JPEG decode rather than adding to it. If
 /// 1080p60 proves too heavy on hardware, the upgrade is to route the `CVPixelBuffer` straight into
@@ -79,13 +87,15 @@ actor UVCFrameRenderer {
     /// working set on a path that already runs alongside the Metal feed baker's own context.
     private let renderContext = CIContext(options: [.cacheIntermediates: false])
 
-    /// Renders `lease` and releases it, returning the capture buffer to its pool. Nil when the
-    /// lease was already released or the render failed.
-    func image(from lease: DecodedFrameLease) -> UVCFrameHandoff? {
+    /// Renders `lease`, captured from `device`, and releases it, returning the capture buffer to
+    /// its pool. Nil when the lease was already released or the render failed.
+    func image(from lease: DecodedFrameLease, device: CaptureDeviceIdentity?) -> UVCFrameHandoff? {
         defer { lease.release() }
+        let calibration = CaptureCalibration.forDevice(device)
         guard let pixelBuffer = lease.pixelBuffer,
             let rendered = autoreleasepool(invoking: {
-                LiveFrameDecoding.cgImage(pixelBuffer, context: renderContext)
+                LiveFrameDecoding.cgImage(
+                    pixelBuffer, context: renderContext, calibration: calibration)
             })
         else { return nil }
         return UVCFrameHandoff(image: UIImage(cgImage: rendered))
