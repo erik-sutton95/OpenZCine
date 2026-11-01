@@ -633,6 +633,48 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(model.assist.zebraHighlightIRE, retained)
     }
 
+    /// A still in the media viewer is a full-range display picture, so its zebra menu reads a
+    /// native code on the still's own 0-255 range, not on the clip's log curve (CodeRabbit,
+    /// OpenZCine#550).
+    @MainActor
+    func testAStillsZebraMenuReadsNativeCodesOnTheStillsOwnRange() async throws {
+        let model = NativeAppModel(assist: .scratch())
+        let originalAssist = model.assistConfiguration
+        let originalLevel = model.assist.zebraHighlightIRE
+        model.assistConfiguration.zebra = .init()
+        model.assistConfiguration.zebra.unit = .native
+        model.assist.zebraHighlightIRE = 50
+        defer {
+            model.assistConfiguration = originalAssist
+            model.assist.zebraHighlightIRE = originalLevel
+        }
+        func shownThreshold(_ menus: NikonAssistMenuAdapter) async throws -> String? {
+            let host = UIHostingController(
+                rootView: NikonZebraNativeFixtureView(model: model, menus: menus))
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            func fields(_ view: UIView) -> [UITextField] {
+                if let field = view as? UITextField { return [field] }
+                return view.subviews.flatMap(fields)
+            }
+            for _ in 0..<200 {
+                host.view.layoutIfNeeded()
+                await Task.yield()
+            }
+            return try XCTUnwrap(fields(host.view).first).text
+        }
+        let still = try await shownThreshold(.photo(model: model))
+        let clip = try await shownThreshold(
+            NikonAssistMenuAdapter(model: model, compact: true, context: .playback))
+        XCTAssertEqual(still, "128", "Half the still's signal is native code 128 of 255")
+        XCTAssertNotEqual(clip, still, "The clip reads the same level on its log curve")
+    }
+
     @MainActor
     func testActualSharedNikonInspectorUsesAcceptedNativePictureAndRetiresChangedMeaning()
         async throws
@@ -4106,10 +4148,11 @@ private struct NikonSelectionNativeFixture: View {
 @MainActor
 private struct NikonZebraNativeFixtureView: View {
     let model: NativeAppModel
+    var menus: NikonAssistMenuAdapter?
     var body: some View {
         ScrollView {
             MonitorViewAssistSettings(sections: [
-                .zebra(NikonAssistMenuAdapter(model: model, compact: true).zebra)
+                .zebra((menus ?? NikonAssistMenuAdapter(model: model, compact: true)).zebra)
             ])
         }
         .environment(model)

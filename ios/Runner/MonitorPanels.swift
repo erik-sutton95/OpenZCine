@@ -548,9 +548,21 @@ struct DrumSideAdjustButton: View {
     let model: NativeAppModel
     var compact: Bool = false
     var context: ViewAssistContext = .liveView
+    /// The signal the menus read when it is not the context's camera signal.
+    var signalMapping: ExposureSignalMapping? = nil
+
+    /// The menus of a still in the media viewer. A still is a display-referred full-range
+    /// picture (the shared still renderer reads it as Rec.709 codes up to 255), so zebra
+    /// thresholds and the false colour key read that signal, not the clip's log curve, while
+    /// the tools stay the playback set.
+    static func photo(model: NativeAppModel) -> Self {
+        Self(model: model, context: .playback, signalMapping: .stills(toneMode: nil))
+    }
 
     private var mapping: ExposureSignalMapping {
-        context == .playback ? model.playbackExposureSignalMapping : model.exposureSignalMapping
+        signalMapping
+            ?? (context == .playback
+                ? model.playbackExposureSignalMapping : model.exposureSignalMapping)
     }
 
     /// The shared monitor scale order, with camera calibration supplied separately.
