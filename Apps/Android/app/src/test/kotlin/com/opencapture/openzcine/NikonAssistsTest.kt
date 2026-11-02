@@ -130,7 +130,7 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `scopes are independently active and reactivation updates recency`() {
+    fun `scopes are independently active`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.WAVE)
         state.toggle(MonitorAssistTool.VECTOR)
@@ -138,28 +138,7 @@ class NikonAssistsTest {
         state.toggle(MonitorAssistTool.WAVE)
         assertFalse(state.isOn(MonitorAssistTool.WAVE))
         state.toggle(MonitorAssistTool.WAVE)
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE),
-            state.portraitScopes(scopesShown(state::isOn)),
-        )
-    }
-
-    @Test
-    fun `portrait fit shows the first two eligible scopes regardless of activation order`() {
-        val state = restore().shared
-        state.toggle(MonitorAssistTool.WAVE)
-        state.toggle(MonitorAssistTool.VECTOR)
-        state.toggle(MonitorAssistTool.HISTO)
-
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM),
-            state.portraitScopes(scopesShown(state::isOn)),
-        )
-        state.toggle(MonitorAssistTool.HISTO)
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE),
-            state.portraitScopes(scopesShown(state::isOn)),
-        )
+        assertEquals(setOf(ScopeKind.WAVEFORM, ScopeKind.VECTORSCOPE), scopesShown(state::isOn))
     }
 
     @Test
@@ -193,10 +172,6 @@ class NikonAssistsTest {
         val reconnected = restore()
         assertEquals(firstSession.live, reconnected.live)
         assertEquals(setOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM), scopesShown(reconnected.shared::isOn))
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM),
-            reconnected.shared.portraitScopes(scopesShown(reconnected.shared::isOn)),
-        )
     }
 
     @Test
@@ -275,15 +250,14 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `legacy single scope migrates without inventing portrait recency`() {
+    fun `legacy single scope migrates`() {
         assist.edit().putString("scope", "vector").apply()
         val state = restore().shared
         assertEquals(setOf(ScopeKind.VECTORSCOPE), scopesShown(state::isOn))
-        assertEquals(listOf(ScopeKind.VECTORSCOPE), state.portraitScopes(scopesShown(state::isOn)))
     }
 
     @Test
-    fun `legacy multi scope selection keeps all selections with canonical fit placement`() {
+    fun `legacy multi scope selection keeps all selections`() {
         assist.edit()
             .putString("scopes", "wave,parade,histo,lights")
             .putString("scopeActivationOrder", "wave,parade,histo,lights")
@@ -293,10 +267,6 @@ class NikonAssistsTest {
         assertEquals(
             setOf(ScopeKind.WAVEFORM, ScopeKind.PARADE, ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
             scopesShown(state::isOn),
-        )
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
-            state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.WAVE)
         assertEquals(

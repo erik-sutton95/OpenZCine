@@ -3,62 +3,28 @@ package com.opencapture.openzcine
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorScopePanelMath
 import com.opencapture.monitorui.MonitorScopePoint
-import com.opencapture.openzcine.lut.PackedStoredLut
-import com.opencapture.openzcine.lut.StoredLutCategory
-import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Pure multi-scope selection, demand, and placement policy checks. */
 class ScopeLayoutTest {
     @Test
-    fun `portrait keeps the first two eligible canonical selections`() {
-        val selected =
-            setOf(
-                ScopeKind.WAVEFORM,
-                ScopeKind.PARADE,
-                ScopeKind.HISTOGRAM,
-                ScopeKind.TRAFFIC_LIGHTS,
-            )
+    fun `every selected scope floats in portrait fit and fill as in landscape`() {
+        val state = MonitorAssistState()
+        val scopes = listOf(MonitorAssistTool.WAVE, MonitorAssistTool.PARADE, MonitorAssistTool.HISTO,
+            MonitorAssistTool.VECTOR)
+        scopes.forEach(state::toggle)
+        val live = scopes + MonitorAssistTool.GRID + MonitorAssistTool.PEAK
 
-        val displayed = portraitDisplayedScopes(selected)
-        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE), displayed)
-        assertEquals(4, selected.size, "Fit placement must not alter the active selection")
-    }
+        val rendered = nikonLiveRenderedTools(live, scopesSampled = true) { state.isOn(it) || it == MonitorAssistTool.PEAK }
 
-    @Test
-    fun `portrait fill keeps every selected scope floating in canonical order`() {
-        val selected =
-            setOf(
-                ScopeKind.HISTOGRAM,
-                ScopeKind.WAVEFORM,
-                ScopeKind.VECTORSCOPE,
-            )
-
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = true,
-            ),
-        )
-        assertEquals(
-            listOf(ScopeKind.HISTOGRAM),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = false,
-            ),
-        )
+        assertEquals(scopes.toSet() + MonitorAssistTool.PEAK, rendered)
+        assertEquals(setOf(MonitorAssistTool.PEAK),
+            nikonLiveRenderedTools(live, scopesSampled = false) { state.isOn(it) || it == MonitorAssistTool.PEAK })
     }
 
     @Test
@@ -158,34 +124,5 @@ class ScopeLayoutTest {
             1.6,
             MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.vectorScale,
         )
-    }
-
-    @Test
-    fun `vectorscope LUT request follows active built in and stored selections`() {
-        assertEquals(1, scopeVectorLutRequest(null, curveOrdinal = 1) { null }?.lookOrdinal)
-        assertEquals(
-            2,
-            scopeVectorLutRequest(
-                FeedLutSelection.BuiltIn(FeedLut.MONO),
-                curveOrdinal = 0,
-            ) { null }?.lookOrdinal,
-        )
-        val stored =
-            requireNotNull(StoredLutSelection.fromPersisted(StoredLutCategory.CUSTOM.name, "look-123456789abc.cube"))
-        assertNull(
-            scopeVectorLutRequest(
-                FeedLutSelection.Stored(stored),
-                curveOrdinal = 0,
-            ) { null },
-        )
-        val packed = PackedStoredLut(2, ByteArray(2 * 2 * 2 * 4))
-        val request =
-            requireNotNull(
-                scopeVectorLutRequest(FeedLutSelection.Stored(stored), curveOrdinal = 0) { packed },
-            )
-
-        assertEquals(-1, request.lookOrdinal)
-        assertEquals(2, request.cubeSize)
-        assertTrue(request.packedRgba === packed.rgba)
     }
 }

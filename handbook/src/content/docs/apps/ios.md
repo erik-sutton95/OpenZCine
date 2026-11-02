@@ -74,10 +74,8 @@ keeps your most used tools out and folds the rest behind its chevron.
 - **False color** is codec-aware, **zebras** mark levels, and
   **Traffic Lights** is a RED-inspired per-channel meter that leans over or
   under from middle gray.
-- In landscape and portrait fill, scope panels float and can be dragged and
-  resized; positions persist. Portrait fit stacks the two most recently
-  activated scopes. A third stays active but hidden until you close one or
-  pinch to fill.
+- Scope panels float in landscape and in portrait fit and fill, and can be
+  dragged to any screen edge and resized; positions persist.
 - In photo mode, scopes and false color read the stills preview (sRGB or HLG),
   and an EV meter follows the body's exposure indicator.
 
@@ -197,7 +195,7 @@ that change `Sources/`, `Tests/`, `ios/`, `Package.swift`, `scripts/` or the
 [`ios/TestFlight/WhatToTest.en-US.txt`](https://github.com/erik-sutton95/OpenZCine/blob/main/ios/TestFlight/WhatToTest.en-US.txt)
 with plain-language tester notes; CI rejects stale or developer-centric copy.
 Maintainer setup: [`docs/testflight-ci.md`](https://github.com/erik-sutton95/OpenZCine/blob/main/docs/testflight-ci.md).
-Release window: [0.2.5](../../releases/0-2-5/).
+Release window: [0.2.8](../../releases/0-2-8/).
 
 If something fails, use **Operator Setup → System → Report a Problem** or
 **Settings → Share Diagnostics** ([Troubleshooting](../../guides/troubleshooting/)).

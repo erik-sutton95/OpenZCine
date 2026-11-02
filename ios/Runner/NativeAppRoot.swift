@@ -2710,6 +2710,9 @@ final class NativeAppModel {
     }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
+    /// Per-clip download speed while a clip streams from the camera (OpenCine's one rate source,
+    /// the same the shared library feeds for its own transfers).
+    @ObservationIgnored let mediaDownloadRates = MonitorTransferRates<String>()
     /// The one camera stream running per clip id; a second caller joins it.
     @ObservationIgnored private var mediaDownloadFlights: [String: MediaDownloadFlight] = [:]
     /// Clip ids whose last camera stream ended because the camera stopped answering (the link
@@ -7908,8 +7911,13 @@ final class NativeAppModel {
                     lease.release()
                     break
                 }
-                // A frame captured before the device went away or changed is stale.
-                guard let handoff = await renderer.image(from: lease),
+                // A frame captured before the device went away or changed is stale. Every capture
+                // device decodes with the HDMI capture correction; its identity rides along for
+                // the readout, and a frame of the device before carries an older generation,
+                // which the fence check refuses.
+                guard
+                    let handoff = await renderer.image(
+                        from: lease, device: source.captureDeviceIdentity),
                     source.fence.isCurrent(lease.generation)
                 else { continue }
                 await self.presentHDMIFrame(
@@ -11960,13 +11968,6 @@ final class NativeAppModel {
         assist.desqueeze(visible: renderedLiveAssistTools.contains(.desqueeze))
     }
 
-    /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
-    /// photography toolset. Eligibility is resolved before choosing the canonical first two.
-    var renderedFitScopes: [MonitorAssistTool] {
-        let rendered = renderedLiveAssistTools
-        return preferences.displayedFitScopes(on: rendered)
-    }
-
     /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take
     /// the camera started (or stopped) while the prompt was up was inverted by "Start" (or "Stop").
     func confirmRecordToggle() {
@@ -14592,6 +14593,15 @@ struct NativeAppRoot: View {
         .statusBarHidden(true)
         .monitorBrowserHandoffReturn(model.browserHandoff)
         .task {
+            // Thumbnails cached before they carried their still's orientation draw portrait
+            // stills sideways: retire them once, off the main actor, so the grid fetches them
+            // again upright.
+            let store = model.mediaClipStore
+            await Task.detached(priority: .utility) {
+                store.retireUnorientedStillThumbnails()
+            }.value
+        }
+        .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
             _ = model.shell
@@ -15197,7 +15207,9 @@ extension NativeAppModel {
         guard !thumblessClipIDs.contains(clip.id) else { return }
         guard !mediaClipStore.hasThumbnail(cameraID: clip.cameraID, filename: clip.filename)
         else { return }
-        if let data = try? await session.getThumb(handle: handle) {
+        // The shared Nikon layer tags a still's thumbnail with the still's own orientation (one
+        // small head read), so the cached file draws upright in every cell, strip and preview.
+        if let data = try? await session.getUprightThumb(handle: handle, filename: clip.filename) {
             // Validate before caching: the body occasionally returns truncated/garbage thumb
             // bytes (seen on-device as repeated ImageIO 'JPEG err=7' spam); caching them would
             // poison the cell decode on every realisation. Invalid data is remembered in-memory
@@ -15205,12 +15217,12 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
-                // A thumb that DOES carry EXIF answers the orientation for free — grid cells
-                // fall back to this row value when a later decode meets stripped bytes.
-                if clip.exifOrientation == nil,
-                    let orientation = MediaCellImageLoader.exifOrientation(in: data)
+                // The tag answers the still's orientation: the row keeps it, so the staggered
+                // grid sizes a portrait card tall from metadata on every later layout.
+                if let url = try? mediaClipStore.thumbURL(
+                    cameraID: clip.cameraID, filename: clip.filename)
                 {
-                    cacheEXIFOrientation(orientation, for: clip)
+                    resolveEXIFOrientation(for: clip, at: url)
                 }
             } else {
                 thumblessClipIDs.insert(clip.id)
@@ -15240,6 +15252,7 @@ extension NativeAppModel {
         mediaStreamsLostCamera.remove(clip.id)
         defer {
             if mediaDownloadFlights[clip.id] === flight { mediaDownloadFlights[clip.id] = nil }
+            mediaDownloadRates.end(clip.id)
             flight.finish()
         }
         let bucket = clip.cameraID
@@ -15250,6 +15263,8 @@ extension NativeAppModel {
                 cameraID: bucket, filename: clip.filename,
                 onProgress: { offset in
                     mediaDownloadProgress[clip.id] = Double(offset) / Double(total)
+                    // The first report is the resumed offset: the reading starts from it.
+                    mediaDownloadRates.record(clip.id, totalBytes: offset)
                 })
             if Task.isCancelled {
                 mediaDownloadProgress[clip.id] = nil

@@ -41,6 +41,8 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
         substitute(module("com.opencapture.opencine:app-ui-testing")).using(project(":app-ui-testing"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))
+        // The still viewer's native picture assists (MonitorBitmapStillLook over native-runtime).
+        substitute(module("com.opencapture.opencine:appkit-native")).using(project(":appkit-native"))
         // Shared relay/watch owners and transport-free deployed Nikon schemas.
         substitute(module("com.opencapture.opencine:relay")).using(project(":relay"))
         substitute(module("com.opencapture.opencine:relay-runtime")).using(project(":relay-runtime"))

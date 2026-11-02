@@ -320,6 +320,19 @@ final class NikonPictureSourceSession: CameraSession {
     }
 }
 
+extension CameraPicker {
+    /// How often the value changes: shooting mode, drive, metering and Picture Control set the
+    /// scene up; ISO, shutter, aperture, white balance and focus are ridden. A landscape photo
+    /// monitor shows setup values in the status row's trailing corner and keeps the ridden values
+    /// along the bottom (OpenCine `MonitorStatusCorner`).
+    var captureGroup: MonitorCaptureReadoutGroup {
+        switch self {
+        case .stillMode, .stillDrive, .stillMeter, .stillPicture: .setup
+        default: .ridden
+        }
+    }
+}
+
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -401,7 +414,8 @@ struct NikonMonitorShell: View {
                     + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue),
                 dimmed: cue.dimmed,
                 holdAction: cue.holdsShutterLock && model.videoSource != .relay
-                    ? { model.toggleShutterLockOnCamera() } : nil)
+                    ? { model.toggleShutterLockOnCamera() } : nil,
+                group: picker.captureGroup)
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
@@ -586,21 +600,15 @@ struct NikonMonitorShell: View {
             configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),
             paradeIntensityScale: 1)
     }
-    private func assists(_ layout: FieldMonitorLayout) -> MonitorOperatorLiveAssists {
+    /// The palette and the tools the shared surface draws. Every rendered scope floats, in
+    /// landscape and in portrait fit and fill alike, as in the other apps.
+    static func liveAssists(_ model: NativeAppModel) -> MonitorOperatorLiveAssists {
         @Bindable var model = model
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
         return .init(
-            scopes: Self.assistSource(model),
+            scopes: assistSource(model),
             tools: { model.liveAssistPaletteTools.map(\.selection) },
-            rendered: {
-                Set(
-                    model.renderedLiveAssistTools.filter {
-                        !layout.portrait || layout.fillsPicture
-                            || !MonitorAssistTool.scopeTools.contains($0)
-                            || model.renderedFitScopes.contains($0)
-                    }.map(\.selection))
-            },
-            fitted: { model.renderedFitScopes.map(\.selection) },
+            rendered: { Set(model.renderedLiveAssistTools.map(\.selection)) },
             signalOptions: .init(
                 falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference,
@@ -651,7 +659,8 @@ struct NikonMonitorShell: View {
             ?? FieldMonitorLayout(width: context.viewportWidth, height: context.viewportHeight)
         MonitorOperatorLiveSurface(
             host: model, control: model.shell.control, session: model.operatorSession,
-            layout: live, source: source, assists: assists(layout), views: bodyViews(layout),
+            layout: live, source: source, assists: Self.liveAssists(model),
+            views: bodyViews(layout),
             portraitAspect: portraitAspect,
             picture: {
                 GeometryReader { picture in

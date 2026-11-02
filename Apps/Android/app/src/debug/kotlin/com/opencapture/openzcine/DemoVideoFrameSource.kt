@@ -50,7 +50,21 @@ class DemoVideoFrameSource(
     private val openDataSource: () -> DataSource?,
     @Suppress("UNUSED_PARAMETER")
     private val includeDebugCameraLevel: Boolean = true,
+    /** The seeded AF point the synthetic feed also carries (`zc.demo.focusPair`). */
+    private val seededFocusPoint: Boolean = false,
 ) : LiveFrameSource {
+    /** One looped clip frame; a video has no AF metadata unless the seeded point was asked for. */
+    internal fun liveFrame(jpeg: ByteArray, frameIndex: Long, fps: Int): LiveFrame =
+        LiveFrame(
+            timestampNanos = System.nanoTime(),
+            jpegData = jpeg,
+            audioLevels = null,
+            focus = if (seededFocusPoint) demoSeededFocusInfo(SEEDED_FOCUS_WIDTH, SEEDED_FOCUS_HEIGHT) else null,
+            level = null,
+            timecode = demoTimecode(frameIndex, fps),
+            measuredFramesPerSecond = fps.toDouble(),
+        )
+
     private val producerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val producer: Flow<LiveFrame> =
@@ -69,17 +83,7 @@ class DemoVideoFrameSource(
                         clipFps = fps
                         if (loop.size < MAX_LOOP_FRAMES) loop += jpeg
                         if (coroutineContext.isActive) {
-                            collector.emit(
-                                LiveFrame(
-                                    timestampNanos = System.nanoTime(),
-                                    jpegData = jpeg,
-                                    audioLevels = null,
-                                    focus = null,
-                                    level = null,
-                                    timecode = demoTimecode(frameIndex, fps),
-                                    measuredFramesPerSecond = fps.toDouble(),
-                                ),
-                            )
+                            collector.emit(liveFrame(jpeg, frameIndex, fps))
                         }
                     }
                 if (!decoded) {
@@ -99,17 +103,7 @@ class DemoVideoFrameSource(
             val startNanos = System.nanoTime()
             while (coroutineContext.isActive) {
                 val jpeg = loop[(frameIndex % loop.size).toInt()]
-                emit(
-                    LiveFrame(
-                        timestampNanos = System.nanoTime(),
-                        jpegData = jpeg,
-                        audioLevels = null,
-                        focus = null,
-                        level = null,
-                        timecode = demoTimecode(frameIndex, clipFps),
-                        measuredFramesPerSecond = clipFps.toDouble(),
-                    ),
-                )
+                emit(liveFrame(jpeg, frameIndex, clipFps))
                 frameIndex++
                 val dueNanos = startNanos + frameIndex * periodNanos
                 val waitMillis = (dueNanos - System.nanoTime()) / 1_000_000
@@ -235,6 +229,9 @@ class DemoVideoFrameSource(
 
     companion object {
         private const val TAG = "DemoVideoFrameSource"
+        /** The seeded AF point's focus space; LiveFocusInfo places boxes as fractions of it. */
+        private const val SEEDED_FOCUS_WIDTH = 1280
+        private const val SEEDED_FOCUS_HEIGHT = 720
         private const val DEFAULT_CLIP_FPS = 25
         private const val MAX_LOOP_FRAMES = 300
         /** Long-edge cap for demo JPEG so BitmapFactory + GL stay light. */
@@ -249,6 +246,7 @@ class DemoVideoFrameSource(
             context: Context,
             explicitPath: String?,
             includeDebugCameraLevel: Boolean,
+            seededFocusPoint: Boolean = false,
         ): DemoVideoFrameSource? {
             explicitPath?.trim()?.takeIf { it.isNotEmpty() }?.let { path ->
                 val file = File(path)
@@ -264,6 +262,7 @@ class DemoVideoFrameSource(
                             }
                         },
                         includeDebugCameraLevel = includeDebugCameraLevel,
+                        seededFocusPoint = seededFocusPoint,
                     )
                 }
                 Log.w(TAG, "zc.demo.video path not found: $path")
@@ -275,6 +274,7 @@ class DemoVideoFrameSource(
             return DemoVideoFrameSource(
                 openDataSource = { openAssetDataSource(context, assetPath) },
                 includeDebugCameraLevel = includeDebugCameraLevel,
+                seededFocusPoint = seededFocusPoint,
             )
         }
 

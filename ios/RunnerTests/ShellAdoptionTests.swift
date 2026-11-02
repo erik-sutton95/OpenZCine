@@ -152,9 +152,9 @@ struct ShellAdoptionTests {
     }
 
     @Test(
-        "SIMULATED third scope stays active and inspectable while fit renders the first two eligible scopes"
+        "SIMULATED every active scope floats in portrait fit and fill, none docked under the picture"
     )
-    func scopeSelectionDoesNotConfuseActivationWithFitPlacement() {
+    func portraitScopesFloatInFitAndFill() {
         let model = NativeAppModel()
         let saved = model.preferences
         let live = model.assist.liveTools
@@ -169,30 +169,26 @@ struct ShellAdoptionTests {
         model.isMonitorPresented = true
         model.setDisplayMode(.live)
         model.monitorIsPortrait = true
-        model.preferences.portraitFeedAspect = .fit16x9
         for tool in MonitorAssistTool.scopeTools {
             model.assist.set(tool, visible: false, context: .liveView)
         }
         model.setAssist(.waveform, visible: true)
         model.setAssist(.histogram, visible: true)
-        model.monitorNote = nil
-
         model.setAssist(.parade, visible: true)
-
-        #expect(model.assist.liveTools.isSuperset(of: [.waveform, .histogram, .parade]))
-        #expect(
-            model.renderedFitScopes == [
-                .waveform, .parade,
-            ])
-        #expect(model.monitorNote == nil)
+        let shown = Set(
+            [MonitorAssistTool.waveform, .histogram, .parade].map(\.selection))
+        for fill in [false, true] {
+            model.preferences.portraitFeedAspect = fill ? .fill : .fit16x9
+            let assists = NikonMonitorShell.liveAssists(model)
+            #expect(assists.rendered()?.isSuperset(of: shown) == true, "fill \(fill)")
+        }
         model.showAssist(.vectorscope)
         #expect(model.assist.configureTool == MonitorAssistTool.vectorscope.selection)
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))
         #expect(
-            model.renderedFitScopes == [
-                .waveform, .parade,
-            ])
+            NikonMonitorShell.liveAssists(model).rendered()?.contains(
+                MonitorAssistTool.vectorscope.selection) == true)
         model.interfaceLocked = true
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))

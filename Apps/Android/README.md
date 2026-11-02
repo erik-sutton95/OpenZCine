@@ -285,7 +285,8 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   All/Videos/Photos/Favorites filters, Newest/Oldest/Name sorting, persisted favorites, grid/list
   arrangements, long-press selection, and a grid sweep gesture. The Camera source is listed through
   the facade's latest-wins `sessionBeginMediaBrowse`/`sessionNextMediaBrowsePage` cursor plus
-  `sessionThumbnail`. Handle snapshots cover every usable card, while round-robin 32-object pages
+  `sessionUprightThumbnail` (the camera thumbnail tagged with its still's EXIF orientation, so
+  portrait stills draw upright). Handle snapshots cover every usable card, while round-robin 32-object pages
   bound `GetObjectInfo` work and update the grid incrementally. Page deltas stay in memory until a
   listing finishes, so persistence encodes the camera catalog once per listing. Exact identity
   removals also prevent proxy-first R3D listings from retaining stale masters. MOV/MP4/M4V

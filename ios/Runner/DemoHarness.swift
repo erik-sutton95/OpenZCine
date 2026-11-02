@@ -577,10 +577,8 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_FEED_ASPECT"],
                     let aspect = PortraitFeedAspect(rawValue: raw)
                 {
-                    // Demo/screenshot affordance: stage the portrait feed aspect (fit16x9/fill).
-                    // Applied BEFORE the scope seeding below so that seeding >2 scopes in fill isn't
-                    // refused by the portrait-fit 2-scope cap (which keys on `.fit16x9`); the cap is
-                    // inactive in fill, so all requested scopes activate and persist their order.
+                    // Demo/screenshot affordance: stage the portrait feed aspect (fit16x9/fill)
+                    // before the scope seeding below.
                     model.preferences.portraitFeedAspect = aspect
                 }
                 if let raw = env["ZC_DEMO_PARADE_MODE"],
@@ -636,16 +634,19 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_PANEL_POS"] {
                     // Demo/screenshot affordance: place floating assist panels at normalized
-                    // viewport positions, e.g. "wave:0.25,0.30;traffic-lights:0.08,0.58".
+                    // viewport positions, e.g. "wave:0.25,0.30;traffic-lights:0.08,0.58". A
+                    // "portrait." prefix stages a scope's portrait slot instead of landscape.
                     for entry in raw.split(separator: ";") {
                         let parts = entry.split(separator: ":")
                         guard parts.count == 2 else { continue }
                         let coords = parts[1].split(separator: ",").compactMap { Double($0) }
                         guard coords.count == 2 else { continue }
-                        let center = CGPoint(x: coords[0], y: coords[1])
-                        let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
-                        if let tool = NikonScopePanels.legacyPanelIDs[String(parts[0])] {
-                            // The unit square counts as landscape, the slot the demo stages.
+                        let portrait = parts[0].hasPrefix("portrait.")
+                        let id = String(parts[0].dropFirst(portrait ? "portrait.".count : 0))
+                        // A unit square counts as landscape; a taller unit rect as portrait.
+                        let unit = CGRect(x: 0, y: 0, width: 1, height: portrait ? 2 : 1)
+                        let center = CGPoint(x: coords[0], y: coords[1] * unit.height)
+                        if let tool = NikonScopePanels.legacyPanelIDs[id] {
                             model.scopePanels.slot(for: tool).store(center: center, in: unit)
                         } else {
                             model.movablePanelPositions[String(parts[0])] =

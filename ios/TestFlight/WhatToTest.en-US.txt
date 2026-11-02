@@ -2,26 +2,26 @@ New and changed
 
 - Camera setup, settings, View Assist and Media controls are closer to the other OpenCine apps. Cameras > Add setup offers USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
 - DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap a tile to change it; hold and drag to reorder.
-- Media and playback are much faster on large cards: listing, selection, transfer progress and controls stay responsive. With Full Resolution Caching on, a played clip keeps downloading after you close it and reads CACHED. Playback scopes update more evenly.
-- Readouts are clearer: tap storage for free space, percentage or estimated time; Photo SHOTS shows a short count. FPS reads LINK until the first picture, colour sits beside codec in landscape, and portrait uses a three-column grid. Press any value and slide to change it, in Photo too.
-- Instant review reads the preview stored inside RAW photos, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
+- Media and playback are much faster on large cards. The grid is staggered: portrait photos stand upright and every item fills the space above it. Caching and downloads show a live speed, for example 18% and 42 MB/s. Exit selection closes the simpler selection bar, and pinch zoom now fills the screen past the letterbox. Played clips keep caching and read CACHED.
+- Readouts are clearer: tap storage for free space, percentage or estimated time; SHOTS shows a short count; FPS reads LINK until the first picture; colour sits beside codec in landscape; portrait uses a three-column grid. Press any value and slide to change it, in Photo too. Landscape Photo moves setup values to the top corner so captions fit, and the focus recenter key sits in the picture's corner.
+- Instant review reads the preview inside RAW photos, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
 - Experimental gyro logging adds guided ring calibration, IBIS and Electronic VR setup and restore, mount-move warnings and one shareable Gyroflow log per take.
 
 Fixes
 
-- Live View stays smooth after connecting, warm restarts and Quality Bias changes, preserving camera readouts and timecode frames. Diagnostics distinguish incoming video, decoding and display interruptions.
+- Live View stays smooth after connecting, warm restarts and Quality Bias changes, keeping readouts and timecode frames. Diagnostics split video, decoding and display interruptions.
 - Background recovery keeps your stills or video mode and no longer keeps the camera busy.
-- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it. A silent camera says it may be asleep instead of showing a connection error. A connect that never starts live view ends after about 40 s with Try again instead of spinning.
-- Take Over asks first, and the phone that loses the camera stops reconnecting. A refused camera Wi-Fi join offers Settings and an explicit retry; abandoned setup connections stop.
+- A dozing camera gets a wait of up to about 20 s (half-press the shutter); a silent one says it may be asleep. Connecting no longer freezes on Starting live view, and a connect that never starts live view ends after about 40 s with Try again.
+- Take Over asks first, and the phone that loses the camera stops reconnecting. A refused camera Wi-Fi join offers Settings and a retry; abandoned setup connections stop.
 - Exposure readouts are restored: Auto ISO shows its limit, camera-owned values are dimmed and locked, hold on SHUTTER toggles its lock, and Reading camera settings shows while live view starts.
-- Photo mode turns the LUT and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo and hold takes a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
-- Media sharing treats photos as photos and finishes a clip's copy first, including a clip you left mid-download in the player; leaving the player no longer drops the camera on Wi-Fi, and a camera that stops answering is named. Playback stays paused after Share or app return. Download from RED opens over the clip player. The GYRO pill avoids screen lock, and focus pulls no longer leave tap-to-focus busy.
-- VoiceOver skips collapsed or covered controls and shutter labels describe the action. Setup asks for Local Network at its own step. The open landscape View Assist palette hides covered values.
+- Photo mode turns the LUT and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo, hold a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
+- Sharing treats photos as photos and finishes a clip's copy first, even one you left mid-download; leaving the player no longer drops the camera on Wi-Fi, and a camera that stops answering is named. Playback stays paused after Share or app return. Download from RED opens over the clip. The GYRO pill avoids screen lock; focus pulls no longer leave tap-to-focus busy.
+- VoiceOver skips collapsed or covered controls and shutter labels describe the action. Setup asks for Local Network at its own step.
 
 What to test
 
-- In video mode, rotate and inspect DISP 3, FPS, timecode frames and readouts. Step through storage, then switch to Photo and check SHOTS.
+- In video, rotate and inspect DISP 3, FPS, timecode frames and readouts. Step through storage; in Photo, check SHOTS and the landscape top corner.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- On a full card, scroll, select and cache clips; check playback with scopes and a wide Log3G10 clip for smooth controls and natural grey. Verify CACHED after background download. With no RED LUTs stored, open Download from RED over a clip. Leave a clip before it finishes caching, then Share it from Media.
+- On a full card, check the staggered grid and portrait photos, select then Exit selection, and cache clips. Play a wide Log3G10 clip with scopes and pinch zoom. Leave a clip mid-caching, then Share it.
 - Test camera doze/wake, cancelled Wi-Fi retry and two-phone Take Over. Change Quality Bias, background and return; use Share Diagnostics if the picture drops out.
 - Mount the phone rigidly, enable gyro logging and complete ring calibration. Record short and long takes, check mount-move handling, then share logs to Gyroflow and confirm IBIS and Electronic VR restore.

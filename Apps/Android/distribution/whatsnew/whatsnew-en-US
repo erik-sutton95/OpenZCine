@@ -1,5 +1,5 @@
-- Shared setup, DISP 3 and View Assist; experimental gyro logs add guided calibration, stabilization restore and mount-move warnings.
-- Faster Media and playback on large cards; Full Resolution Caching marks played clips CACHED; scopes and assists stay responsive.
-- Download from RED opens over the clip player.
-- Smoother live view, camera wake and Take Over fixes, plus clearer Wi-Fi retries.
-- Sharper instant review and CL/CH capture, plus Photo LUT, shots, storage and sharing fixes.
+- Shared setup, DISP 3 with REC chip and large timecode; experimental gyro logs add guided calibration and mount-move warnings.
+- Faster Media: staggered grid with upright portrait photos, live transfer speed, Exit selection, zoom to the screen edge.
+- Landscape Photo puts setup values in the top corner.
+- Smoother live view, camera wake and Take Over.
+- Sharper instant review, one photo per CL/CH tap, Photo turns LUTs off, plus shots and sharing fixes.

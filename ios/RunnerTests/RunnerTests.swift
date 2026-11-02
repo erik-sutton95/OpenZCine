@@ -633,6 +633,48 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(model.assist.zebraHighlightIRE, retained)
     }
 
+    /// A still in the media viewer is a full-range display picture, so its zebra menu reads a
+    /// native code on the still's own 0-255 range, not on the clip's log curve (CodeRabbit,
+    /// OpenZCine#550).
+    @MainActor
+    func testAStillsZebraMenuReadsNativeCodesOnTheStillsOwnRange() async throws {
+        let model = NativeAppModel(assist: .scratch())
+        let originalAssist = model.assistConfiguration
+        let originalLevel = model.assist.zebraHighlightIRE
+        model.assistConfiguration.zebra = .init()
+        model.assistConfiguration.zebra.unit = .native
+        model.assist.zebraHighlightIRE = 50
+        defer {
+            model.assistConfiguration = originalAssist
+            model.assist.zebraHighlightIRE = originalLevel
+        }
+        func shownThreshold(_ menus: NikonAssistMenuAdapter) async throws -> String? {
+            let host = UIHostingController(
+                rootView: NikonZebraNativeFixtureView(model: model, menus: menus))
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            func fields(_ view: UIView) -> [UITextField] {
+                if let field = view as? UITextField { return [field] }
+                return view.subviews.flatMap(fields)
+            }
+            for _ in 0..<200 {
+                host.view.layoutIfNeeded()
+                await Task.yield()
+            }
+            return try XCTUnwrap(fields(host.view).first).text
+        }
+        let still = try await shownThreshold(.photo(model: model))
+        let clip = try await shownThreshold(
+            NikonAssistMenuAdapter(model: model, compact: true, context: .playback))
+        XCTAssertEqual(still, "128", "Half the still's signal is native code 128 of 255")
+        XCTAssertNotEqual(clip, still, "The clip reads the same level on its log curve")
+    }
+
     @MainActor
     func testActualSharedNikonInspectorUsesAcceptedNativePictureAndRetiresChangedMeaning()
         async throws
@@ -2856,10 +2898,10 @@ extension RunnerTests {
     }
     // MARK: - Hardware JPEG decode
 
-    /// The camera's live view is motion JPEG, and `420v` is what a JPEG already is inside. This
-    /// decoder is the whole reason the super-resolution input needs no colour conversion — so it
-    /// has to actually produce that format, at the right size, with real content in it.
-    func testHardwareJPEGDecodeProducesA420vBufferWithRealPixels() throws {
+    /// The camera's live view is motion JPEG, and full-range 4:2:0 (`420f`) is what a JPEG already
+    /// is inside. The decoder has to actually produce that format, at the right size, with real
+    /// content in it.
+    func testHardwareJPEGDecodeProducesItsPlanarBufferWithRealPixels() throws {
         let image = try XCTUnwrap(UIImage(named: "MockFeed"), "MockFeed asset missing")
         let jpeg = try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
         let header = try XCTUnwrap(
@@ -2868,10 +2910,11 @@ extension RunnerTests {
         let buffer = try XCTUnwrap(
             JPEGPixelBufferDecoder().decode(jpeg), "hardware JPEG decode returned nothing")
 
+        // Full range, as the JPEG is: a video-range buffer of the same samples crushed 16 to 0.
         XCTAssertEqual(
             CVPixelBufferGetPixelFormatType(buffer),
-            JPEGPixelBufferDecoder.pixelFormat,
-            "the decoder must land in the model's own format, not RGB")
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            "the decoder must land in the JPEG's full-range 4:2:0 planes, not video range or RGB")
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
 
@@ -4106,10 +4149,11 @@ private struct NikonSelectionNativeFixture: View {
 @MainActor
 private struct NikonZebraNativeFixtureView: View {
     let model: NativeAppModel
+    var menus: NikonAssistMenuAdapter?
     var body: some View {
         ScrollView {
             MonitorViewAssistSettings(sections: [
-                .zebra(NikonAssistMenuAdapter(model: model, compact: true).zebra)
+                .zebra((menus ?? NikonAssistMenuAdapter(model: model, compact: true)).zebra)
             ])
         }
         .environment(model)
@@ -4351,12 +4395,14 @@ extension RunnerTests {
 
 extension RunnerTests {
     /// Landscape: the expanded View Assist palette's lower row lies over the camera values bar.
-    /// The shared live surface hides the values while the open palette covers them (hardware pass
-    /// 1.1, OpenCine#251), so no value peeks out under the palette, paints over a chip or takes its
-    /// tap. Reduce Transparency makes the palette glass opaque, so a covered chip's pixels must not
-    /// change when the values do; collapsing the palette shows the values again.
+    /// Owner decision 2026-10-30 (hardware pass A2, OpenCine#303): the palette is only open for a
+    /// moment, so it draws over the values it reaches and leaves them in place. They are neither
+    /// hidden under it (the reversed #251 behavior) nor moved beside it. Every value keeps its
+    /// frame while the palette is open, no value paints over the palette (Reduce Transparency
+    /// makes the glass opaque, so a covered chip's pixels must not change when the values do), and
+    /// collapsing the palette leaves the values where they were.
     @MainActor
-    func testExpandedLandscapePaletteDrawsAboveTheCameraValues() async throws {
+    func testExpandedLandscapePaletteOverlapsTheCameraValuesInPlace() async throws {
         let model = NativeAppModel()
         model.preferences = OperatorPreferences.defaults
         model.startDemoSession()
@@ -4429,7 +4475,32 @@ extension RunnerTests {
         func values() -> [NSObject] {
             elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
         }
-        let bar = values().map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
+        // Each value's identifier and frame, sorted so the accessibility order does not matter.
+        func placements() -> [(id: String, frame: CGRect)] {
+            values().map { (id: identifier($0), frame: $0.accessibilityFrame) }.sorted {
+                ($0.id, $0.frame.minX, $0.frame.minY) < ($1.id, $1.frame.minX, $1.frame.minY)
+            }
+        }
+        func assertInPlace(
+            _ expected: [(id: String, frame: CGRect)], _ message: String,
+            line: UInt = #line
+        ) {
+            let actual = placements()
+            XCTAssertEqual(actual.map(\.id), expected.map(\.id), message, line: line)
+            for (now, before) in zip(actual, expected) {
+                let moved =
+                    abs(now.frame.minX - before.frame.minX) > 1
+                    || abs(now.frame.minY - before.frame.minY) > 1
+                    || abs(now.frame.width - before.frame.width) > 1
+                    || abs(now.frame.height - before.frame.height) > 1
+                XCTAssertFalse(
+                    moved,
+                    "\(message): \(now.id) moved from \(NSCoder.string(for: before.frame)) "
+                        + "to \(NSCoder.string(for: now.frame))", line: line)
+            }
+        }
+        let closed = placements()
+        let bar = closed.map(\.frame).reduce(CGRect.null) { $0.union($1) }
         XCTAssertFalse(bar.isNull, "The collapsed palette leaves the camera values shown")
         let expand = try XCTUnwrap(
             elements(host.view).first { identifier($0) == "monitor.assists.expand" },
@@ -4440,9 +4511,9 @@ extension RunnerTests {
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
         XCTAssertFalse(covered.isEmpty, "The open landscape palette must reach the values bar")
-        XCTAssertEqual(
-            values().map(identifier), [],
-            "The open palette covers the values bar, so its values are hidden, not drawn under it")
+        assertInPlace(
+            closed,
+            "The open palette draws over the camera values and leaves every one shown in place")
         // Copy the regions now: a renderer image read after a later render showed the later frame.
         let regions = covered
         let first = try XCTUnwrap(render())
@@ -4479,13 +4550,17 @@ extension RunnerTests {
                 "A camera value drew over the open palette at \(NSCoder.string(for: rect))")
         }
 
+        // Back to the original readings, so the collapsed values compare with where they began.
+        model.cameraState = state
+        try await settle()
+        assertInPlace(closed, "The open palette leaves the original values in place")
         let collapse = try XCTUnwrap(
             elements(host.view).first {
                 ["monitor.assists.expand", "monitor.assists.collapse"].contains(identifier($0))
             })
         XCTAssertTrue(collapse.accessibilityActivate())
         try await settle()
-        XCTAssertFalse(values().isEmpty, "Collapsing the palette shows the camera values again")
+        assertInPlace(closed, "Collapsing the palette leaves the camera values where they were")
     }
 }
 
