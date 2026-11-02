@@ -250,8 +250,10 @@ internal data class NikonPlaybackScopeConfiguration(
     val cadenceMilliseconds: Long get() = (inputs.periodNanos / 1_000_000L).coerceAtLeast(1L)
     val transfer: MonitorTransfer get() = inputs.transfer
     val clipByte: Int get() = inputs.clipByte
+    /** Points are walked only for a selected trace or vectorscope, as the live sampler does. */
     fun samples(frame: ReducedScopeFrame): ScopeSamples = inputs.samples(frame,
-        scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled).pointTrace || look != null)
+        scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled)
+            .let { it.pointTrace || it.vector })
     fun bundle(samples: ScopeSamples, previous: ScopeAssistBundle): ScopeAssistBundle =
         inputs.bundle(samples, look, previous)
 }
@@ -263,7 +265,8 @@ internal fun rememberNikonPlaybackScopeConfiguration(
 ): NikonPlaybackScopeConfiguration? {
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
     val vector = ScopeVectorLutRequest(mapping.curveOrdinal)
-    val look = remember(vector) { vector.cube() }
+    val wantsVector = ScopeKind.VECTORSCOPE in selected
+    val look = remember(vector, wantsVector) { if (wantsVector) vector.cube() else null }
     return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist, mapping, vector,
         scopePeriodNanos(selected.size, thermalTier)), look)
 }
