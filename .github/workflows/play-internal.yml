@@ -15,7 +15,6 @@ on:
 
 permissions:
   contents: read
-  actions: read # earlier successful uploads, for the tester notes check
 
 # Never cancel an in-progress upload; queue instead (mirrors testflight.yml).
 concurrency:
@@ -91,15 +90,11 @@ jobs:
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
 
-      # Release gate for tester notes (docs/ci.md): fail before building when the notes break
-      # the cap or an earlier successful upload already carried them.
-      - name: Tester notes are for this release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ./scripts/android-play-release-notes-check.sh
-          python3 ../OpenCine/scripts/tester-notes-release-check.py --released-by-workflow play-internal.yml \
-            --release-job "Build & upload" --notes Apps/Android/distribution/whatsnew/whatsnew-en-US
+      # Tester notes format (docs/ci.md, Release time): fail before building when the notes break
+      # the cap. Internal builds follow every merge and keep the version's notes, so they are not
+      # required to be new.
+      - name: Tester notes format
+        run: ./scripts/android-play-release-notes-check.sh
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
