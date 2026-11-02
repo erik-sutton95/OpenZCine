@@ -157,14 +157,24 @@ fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
 
 /**
  * The vectorscope's look: the camera curve's built-in log to Rec.709 transform, never the
- * monitoring LUT, so VECTOR measures the camera signal as every other scope does.
+ * monitoring LUT, so VECTOR measures the camera signal as every other scope does. A
+ * display-referred curve (sRGB or HLG stills) has no look and plots its codes as they are
+ * (iOS `NikonScopeLook.display`).
  */
-internal data class ScopeVectorLutRequest(val lookOrdinal: Int)
+internal data class ScopeVectorLutRequest(val look: FeedLut?) {
+    /** Curve ordinals and look ordinals are separate wire domains, so the curve picks the look. */
+    constructor(transfer: MonitorTransfer) : this(when (transfer) {
+        MonitorTransfer.LOG3G10 -> FeedLut.LOG3G10_709
+        MonitorTransfer.NLOG -> FeedLut.NLOG_709
+        else -> null
+    })
+}
 
-/** The vectorscope's camera transform look as a shared cube; null fails closed (no trace). */
-internal fun ScopeVectorLutRequest.cube(): MonitorLUTCube? =
-    SwiftCore.takeIf { it.isAvailable }?.bakeLut(lookOrdinal, VECTOR_LUT_SIZE)
+/** The vectorscope's camera transform look as a shared cube; null is identity. */
+internal fun ScopeVectorLutRequest.cube(): MonitorLUTCube? = look?.let { look ->
+    SwiftCore.takeIf { it.isAvailable }?.bakeLut(look.wireOrdinal, VECTOR_LUT_SIZE)
         ?.let { MonitorLUTCube(VECTOR_LUT_SIZE, it) }
+}
 
 /** This camera's level axis for the shared plots (Swift `ScopeFrameWire.levelAxis`). */
 private fun nikonScopeLevelAxis(curveOrdinal: Int, clipNative: Float): ScopeLevelAxis? {
@@ -232,7 +242,7 @@ internal fun rememberNikonLiveScopeBundles(
     // A scope cannot honor camera-dependent display mapping without the Swift
     // facade, so fail closed rather than locally selecting a fallback curve.
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val vectorLut = ScopeVectorLutRequest(mapping.curveOrdinal)
+    val vectorLut = ScopeVectorLutRequest(mapping.transfer)
     val bus = remember { ScopeSampleBus() }
     val inputs = ScopeTickInputs(ScopeKind.canonical.filter(displayed::contains).toSet(), assist, mapping,
         vectorLut, scopePeriodNanos(displayed.size, thermalTier))
@@ -264,7 +274,7 @@ internal fun rememberNikonPlaybackScopeConfiguration(
     thermalTier: AndroidThermalTier,
 ): NikonPlaybackScopeConfiguration? {
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val vector = ScopeVectorLutRequest(mapping.curveOrdinal)
+    val vector = ScopeVectorLutRequest(mapping.transfer)
     val wantsVector = ScopeKind.VECTORSCOPE in selected
     val look = remember(vector, wantsVector) { if (wantsVector) vector.cube() else null }
     return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist, mapping, vector,

@@ -2,18 +2,32 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.media.ScopeAssistBundle
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** VECTOR reads the camera signal: what playback walks for it. */
+/** VECTOR reads the camera signal: the look a curve maps through and what playback walks. */
 class ScopeVectorSignalTest {
     private fun mapping(curve: Int) = ExposureAssistMapping(curve, 0f, 100f, 255f)
+
+    @Test
+    fun `a log camera maps through its built-in look and a stills curve plots as it is`() {
+        assertEquals(FeedLut.LOG3G10_709,
+            ScopeVectorLutRequest(mapping(ExposureCurveOrdinals.RED_LOG3G10).transfer).look)
+        assertEquals(FeedLut.NLOG_709,
+            ScopeVectorLutRequest(mapping(ExposureCurveOrdinals.NIKON_NLOG).transfer).look)
+        // Stills previews are display referred (iOS `NikonScopeLook.display` returns nil): never
+        // the Mono or R3D NE Monitor look that shares their ordinal on the look wire.
+        assertNull(ScopeVectorLutRequest(mapping(ExposureCurveOrdinals.SRGB).transfer).look)
+        assertNull(ScopeVectorLutRequest(mapping(ExposureCurveOrdinals.HLG).transfer).look)
+    }
 
     @Test
     fun `playback walks points only for a selected trace or vectorscope`() {
         val stills = mapping(ExposureCurveOrdinals.SRGB)
         fun playback(vararg selected: ScopeKind) = NikonPlaybackScopeConfiguration(
             ScopeTickInputs(selected.toSet(), false, 0.0, stills.transfer, stills.clipByte,
-                ScopeVectorLutRequest(stills.curveOrdinal), 84_000_000L),
+                ScopeVectorLutRequest(stills.transfer), 84_000_000L),
             look = null)
         val frame = colourFrame()
 
