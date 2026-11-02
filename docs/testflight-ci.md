@@ -88,8 +88,9 @@ Write for non-developer camera operators:
 For a build with no tester-facing app behavior, write that plainly and ask testers to continue
 their normal camera workflow. `scripts/ios-release-notes-check.sh` enforces the format, character
 limit, and a small denylist of implementation jargon, in pull-request Meta checks and again at
-release time, where OpenCine's `scripts/tester-notes-release-check.py` also fails when an earlier
-successful TestFlight build already carried the current notes.
+release time. Outside TestFlight Internal, which archives every merge and keeps the version's
+notes, OpenCine's `scripts/tester-notes-release-check.py` also fails when an earlier successful
+TestFlight build already carried the current notes.
 
 ## Crash reports and tester diagnostics
 

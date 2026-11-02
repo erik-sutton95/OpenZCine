@@ -48,19 +48,22 @@ A test leaves quarantine after its issue is fixed and several consecutive nightl
 
 ## Release time
 
-Tester notes are checked when a build is released, not on every pull request. Each release path
-first runs the format check (caps in OpenCine `scripts/tester-notes-limits.sh`) and OpenCine's
-`scripts/tester-notes-release-check.py`, which fails when an earlier release already carried the
-current notes:
+Tester notes are checked when a build is uploaded, not on every pull request. Every upload runs
+the format check (caps in OpenCine `scripts/tester-notes-limits.sh`). An upload for testers also
+runs OpenCine's `scripts/tester-notes-release-check.py`, which fails when an earlier tester upload
+already carried the current notes. Internal builds follow every merge to `main` and keep the
+version's notes, so they skip that second check (owner decision 2026-11-02):
 
-| Release path | Hook | Earlier releases |
-| --- | --- | --- |
-| Play internal | `play-internal.yml`, before the build | `play-internal.yml` runs whose `Build & upload` succeeded |
-| TestFlight (Xcode Cloud archive, primary) | `ios/ci_scripts/ci_pre_xcodebuild.sh` | successful `TestFlight` commit statuses |
-| TestFlight (GitHub fallback) | `testflight.yml`, before the native checks | `testflight.yml` runs whose `Build & upload` succeeded |
+| Upload | Hook | Notes must be new | Earlier tester uploads |
+| --- | --- | --- | --- |
+| Play internal (every Android merge) | `play-internal.yml`, before the build | no | none |
+| TestFlight Internal (Xcode Cloud, every merge) | `ios/ci_scripts/ci_pre_xcodebuild.sh` | no | none |
+| Any other Xcode Cloud archive | `ios/ci_scripts/ci_pre_xcodebuild.sh` | yes | successful `TestFlight` commit statuses |
+| TestFlight (GitHub fallback) | `testflight.yml`, before the native checks | yes | `testflight.yml` runs whose `Build & upload` succeeded |
 
-The release gate still holds: Play upload variables stay off and no build reaches outside
-testers before its hardware pass. See [`testflight-ci.md`](testflight-ci.md#tester-facing-release-notes)
+The release gate still holds: no build reaches outside testers before its hardware pass. On iOS
+that is adding the build to the external group in App Store Connect; on Android, promoting it
+past internal testing in Play Console. Check the notes describe the release before either. See [`testflight-ci.md`](testflight-ci.md#tester-facing-release-notes)
 and [`android-distribution.md`](android-distribution.md).
 
 ## Reviews
