@@ -71,7 +71,7 @@ class DemoFrameSource(
                         timestampNanos = System.nanoTime(),
                         jpegData = stream.toByteArray(),
                         audioLevels = debugAudioLevels(frameIndex),
-                        focus = if (seededFocusPoint) seededFocusInfo() else debugFocusInfo(frameIndex),
+                        focus = if (seededFocusPoint) demoSeededFocusInfo(width, height) else debugFocusInfo(frameIndex),
                         level = debugCameraLevel(frameIndex).takeIf { includeDebugCameraLevel },
                         timecode = debugTimecode(frameIndex),
                         measuredFramesPerSecond = framesPerSecond.toDouble(),
@@ -208,26 +208,6 @@ class DemoFrameSource(
         )
     }
 
-    /** The seeded AF point: one box left of and above centre, so a recenter has work to do. */
-    private fun seededFocusInfo(): LiveFocusInfo =
-        LiveFocusInfo(
-            coordinateWidth = width,
-            coordinateHeight = height,
-            result = LiveFocusResult.FOCUSED,
-            subjectDetectionActive = false,
-            trackingAFActive = false,
-            selectedBoxIndex = 0,
-            boxes = listOf(
-                LiveFocusBox(
-                    centerX = (width * 0.38).roundToInt(),
-                    centerY = (height * 0.40).roundToInt(),
-                    width = (width * 0.12).roundToInt(),
-                    height = (height * 0.18).roundToInt(),
-                ),
-            ),
-            isDebugFixture = false,
-        )
-
     /** Synthetic camera-level substitute, visibly labelled by the overlay as a debug fixture. */
     private fun debugCameraLevel(frameIndex: Long): LiveCameraLevel {
         val seconds = frameIndex.toDouble() / framesPerSecond.toDouble()
@@ -239,3 +219,27 @@ class DemoFrameSource(
         )
     }
 }
+
+/**
+ * The seeded AF point (`zc.demo.focusPair`) in a [width] x [height] focus space: one box left of
+ * and above centre, so a recenter has work to do. Both demo feeds carry it, the synthetic bars
+ * and a sample video alike. SIMULATED: no camera is behind it.
+ */
+internal fun demoSeededFocusInfo(width: Int, height: Int): LiveFocusInfo =
+    LiveFocusInfo(
+        coordinateWidth = width,
+        coordinateHeight = height,
+        result = LiveFocusResult.FOCUSED,
+        subjectDetectionActive = false,
+        trackingAFActive = false,
+        selectedBoxIndex = 0,
+        boxes = listOf(
+            LiveFocusBox(
+                centerX = (width * 0.38).roundToInt(),
+                centerY = (height * 0.40).roundToInt(),
+                width = (width * 0.12).roundToInt(),
+                height = (height * 0.18).roundToInt(),
+            ),
+        ),
+        isDebugFixture = false,
+    )

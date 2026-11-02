@@ -313,19 +313,21 @@ object DemoHarness {
             if (intent.getBooleanExtra(EXTRA_DEMO_PHOTO, false)) PhotoDemoCameraSession(session) else session
         val includeDebugCameraLevel = intent.getStringExtra(EXTRA_DEMO_LEVEL_SOURCE) != "none"
         val videoPath = intent.getStringExtra(EXTRA_DEMO_VIDEO)
+        val seededFocusPoint = intent.getBooleanExtra(EXTRA_DEMO_FOCUS_POINT, false)
         val videoSource =
             context?.let {
                 DemoVideoFrameSource.resolve(
                     context = it,
                     explicitPath = videoPath,
                     includeDebugCameraLevel = includeDebugCameraLevel,
+                    seededFocusPoint = seededFocusPoint,
                 )
             }
         val frameSource =
             videoSource
                 ?: DemoFrameSource(
                     includeDebugCameraLevel = includeDebugCameraLevel,
-                    seededFocusPoint = intent.getBooleanExtra(EXTRA_DEMO_FOCUS_POINT, false),
+                    seededFocusPoint = seededFocusPoint,
                 ).also {
                     if (context != null) {
                         Log.i(TAG, "demo feed ← synthetic colour bars (no sample video)")
