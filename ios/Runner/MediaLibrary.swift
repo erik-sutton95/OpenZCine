@@ -390,12 +390,25 @@ struct MediaClipStore: @unchecked Sendable {
 
     /// Every bucket directory currently on disk (camera serials + `local`).
     func allBucketIDs() -> [String] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-        return names.filter { name in
+        bucketIDs(named: (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+    }
+
+    private func bucketIDs(named names: [String]) -> [String] {
+        names.filter { name in
             var isDirectory: ObjCBool = false
             let path = root.appendingPathComponent(name).path
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
                 && isDirectory.boolValue
+        }
+    }
+
+    /// A directory's names for a pass that must see everything: an absent directory holds
+    /// nothing, while one that exists but cannot be listed is unknown (nil), never empty.
+    private func checkedListing(of directory: URL) -> [String]? {
+        do {
+            return try fileManager.contentsOfDirectory(atPath: directory.path)
+        } catch {
+            return fileManager.fileExists(atPath: directory.path) ? nil : []
         }
     }
 
@@ -441,13 +454,15 @@ struct MediaClipStore: @unchecked Sendable {
     /// portrait stills sideways. Once per library, removes the cached thumbnail of every camera
     /// still whose rows have not learned its orientation (a learned row still turns its old
     /// thumbnail upright, and a RAW and JPEG of one stem share a thumbnail), so the grid fetches it again through the orientation-tagging read.
-    /// The library is marked done only after a complete pass: a bucket whose index cannot be read
-    /// or a thumbnail that could not be removed is tried again on the next launch.
+    /// The library is marked done only after a complete pass: a folder that cannot be listed, a
+    /// bucket whose index cannot be read or a thumbnail that could not be removed is tried again
+    /// on the next launch.
     func retireUnorientedStillThumbnails() {
         let marker = root.appendingPathComponent(Self.orientedThumbnailsMarker)
         guard !fileManager.fileExists(atPath: marker.path) else { return }
+        guard let rootNames = checkedListing(of: root) else { return }
         var complete = true
-        for bucket in allBucketIDs() where bucket != Self.localBucketID {
+        for bucket in bucketIDs(named: rootNames) where bucket != Self.localBucketID {
             let indexed: [MediaClip]
             do {
                 indexed = try observedIndex(cameraID: bucket)
@@ -455,8 +470,10 @@ struct MediaClipStore: @unchecked Sendable {
                 complete = false
                 continue
             }
-            let names =
-                (try? fileManager.contentsOfDirectory(atPath: directory(for: bucket).path)) ?? []
+            guard let names = checkedListing(of: directory(for: bucket)) else {
+                complete = false
+                continue
+            }
             // Same-stem stills (a RAW and its JPEG) are separate rows that share one cached
             // thumbnail, so a thumbnail is kept while any row using it has learned its orientation.
             var thumbnailIsOriented: [URL: Bool] = [:]

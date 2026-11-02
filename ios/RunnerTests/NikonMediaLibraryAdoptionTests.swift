@@ -1244,6 +1244,42 @@ struct NikonUnorientedThumbnailRetirementTests {
             !MediaClipStore(root: root).hasThumbnail(
                 cameraID: Self.camera, filename: portrait.filename))
     }
+
+    @Test func aLibraryWhoseFoldersCannotBeListedIsRetiredOnceTheyCanBe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = UnlistableFolderFileManager()
+        let store = MediaClipStore(root: root, fileManager: files)
+        // A still found on disk but never indexed is known only through its bucket's listing.
+        let bucket = store.directory(for: Self.camera)
+        try FileManager.default.createDirectory(at: bucket, withIntermediateDirectories: true)
+        try Data([0xFF, 0xD8]).write(to: bucket.appendingPathComponent("_NZR2887.JPG"))
+        try store.saveThumbnail(
+            cameraID: Self.camera, filename: "_NZR2887.JPG", data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+
+        // While the media root or the camera's folder cannot be listed, its stills are unknown.
+        for unlistable in [root, bucket] {
+            files.unlistable = unlistable.standardizedFileURL.path
+            store.retireUnorientedStillThumbnails()
+            #expect(store.hasThumbnail(cameraID: Self.camera, filename: "_NZR2887.JPG"))
+        }
+
+        files.unlistable = nil
+        store.retireUnorientedStillThumbnails()
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: "_NZR2887.JPG"))
+    }
+}
+
+/// Fails the listing of one folder that exists, as an unreadable directory does.
+private final class UnlistableFolderFileManager: FileManager, @unchecked Sendable {
+    var unlistable: String?
+
+    override func contentsOfDirectory(atPath path: String) throws -> [String] {
+        if let unlistable, URL(fileURLWithPath: path).standardizedFileURL.path == unlistable {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        return try super.contentsOfDirectory(atPath: path)
+    }
 }
 
 /// The staggered grid sizes a card from its row: a still's listed pixel size is the stored
