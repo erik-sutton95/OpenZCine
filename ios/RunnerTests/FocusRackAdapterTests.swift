@@ -636,7 +636,7 @@ struct FocusAFSettingsAdapterTests {
         #expect(rack.nativeRack.lastSelectedMark == nil)
     }
 
-    @Test("A retired session response cannot complete a replacement session's Native target")
+    @Test("A replaced session releases its Native target and permits selection after cleanup")
     func replacementSessionRetiresHeldNativeTarget() async throws {
         let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
         defer {
@@ -662,17 +662,16 @@ struct FocusAFSettingsAdapterTests {
         defer { replacement.close() }
         model.debugAdoptEstablishedMediaSession(replacement)
         #expect(rack.nativeRack.dispatchedRequest == nil)
+        // The admitted command still owns cleanup until its response returns.
+        #expect(!rack.allowsAutofocus)
+        await wire.releaseTargetResponse()
+        #expect(await service.value)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
         try await drain(model, rack: rack, result: .notFocused)
         model.debugSeedFocusAF(recording: false, result: .notFocused)
         rack.armNativeTarget(.b)
         #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.8, y: 0.6)))
-        let replacementID = rack.nativeRack.dispatchedRequest?.id
-        #expect(replacementID != nil)
-        await wire.releaseTargetResponse()
-        #expect(await service.value)
-        #expect(rack.nativeRack.dispatchedRequest?.id == replacementID)
-        #expect(rack.nativeRack.lastSelectedMark == nil)
-        model.debugSeedFocusAF(recording: false, result: .notFocused)
         #expect(await model.debugServiceNativeFocusTarget())
         #expect(await replacementWire.targetCommands.count == 1)
         #expect(rack.nativeRack.lastSelectedMark == .b)
