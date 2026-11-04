@@ -33,42 +33,6 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     return probe
 }
 
-@Test func rackTrajectoryKeepsTheIncrementAndChangesOnlyItsTiming() throws {
-    let linear = try FocusRackTrajectory(
-        signedSteps: 11, duration: 3, delay: 2, easing: .linear, commandInterval: 0.08)
-    let smooth = try FocusRackTrajectory(
-        signedSteps: -11, duration: 3, delay: 2, easing: .easeInOut, commandInterval: 0.08)
-    #expect(linear.offsets.count == 11)
-    #expect(smooth.offsets.count == 11)
-    #expect(abs((smooth.offsets.first ?? 0) - 2) < 1e-9)
-    #expect(abs((smooth.offsets.last ?? 0) - 4.92) < 1e-9)
-    let linearGaps = zip(linear.offsets, linear.offsets.dropFirst()).map { $1 - $0 }
-    let smoothGaps = zip(smooth.offsets, smooth.offsets.dropFirst()).map { $1 - $0 }
-    #expect(abs(linearGaps[0] - linearGaps[4]) < 1e-9)
-    #expect(smoothGaps[0] > smoothGaps[4])
-    #expect(smoothGaps.allSatisfy { $0 >= 0.08 })
-}
-
-@Test func rackRejectsTimingsThatWouldFloodTheCommandChannel() {
-    #expect(throws: FocusRackError.self) {
-        try FocusRackTrajectory(
-            signedSteps: 100, duration: 1, delay: 0, easing: .easeInOut, commandInterval: 0.08)
-    }
-    for invalid in [Double.nan, .infinity, -1, 0] {
-        #expect(throws: FocusRackError.self) {
-            try FocusRackTrajectory(
-                signedSteps: 5, duration: invalid, delay: 0, easing: .linear, commandInterval: 0.08)
-        }
-    }
-}
-
-@Test func rackRejectsPretendLongSingleStepMoves() {
-    #expect(throws: FocusRackError.marksTooClose) {
-        try FocusRackTrajectory(
-            signedSteps: 1, duration: 3, delay: 0, easing: .linear, commandInterval: 0.08)
-    }
-}
-
 @Test func rackDispatchCadenceSurvivesRapidSeparateNudges() throws {
     var probe = try FocusRackEngine()
     probe.observe(rackContext(), at: 0)
@@ -104,9 +68,9 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     let first = probe.nextAction(at: 0.8)
     #expect(first.kind == "drive")
     probe.complete(runID: first.runID, commandID: 0, outcome: 0, at: 0.9)
-    #expect(probe.nextAction(at: 0.9).kind == "wait")
-    #expect(probe.nextAction(at: 0.979).kind == "wait")
-    #expect(probe.nextAction(at: 0.981).kind == "drive")
+    #expect(first.signedPulses == -24)
+    #expect(probe.snapshot(at: 0.9).stepPosition == 0)
+    #expect(probe.nextAction(at: 0.9).kind == "idle")
 
     var nudge = try FocusRackEngine()
     nudge.observe(rackContext(), at: 0)
@@ -534,9 +498,11 @@ func rackSetupStopKeepsOnlyTheCompletedPrefix(towardNear: Bool, steps: Int) thro
 
 @Test func rackTimingAdmissionIncludesObservedCommandCostAndResetClearsIt() throws {
     var probe = try probeWithMarks(duration: 0.18)
-    #expect(throws: FocusRackError.self) { try probe.run(reverse: true, at: 0.3) }
+    #expect(try #require(probe.state(at: 0.3).estimatedDuration) > 0.18)
+    #expect(!probe.snapshot(at: 0.3).calibrationTimings.isEmpty)
     #expect(!probe.snapshot(at: 0.3).busy)
     try probe.reset(at: 0.4)
+    #expect(probe.snapshot(at: 0.4).calibrationTimings.isEmpty)
     probe.observe(rackContext(at: 0.41), at: 0.41)
     try probe.capture(markID: "A", at: 0.41)
     for index in 0..<3 {
@@ -592,17 +558,21 @@ func rackWarnsAboutFinalTimingWhileCompletingTheAcknowledgedEndpoint(completedAt
 }
 
 @Test func rackFinalCompletionDoesNotReserveAnUnusedQuietGap() throws {
-    let trajectory = try FocusRackTrajectory(
-        signedSteps: 3, duration: 2, delay: 0, easing: .linear,
-        commandInterval: 0.4, finalCommandDuration: 0.1)
-    #expect(abs((trajectory.offsets.last ?? 0) + 0.1 - 2) < 1e-9)
-    #expect(zip(trajectory.offsets, trajectory.offsets.dropFirst()).allSatisfy { $1 - $0 >= 0.4 })
-    for invalid in [-0.1, Double.nan, .infinity, 0.5] {
-        #expect(throws: FocusRackError.invalidConfiguration) {
-            try FocusRackTrajectory(
-                signedSteps: 3, duration: 2, delay: 0, easing: .linear,
-                commandInterval: 0.4, finalCommandDuration: invalid)
-        }
+    var timing = FocusRackCommandTiming()
+    timing.record(0.1)
+    let plan = try FocusRackPlanner.make(
+        signedSteps: 3, duration: 2, delay: 0, quiet: 0.3, timings: [1: timing], timed: true,
+        grouped: true)
+    #expect(abs((plan.offsets.last ?? 0) + 0.1 - plan.duration) < 1e-9)
+    #expect(zip(plan.offsets, plan.offsets.dropFirst()).allSatisfy { $1 - $0 >= 0.4 })
+}
+
+@Test(arguments: [Double.nan, .infinity, -1, 0])
+func rackMeasuredPlannerRejectsInvalidDurations(duration: Double) {
+    #expect(throws: FocusRackError.invalidConfiguration) {
+        try FocusRackPlanner.make(
+            signedSteps: 3, duration: duration, delay: 0, quiet: 0, timings: [:], timed: true,
+            grouped: true)
     }
 }
 
@@ -635,11 +605,6 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
     var probe = setup.0
     var time = setup.1
     #expect(probe.snapshot(at: time).marks.map(\.stepPosition) == [0, 92])
-    if nativeDuration == 0.05 {
-        #expect(throws: FocusRackError.self) { try probe.run(reverse: true, at: time) }
-        #expect(probe.nextAction(at: time).kind == "idle")
-        return
-    }
     let startedAt = time
     try probe.run(reverse: true, at: time)
     var commands = 0
@@ -659,6 +624,14 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
             previousCompletion = time
             probe.complete(runID: action.runID, commandID: commands, outcome: 0, at: time)
             commands += 1
+        } else if action.kind == "readSafety" {
+            let started = time
+            time += 0.1
+            probe.recordSafetyRead(startedAt: started, finishedAt: time, accepted: true)
+            probe.observe(rackContext(at: time), at: time)
+            probe.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID), accepted: true,
+                at: time)
         } else {
             break
         }

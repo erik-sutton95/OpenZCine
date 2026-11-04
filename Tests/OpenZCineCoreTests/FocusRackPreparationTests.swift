@@ -18,8 +18,7 @@ private func preparationContext(_ now: Double, recording: Bool = false) -> Focus
 private func preparationEngine(_ span: Int, fromA: Bool = false) throws -> (FocusRackEngine, Double)
 {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true,
-        profile: .calibratedFineExperiment)
+        configuration: FocusRackEngine.productionConfiguration)
     var now = 1.0
     engine.observe(preparationContext(now), at: now)
     try engine.capture(markID: "A", at: now)

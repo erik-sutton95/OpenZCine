@@ -25,8 +25,7 @@ private func calibrationContext(_ now: Double) -> FocusRackContext {
 
 private func recoveredEngine() throws -> FocusRackEngine {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true,
-        profile: .calibratedFineExperiment)
+        configuration: FocusRackEngine.productionConfiguration)
     engine.observe(calibrationContext(1), at: 1)
     return engine
 }

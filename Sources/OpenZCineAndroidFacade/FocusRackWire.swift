@@ -19,8 +19,7 @@ public final class FocusRackWire: @unchecked Sendable {
         let driver: any FocusRackDriver
         if let access { driver = access } else { driver = UnavailableDriver() }
         return register(
-            driver: driver, authority: authority, templatesJSON: templatesJSON,
-            profile: .calibratedFineExperiment)
+            driver: driver, authority: authority, templatesJSON: templatesJSON)
     }
 
     // A fake driver exercises the actual wire and runner in host tests without a camera or JNI.
@@ -35,10 +34,9 @@ public final class FocusRackWire: @unchecked Sendable {
 
     private func register(
         driver: any FocusRackDriver, authority: Authority,
-        templatesJSON: String, clock: FocusRackClock = .monotonic,
-        profile: FocusRackProfile = .adaptive
+        templatesJSON: String, clock: FocusRackClock = .monotonic
     ) -> String {
-        let controller = FocusRackController(driver: driver, clock: clock, profile: profile)
+        let controller = FocusRackController(driver: driver, clock: clock)
         let entry = Entry(controller: controller, driver: driver, authority: authority)
         entry.loadTemplates(templatesJSON)
         let owner = UUID().uuidString

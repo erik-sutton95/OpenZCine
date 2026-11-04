@@ -56,7 +56,7 @@ public struct FocusRackCalibration: Codable, Equatable, Sendable {
     public init(key: FocusRackCalibrationKey, commandDurations: [Int: Double]) {
         version = 1
         pulsesPerStep = 16
-        profile = FocusRackProfile.calibratedFineExperiment.rawValue
+        profile = "calibratedFineExperiment"
         self.key = key
         self.commandDurations = commandDurations
     }
@@ -85,7 +85,7 @@ public enum FocusRackCalibrationCodec {
             key.focusMode, key.focusArea, key.focusSubject,
         ]
         guard calibration.version == 1, calibration.pulsesPerStep == 16,
-            calibration.profile == FocusRackProfile.calibratedFineExperiment.rawValue,
+            calibration.profile == "calibratedFineExperiment",
             strings.allSatisfy({
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && $0.utf8.count <= 256

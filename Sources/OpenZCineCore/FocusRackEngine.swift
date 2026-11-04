@@ -172,8 +172,6 @@ public struct FocusRackEngine: Sendable {
     private var lastRunTransition: FocusRackTransition?
     private var firstCommandAt: Double?
     private var lastCommandFinishedAt: Double?
-    private let adaptive: Bool
-    private let profile: FocusRackProfile
     private var completedUnits = 0
     private var totalUnits = 0
     private var activeNudge: (towardNear: Bool, steps: Int)?
@@ -206,20 +204,18 @@ public struct FocusRackEngine: Sendable {
 
     /// Creates an inert state machine; the controller seeds run IDs from monotonic microseconds.
     public init(
-        configuration: FocusRackConfiguration = .init(), initialRunID: Int64 = 0,
-        adaptive: Bool = false, profile: FocusRackProfile = .adaptive
+        configuration: FocusRackConfiguration = .init(), initialRunID: Int64 = 0
     )
         throws
     {
         guard (1...32767).contains(configuration.pulsesPerStep),
             configuration.commandInterval.isFinite, configuration.commandInterval >= 0,
-            initialRunID >= 0, initialRunID < .max - 100_000,
-            !adaptive || configuration.pulsesPerStep == 16
+            initialRunID >= 0, initialRunID < .max - 100_000
         else { throw FocusRackError.invalidConfiguration }
         self.configuration = configuration
-        self.adaptive = adaptive
-        self.profile = profile
-        program.transitions = [configuration.transition]
+        var transition = configuration.transition
+        transition.easing = .linear
+        program.transitions = [transition]
         runID = initialRunID
     }
 
@@ -339,7 +335,7 @@ public struct FocusRackEngine: Sendable {
         try begin(
             signedSteps: towardNear ? -steps : steps,
             duration: 1,
-            delay: 0, easing: .linear, enforcesTiming: false, at: timestamp)
+            delay: 0, enforcesTiming: false, at: timestamp)
         activeNudge = (towardNear, steps)
     }
 
@@ -354,7 +350,7 @@ public struct FocusRackEngine: Sendable {
             signedSteps: steps,
             duration: 1,
             delay: 0,
-            easing: .linear, enforcesTiming: false, grouped: true, at: timestamp)
+            enforcesTiming: false, grouped: true, at: timestamp)
     }
 
     /// Measures bounded command sizes in one explicit traversal between the current marks.
@@ -362,7 +358,7 @@ public struct FocusRackEngine: Sendable {
     public mutating func calibrate(at timestamp: Double) throws {
         try requireReady(at: timestamp)
         guard context?.recording != true else { throw FocusRackError.recordingInProgress }
-        guard profile == .calibratedFineExperiment, marks.count == 2 else {
+        guard marks.count == 2 else {
             throw FocusRackError.marksRequired
         }
         guard let current = marks.first(where: { $0.stepPosition == position }) else {
@@ -373,7 +369,7 @@ public struct FocusRackEngine: Sendable {
         }
         try begin(
             signedSteps: target.stepPosition - position, duration: 1, delay: 0,
-            easing: .linear, enforcesTiming: false, preparingLens: true, at: timestamp)
+            enforcesTiming: false, preparingLens: true, at: timestamp)
     }
 
     private mutating func clearPreparation() {
@@ -391,7 +387,7 @@ public struct FocusRackEngine: Sendable {
         guard position == start.stepPosition else { throw FocusRackError.notAtStart }
         try begin(
             signedSteps: end.stepPosition - start.stepPosition, duration: move.duration,
-            delay: move.delay, easing: move.easing,
+            delay: move.delay,
             enforcesTiming: move.durationMode == .timed, grouped: true, at: timestamp)
     }
 
@@ -637,7 +633,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     func canRestoreCalibration(at timestamp: Double) -> Bool {
-        profile == .calibratedFineExperiment && trajectory == nil && inFlight == nil
+        trajectory == nil && inFlight == nil
             && position != nil && context?.unavailableReason(at: timestamp) == nil
             && hasReadinessFrame
     }
@@ -683,7 +679,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private mutating func begin(
-        signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
+        signedSteps: Int, duration: Double, delay: Double,
         enforcesTiming: Bool, grouped: Bool = false, preparingLens: Bool = false,
         at timestamp: Double
     ) throws {
@@ -692,9 +688,9 @@ public struct FocusRackEngine: Sendable {
             preparingLens
             ? try FocusRackPreparation.make(signedSteps: signedSteps)
             : try FocusRackPlanner.make(
-                signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
-                quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
-                timed: enforcesTiming, grouped: grouped, profile: profile,
+                signedSteps: signedSteps, duration: duration, delay: delay,
+                quiet: configuration.commandInterval, timings: commandTimings,
+                timed: enforcesTiming, grouped: grouped,
                 safetyReadBudget: safetyReadBudget)
         runID += 1
         activeNudge = nil
@@ -742,10 +738,10 @@ public struct FocusRackEngine: Sendable {
                 let move = program.transitions[0]
                 let adjusted = try FocusRackPlanner.make(
                     signedSteps: previous.signedSteps, duration: move.duration,
-                    delay: previous.delay, easing: move.easing,
+                    delay: previous.delay,
                     quiet: configuration.commandInterval,
-                    timings: commandTimings, adaptive: adaptive, timed: true, grouped: true,
-                    profile: profile, safetyReadBudget: runSafetyReadBudget)
+                    timings: commandTimings, timed: true, grouped: true,
+                    safetyReadBudget: runSafetyReadBudget)
                 trajectory = adjusted
                 plannedDuration = adjusted.duration
                 completedMaintenanceReads = []
@@ -892,6 +888,8 @@ public struct FocusRackEngine: Sendable {
     {
         guard trajectory == nil, inFlight == nil else { throw FocusRackError.movementPending }
         try FocusRackTemplateCodec.validate(transition)
+        var transition = transition
+        transition.easing = .linear
         program.transitions[0] = transition
     }
 
@@ -1027,12 +1025,10 @@ public struct FocusRackEngine: Sendable {
                 let plan = try FocusRackPlanner.make(
                     signedSteps: to.stepPosition - from.stepPosition,
                     duration: state.transition.duration, delay: state.transition.delay,
-                    easing: state.transition.easing, quiet: configuration.commandInterval,
-                    timings: commandTimings, adaptive: adaptive,
-                    timed: true, grouped: true, profile: profile,
+                    quiet: configuration.commandInterval,
+                    timings: commandTimings,
+                    timed: true, grouped: true,
                     safetyReadBudget: safetyReadBudget)
-                state.minimumDuration = focusRackMinimumForDisplay(plan.minimumDuration)
-                state.maximumDuration = plan.maximumDuration
                 if idle { state.estimatedDuration = plan.estimatedDuration }
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
@@ -1040,14 +1036,6 @@ public struct FocusRackEngine: Sendable {
             } catch FocusRackError.safetyReadUnavailable {
                 state.admissionMessage = FocusRackError.safetyReadUnavailable.localizedDescription
                 admissionInstruction = "Camera not ready"
-            } catch FocusRackError.durationTooShort(let minimum) {
-                state.minimumDuration = focusRackMinimumForDisplay(minimum)
-                state.admissionMessage =
-                    FocusRackError.durationTooShort(minimum: minimum).localizedDescription
-            } catch FocusRackError.durationTooLong(let maximum) {
-                state.maximumDuration = focusRackMaximumForDisplay(maximum)
-                state.admissionMessage =
-                    FocusRackError.durationTooLong(maximum: maximum).localizedDescription
             } catch { state.admissionMessage = error.localizedDescription }
         }
         if phase == "paused" {
@@ -1099,9 +1087,6 @@ public struct FocusRackEngine: Sendable {
                 ? "\(target) s target; completed in \(measured) s."
                 : "\(target) s target · ~\(measured) s estimated. Timing is advisory."
             state.timingWarningIsEstimate = !completedCurrentTarget
-        } else if let maximum = state.maximumDuration, state.transition.duration > maximum {
-            state.timingWarning = "This duration may show pauses between focus adjustments."
-            state.timingWarningIsEstimate = false
         }
         if context?.unavailableReason(at: timestamp) == nil, position != nil {
             switch state.phase {
@@ -1144,7 +1129,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private func calibrationAction(ready: Bool, idle: Bool) -> FocusRackPrimaryAction? {
-        guard profile == .calibratedFineExperiment, marks.count == 2,
+        guard marks.count == 2,
             FocusRackPreparation.supports(span: abs(marks[1].stepPosition - marks[0].stepPosition))
         else { return nil }
         let current = marks.first(where: { $0.stepPosition == position })

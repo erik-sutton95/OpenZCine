@@ -111,7 +111,6 @@ private final class FocusRackControlGate: @unchecked Sendable {
 public actor FocusRackController {
     private let driver: any FocusRackDriver
     private let clock: FocusRackClock
-    private let profile: FocusRackProfile
     private var calibration: FocusRackCalibration?
     private nonisolated let gate = FocusRackControlGate()
     private nonisolated let stopNative: @Sendable (Int64) -> Void
@@ -135,23 +134,21 @@ public actor FocusRackController {
     private var contextWasAvailable = false
     private var subscribers: [UUID: AsyncStream<FocusRackState>.Continuation] = [:]
 
-    /// Creates an inert runner with fine 16-pulse mark units and adaptive bounded playback.
+    /// Creates an inert runner with fine 16-pulse mark units and measured bounded playback.
     public init(
         driver: any FocusRackDriver, transition: FocusRackTransition = .init(),
-        clock: FocusRackClock = .monotonic, profile: FocusRackProfile = .adaptive
+        clock: FocusRackClock = .monotonic
     ) {
         self.driver = driver
         self.stopNative = driver.requestStop
         self.clock = clock
-        self.profile = profile
         var configuration = FocusRackEngine.productionConfiguration
-        configuration.transition = Self.linearTransition(transition)
+        configuration.transition = transition
         // The fixed quantum and quiet interval satisfy the engine constructor's invariants.
         guard
             let engine = try? FocusRackEngine(
                 configuration: configuration,
-                initialRunID: max(1, Int64(clock.now() * 1_000_000)), adaptive: true,
-                profile: profile)
+                initialRunID: max(1, Int64(clock.now() * 1_000_000)))
         else {
             preconditionFailure("Invalid fixed focus-rack configuration")
         }
@@ -293,19 +290,17 @@ public actor FocusRackController {
         case .calibrate: try engine.calibrate(at: now)
         case .run(let direction): try engine.run(direction: direction, at: now)
         case .setTransition(let transition):
-            try engine.setTransition(Self.linearTransition(transition), at: now)
+            try engine.setTransition(transition, at: now)
         case .updateTiming(let update):
             let transition = try engine.currentProgram.transitions[0].applying(update)
-            try engine.setTransition(Self.linearTransition(transition), at: now)
+            try engine.setTransition(transition, at: now)
         case .pause: engine.requestPause(at: now)
         case .resume: try engine.resume(at: now)
         case .stop: engine.requestStop(at: now)
         case .reset: try engine.reset(at: now)
         case .discardMarks: try engine.discardMarks(at: now)
         case .applyTemplate(let template):
-            try engine.applyTemplate(
-                .init(name: template.name, transition: Self.linearTransition(template.transition)),
-                at: now)
+            try engine.applyTemplate(template, at: now)
         case .externalFocusAction:
             safety = nil
             safetyAt = nil
@@ -323,12 +318,6 @@ public actor FocusRackController {
             default: throw FocusRackError.invalidConfiguration
             }
         }
-    }
-
-    private static func linearTransition(_ transition: FocusRackTransition) -> FocusRackTransition {
-        var transition = transition
-        transition.easing = .linear
-        return transition
     }
 
     private func accept(_ value: FocusRackObservation) {
@@ -440,7 +429,7 @@ public actor FocusRackController {
     }
 
     private func synchronizeCalibration(_ context: FocusRackContext, at timestamp: Double) {
-        guard profile == .calibratedFineExperiment,
+        guard
             let key = FocusRackCalibrationKey(
                 cameraID: observation?.cameraID, transport: observation?.transport, context: context
             )

@@ -130,8 +130,6 @@ public struct FocusRackState: Codable, Sendable {
     /// Absent in older state payloads.
     public var preparingLens: Bool?
     public var referenceValid = true
-    public var minimumDuration: Double?
-    public var maximumDuration: Double?
     /// Planned execution time; the operator's requested target remains in `transition.duration`.
     public var estimatedDuration: Double?
     /// Observed command-dispatch-to-completion span; not an optical arrival measurement.

@@ -400,8 +400,7 @@ struct FocusRackPendingCapture {
             let access = model.focusRackAccess(authority: authority)
         else { return }
         let controller = FocusRackController(
-            driver: access, transition: state?.transition ?? .init(),
-            profile: .calibratedFineExperiment)
+            driver: access, transition: state?.transition ?? .init())
         self.controller = controller
         let savedCalibration: FocusRackCalibration?
         do { savedCalibration = try FocusRackCalibrationStore.load() } catch {

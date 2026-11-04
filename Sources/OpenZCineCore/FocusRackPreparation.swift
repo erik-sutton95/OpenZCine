@@ -21,6 +21,6 @@ enum FocusRackPreparation {
         return .init(
             signedSteps: signedSteps, chunks: chunks,
             offsets: Array(repeating: 0, count: chunks.count), duration: 0, delay: 0,
-            minimumDuration: 0, maximumDuration: nil, estimatedDuration: nil)
+            estimatedDuration: nil)
     }
 }

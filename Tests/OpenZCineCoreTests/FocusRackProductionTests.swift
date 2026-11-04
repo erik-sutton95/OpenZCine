@@ -71,7 +71,7 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
     #expect(first.commandID == 0)
 }
 
-@Test func rackPauseSettlesTheActiveChunkAndPreservesRemainingEasingAndTiming() throws {
+@Test func rackPauseSettlesTheActiveChunkAndPreservesRemainingTiming() throws {
     var engine = try productionWithMarks()
     try engine.run(reverse: false, at: 0.4)
     let first = engine.nextAction(at: 0.4)
@@ -83,10 +83,23 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
     #expect(engine.nextAction(at: 50).kind == "wait")
     engine.observe(productionContext(100, sequence: 9), at: 100)
     try engine.resume(at: 100)
-    let plan = try FocusRackTrajectory(
-        signedSteps: 4, duration: 2, delay: 0,
-        easing: .easeInOut, commandInterval: 0.02, finalCommandDuration: 0.02)
+    var timing = FocusRackCommandTiming()
+    timing.record(0.02)
+    let plan = try FocusRackPlanner.make(
+        signedSteps: 4, duration: 2, delay: 0, quiet: 0, timings: [1: timing], timed: true,
+        grouped: true)
     for index in 1..<4 {
+        if let readAt = plan.maintenanceReadOffsets?[index] {
+            let start = 0.4 + 99.55 + readAt
+            engine.observe(productionContext(start, sequence: Int64(index + 20)), at: start)
+            let read = engine.nextAction(at: start + 1e-8)
+            #expect(read.kind == "readSafety")
+            engine.observe(
+                productionContext(start + 0.1, sequence: Int64(index + 30)), at: start + 0.1)
+            engine.finishScheduledRead(
+                runID: read.runID, commandID: try #require(read.commandID), accepted: true,
+                at: start + 0.1)
+        }
         let time = 0.4 + 99.55 + plan.offsets[index]
         engine.observe(productionContext(time, sequence: Int64(index + 10)), at: time)
         let action = engine.nextAction(at: time + 1e-8)
@@ -179,7 +192,7 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
     #expect(engine.currentProgram.marks == original.marks)
     #expect(engine.state(at: 0.4).primary.kind == "rehearse")
     #expect(!engine.state(at: 0.4).primary.enabled)
-    #expect(engine.state(at: 0.4).primary.detail == "24 s pull")
+    #expect(engine.state(at: 0.4).primary.detail == "24 s target · ~0.02 s")
     #expect(engine.state(at: 0.4).primary.disabledReason == "Go to B first")
     #expect(engine.state(at: 0.4).capabilities.canGoToB)
     #expect(engine.nextAction(at: 0.4).kind == "idle")
@@ -609,41 +622,6 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
     await controller.close()
 }
 
-@Test func rackDisplayedMinimumRoundsUpWithoutChangingTrajectoryAdmission() throws {
-    let required = 16.602
-    #expect(
-        FocusRackError.durationTooShort(minimum: required).localizedDescription.contains("16.61"))
-    #expect(throws: FocusRackError.self) {
-        try FocusRackTrajectory(
-            signedSteps: 3, duration: 16.60, delay: 0, easing: .linear,
-            commandInterval: 8.201, finalCommandDuration: 0.2)
-    }
-    let admitted = try FocusRackTrajectory(
-        signedSteps: 3, duration: 16.61, delay: 0, easing: .linear,
-        commandInterval: 8.201, finalCommandDuration: 0.2)
-    #expect(abs(admitted.minimumDuration - required) < 1e-9)
-    var engine = try productionWithMarks()
-    let exact = try FocusRackTrajectory(
-        signedSteps: 4, duration: 2, delay: 0, easing: .easeInOut,
-        commandInterval: 0.02, finalCommandDuration: 0.02
-    ).minimumDuration
-    let displayed = try #require(engine.state(at: 0.4).minimumDuration)
-    #expect(displayed >= exact)
-    var transition = engine.currentProgram.transitions[0]
-    transition.duration = exact - 0.001
-    try engine.setTransition(transition, at: 0.4)
-    #expect(engine.state(at: 0.4).minimumDuration == displayed)
-    #expect(engine.state(at: 0.4).admissionMessage != nil)
-    transition.duration = displayed
-    try engine.setTransition(transition, at: 0.4)
-    #expect(engine.state(at: 0.4).admissionMessage == nil)
-    try engine.run(reverse: false, at: 0.4)
-    #expect(engine.state(at: 0.4).busy)
-    #expect(
-        FocusRackError.marksTooClose.localizedDescription
-            == "These marks are too close for a timed pull. Set new marks farther apart.")
-}
-
 @Test func rackAdapterTaskQueuedBeforeStopCannotRearmAfterItsTaskHop() async throws {
     let camera = RackFakeCamera()
     camera.holdNextDrive()
@@ -735,15 +713,16 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
     try engine.setTransition(transition, at: 0.4)
     var state = engine.state(at: 0.4)
     #expect(state.primary.kind == "rehearse")
-    #expect(state.primary.detail == "10 s pull")
+    #expect(state.primary.detail == "10 s target · ~0.02 s")
     #expect(state.primary.enabled)
     #expect(state.capabilities.canGoToB)
     transition.duration = 0.001
     try engine.setTransition(transition, at: 0.4)
     state = engine.state(at: 0.4)
-    #expect(!state.primary.enabled)
-    #expect(state.primary.disabledReason == "Adjust timing")
-    #expect(state.admissionMessage != nil)
+    #expect(state.primary.enabled)
+    #expect(state.primary.disabledReason == nil)
+    #expect(state.admissionMessage == nil)
+    #expect(state.timingWarning != nil)
     #expect(state.capabilities.canGoToB)
     #expect(engine.currentProgram.marks == marks)
     try engine.seek(markID: "B", at: 0.4)
@@ -802,10 +781,10 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
 }
 
 private func controllerWithTwoMarks(
-    _ camera: RackFakeCamera, profile: FocusRackProfile = .adaptive
+    _ camera: RackFakeCamera
 ) async throws -> FocusRackController {
     let controller = FocusRackController(
-        driver: camera.access, clock: camera.clock, profile: profile)
+        driver: camera.access, clock: camera.clock)
     await controller.observe(cameraObservation(1))
     try await waitForRack { await controller.snapshot().capabilities.canNudge }
     try await controller.handle(
@@ -823,7 +802,7 @@ private func controllerWithTwoMarks(
 
 @Test func rackPreparationRejectsRecordingAndForwardsStopToTheProductionDriver() async throws {
     let camera = RackFakeCamera()
-    let controller = try await controllerWithTwoMarks(camera, profile: .calibratedFineExperiment)
+    let controller = try await controllerWithTwoMarks(camera)
     var recording = cameraObservation(4)
     recording.recording = true
     await #expect(throws: FocusRackError.recordingInProgress) {
@@ -1093,7 +1072,7 @@ func rackControllerHeldJointReadCannotActivateAnotherMove(disposition: String) a
 private func runJointControllerComparison(delay: Double, disposition: String) async throws {
     let camera = RackFakeCamera()
     let controller = FocusRackController(
-        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+        driver: camera.access, clock: camera.clock)
     var observation = cameraObservation(1)
     observation.cameraID = "synthetic-joint-body"
     observation.transport = "usb"
@@ -1236,7 +1215,7 @@ func rackHeldMaintenanceReadCannotSendLateCommands(stopDuringRead: Bool) async t
     defer { camera.releaseSafetyRead() }
     let preflightReads = camera.readCount
     var sequence: Int64 = 6
-    for _ in 0..<50 {
+    for _ in 0..<200 {
         if camera.readCount > preflightReads { break }
         let sleep = camera.advanceClockBeforeNextSleep(0.02)
         await controller.observe(cameraObservation(sequence))
@@ -1281,8 +1260,7 @@ func rackHeldMaintenanceReadCannotSendLateCommands(stopDuringRead: Bool) async t
 
 private func progressNudge(towardNear: Bool = false, steps: Int = 10) throws -> FocusRackEngine {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true,
-        profile: .calibratedFineExperiment)
+        configuration: FocusRackEngine.productionConfiguration)
     engine.observe(productionContext(0), at: 0)
     try engine.nudge(towardNear: towardNear, steps: steps, at: 0)
     return engine
@@ -1575,7 +1553,7 @@ func rackContextLossCancelsNativeMovementAndAccountsForItsActualOutcome(
 func rackRecoveredTimingsStayBoundToTheReportedCameraAndLink(change: String) async throws {
     let camera = RackFakeCamera()
     let controller = FocusRackController(
-        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+        driver: camera.access, clock: camera.clock)
     var observation = cameraObservation(1)
     observation.cameraID = "synthetic-body"
     observation.transport = "usb"
@@ -1609,7 +1587,7 @@ func rackRecoveredTimingsStayBoundToTheReportedCameraAndLink(change: String) asy
     let camera = RackFakeCamera()
     camera.holdNextSafetyRead()
     let controller = FocusRackController(
-        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+        driver: camera.access, clock: camera.clock)
     var observation = cameraObservation(1)
     observation.cameraID = "first-body"
     observation.transport = "usb"

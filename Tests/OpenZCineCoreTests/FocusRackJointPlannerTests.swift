@@ -28,9 +28,9 @@ private func jointPlan(_ steps: Int = 100, duration: Double = 3, delay: Double =
     -> FocusRackMovementPlan
 {
     try FocusRackPlanner.make(
-        signedSteps: steps, duration: duration, delay: delay, easing: .linear, quiet: 0,
-        timings: jointTimings(), adaptive: true, timed: true, grouped: true,
-        profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+        signedSteps: steps, duration: duration, delay: delay, quiet: 0,
+        timings: jointTimings(), timed: true, grouped: true,
+        safetyReadBudget: 0.1)
 }
 
 @Test(arguments: [100, -100, 106, -106])
@@ -110,8 +110,7 @@ private func jointEngine(
     duration: Double = 3, span: Int = 100, maxima: [Int: Double] = jointRackMaxima
 ) throws -> (FocusRackEngine, Double) {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true,
-        profile: .calibratedFineExperiment)
+        configuration: FocusRackEngine.productionConfiguration)
     var now = 0.0
     engine.observe(jointContext(now, safetyAt: now), at: now)
     try engine.capture(markID: "A", at: now)
@@ -397,9 +396,9 @@ func rackJointSixSecondReplayExtendsCadenceForObservedWakeLateness(
         var profiles: [Double: [Int]] = [:]
         for duration in [1.0, 3, 6] {
             let plan = try FocusRackPlanner.make(
-                signedSteps: steps, duration: duration, delay: 0, easing: .linear, quiet: 0,
-                timings: timings, adaptive: true, timed: true, grouped: true,
-                profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+                signedSteps: steps, duration: duration, delay: 0, quiet: 0,
+                timings: timings, timed: true, grouped: true,
+                safetyReadBudget: 0.1)
             #expect(plan.chunks.reduce(0, +) == steps)
             profiles[duration] = plan.chunks.map { abs($0) * 16 }
         }
@@ -533,12 +532,12 @@ func rackRecordedSixteenAndFortyUnitStopsNowReachBothEndpoints(prefixCount: Int)
         var lastDispatch: Double?
         let expected = try FocusRackPlanner.make(
             signedSteps: direction == .bToA ? -110 : 110, duration: requested, delay: 0,
-            easing: .linear, quiet: 0,
+            quiet: 0,
             timings: phoneJointMaxima.reduce(into: [:]) { result, pair in
                 var timing = FocusRackCommandTiming()
                 timing.record(pair.value)
                 result[pair.key / 16] = timing
-            }, adaptive: true, timed: true, grouped: true, profile: .calibratedFineExperiment,
+            }, timed: true, grouped: true,
             safetyReadBudget: engine.safetyReadBudget)
         for _ in 0..<1000 {
             if !engine.snapshot(at: now).busy { break }
