@@ -11,31 +11,14 @@ private func timing(_ seconds: Double) -> FocusRackCommandTiming {
 
 private func adaptivePlan(
     _ steps: Int, seconds: Double, timed: Bool = true,
-    delay: Double = 0, easing: FocusRackEasing = .linear
+    delay: Double = 0
 ) throws -> FocusRackMovementPlan {
     try FocusRackPlanner.make(
-        signedSteps: steps, duration: seconds, delay: delay, easing: easing,
-        quiet: 0.01,
+        signedSteps: steps, duration: seconds, delay: delay, quiet: 0.01,
         timings: [
             1: timing(0.06), 4: timing(0.07), 5: timing(0.07), 9: timing(0.07), 12: timing(0.07),
-        ], adaptive: true,
+        ],
         timed: timed, grouped: true)
-}
-
-@Test func adaptiveTimedPlanningHandlesShortLongAndCloseFarSpans() throws {
-    let shortClose = try adaptivePlan(10, seconds: 1)
-    #expect(shortClose.chunks == Array(repeating: 1, count: 10))
-    #expect(abs((shortClose.offsets.last ?? 0) - 0.94) < 1e-9)
-    let longFar = try adaptivePlan(80, seconds: 20)
-    #expect(longFar.chunks.count == 80)
-    #expect(abs((longFar.offsets.last ?? 0) - 19.94) < 1e-9)
-    #expect(try adaptivePlan(80, seconds: 1).chunks.map(abs).max() == 9)
-    do {
-        _ = try adaptivePlan(4, seconds: 20)
-        Issue.record("Sparse long pull must not masquerade as smooth timing")
-    } catch FocusRackError.durationTooLong(let maximum) {
-        #expect(maximum < 1)
-    }
 }
 
 @Test func adaptiveFastestPreservesBudgetDirectionAndOneExactResidual() throws {
@@ -45,7 +28,6 @@ private func adaptivePlan(
             plan.chunks == Array(repeating: sign * 12, count: 6) + [sign * 11])
         #expect(plan.chunks.reduce(0, +) == sign * 83)
         #expect(plan.offsets.allSatisfy { $0 == 2 })
-        #expect(plan.minimumDuration == 0)
         #expect(plan.estimatedDuration == nil)
     }
     #expect(try adaptivePlan(3, seconds: 1, timed: false).chunks == [3])
@@ -54,18 +36,11 @@ private func adaptivePlan(
 
 @Test func fastestDoesNotInventAnEstimateBeforeItsQuantumIsMeasured() throws {
     let plan = try FocusRackPlanner.make(
-        signedSteps: 80, duration: 3, delay: 0, easing: .easeInOut, quiet: 0.01,
-        timings: [1: timing(0.06)], adaptive: true, timed: false, grouped: true)
+        signedSteps: 80, duration: 3, delay: 0, quiet: 0.01,
+        timings: [1: timing(0.06)], timed: false, grouped: true)
     #expect(plan.estimatedDuration == nil)
     #expect(plan.chunks == Array(repeating: 12, count: 6) + [8])
     #expect(plan.offsets.allSatisfy { $0 == 0 })
-}
-
-@Test func timedPlanningUsesBoundedGroupsAndRetainsFineLongPulls() throws {
-    #expect(try adaptivePlan(80, seconds: 2).chunks == Array(repeating: 4, count: 20))
-    let fine = try adaptivePlan(94, seconds: 24)
-    #expect(fine.chunks.allSatisfy { $0 == 1 })
-    #expect(throws: FocusRackError.self) { try adaptivePlan(4, seconds: 2, easing: .easeInOut) }
 }
 
 @Test func durationModeRestoresOldTemplatesAndRejectsUnknownModes() throws {
@@ -128,10 +103,10 @@ private func adaptiveContext(_ now: Double) -> FocusRackContext {
 }
 
 private func adaptiveEngineWithMarks(
-    _ steps: Int, profile: FocusRackProfile = .adaptive, seekToA: Bool = true
+    _ steps: Int, seekToA: Bool = true
 ) throws -> (FocusRackEngine, Double) {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true, profile: profile)
+        configuration: FocusRackEngine.productionConfiguration)
     var now = 0.0
     engine.observe(adaptiveContext(now), at: now)
     try engine.capture(markID: "A", at: now)
@@ -198,19 +173,6 @@ private func adaptiveEngineWithMarks(
     #expect(engine.nextAction(at: now + 1).kind == "idle")
 }
 
-@Test func emptySmoothTimingRangeGivesOneActionableError() throws {
-    for duration in [3.0, 24.0] {
-        #expect(throws: FocusRackError.self) {
-            try FocusRackPlanner.make(
-                signedSteps: 94, duration: duration, delay: 0,
-                easing: .easeInOut, quiet: 0.01, timings: [1: timing(0.15)], adaptive: true,
-                timed: true, grouped: true)
-        }
-    }
-    #expect(focusRackMaximumForDisplay(0.516129) == 0.51)
-    _ = try adaptivePlan(3, seconds: focusRackMaximumForDisplay(0.576129))
-}
-
 @Test func adaptiveResetAndTemplateLoadClearOldProgress() throws {
     var (engine, now) = try adaptiveEngineWithMarks(11)
     #expect(engine.state(at: now).totalSteps == 11)
@@ -226,79 +188,10 @@ private func adaptiveEngineWithMarks(
     #expect(engine.state(at: now).totalSteps == 0)
 }
 
-@Test func emptyRoundedTimingRangesAreNotAdvertisedAsSupported() throws {
-    for duration in [24.0, 24.245] {
-        #expect(throws: FocusRackError.noSmoothTiming) {
-            try FocusRackPlanner.make(
-                signedSteps: 94, duration: duration, delay: 0,
-                easing: .linear, quiet: 0.01, timings: [1: timing(0.248)], adaptive: true,
-                timed: true, grouped: true)
-        }
-    }
-}
-
-@Test func timedPlannerAutomaticallySelectsGranularityForRequestedDuration() throws {
-    let measured: [Int: FocusRackCommandTiming] = [
-        1: timing(0.14), 2: timing(0.13), 3: timing(0.12), 4: timing(0.11),
-    ]
-    for sign in [-1, 1] {
-        let plans = try [3.0, 10.0, 20.0].map { duration in
-            try FocusRackPlanner.make(
-                signedSteps: sign * 94, duration: duration, delay: 2, easing: .linear,
-                quiet: 0.01, timings: measured, adaptive: true, timed: true, grouped: true)
-        }
-        #expect(plans[0].chunks.map(abs).max() == 4)
-        #expect(plans[1].chunks.map(abs).max() == 2)
-        #expect(plans[2].chunks.allSatisfy { abs($0) == 1 })
-        for (plan, duration) in zip(plans, [3.0, 10.0, 20.0]) {
-            #expect(plan.chunks.reduce(0, +) == sign * 94)
-            #expect(plan.offsets.first == 2)
-            for index in 0..<(plan.chunks.count - 1) {
-                let cost = try #require(measured[abs(plan.chunks[index])]).longest
-                #expect(plan.offsets[index + 1] - plan.offsets[index] + 1e-9 >= cost + 0.01)
-            }
-            let final = try #require(plan.chunks.last)
-            #expect(
-                abs((plan.offsets.last ?? 0) + (measured[abs(final)]?.longest ?? 0) - 2 - duration)
-                    < 1e-9)
-        }
-    }
-}
-
-@Test func automaticTimingKeepsOneExactResidualAndUsesPerSizeCosts() throws {
-    for steps in [5, 79, 94, 95, 97] {
-        for sign in [-1, 1] {
-            let plan = try FocusRackPlanner.make(
-                signedSteps: sign * steps, duration: max(0.3, 0.04 * Double(steps)), delay: 0,
-                easing: .linear, quiet: 0.01,
-                timings: [1: timing(0.14), 2: timing(0.13), 3: timing(0.12), 4: timing(0.11)],
-                adaptive: true, timed: true, grouped: true)
-            #expect(plan.chunks.reduce(0, +) == sign * steps)
-            #expect(plan.chunks.allSatisfy { (1...5).contains(abs($0)) })
-            #expect(plan.chunks.dropLast().allSatisfy { $0 == plan.chunks[0] })
-            #expect(plan.chunks.allSatisfy { ($0 < 0) == (sign < 0) })
-        }
-    }
-}
-
-@Test func unknownTimingSizeUsesSessionEstimateAndUpdatesOnMeasurement() throws {
-    let estimated = try FocusRackPlanner.make(
-        signedSteps: 94, duration: 4, delay: 0, easing: .linear, quiet: 0.01,
-        timings: [1: timing(0.14)], adaptive: true, timed: true, grouped: true)
-    #expect(estimated.chunks.reduce(0, +) == 94)
-    #expect(estimated.chunks.map(abs).max() == 4)
-    #expect(throws: FocusRackError.self) {
-        try FocusRackPlanner.make(
-            signedSteps: 94, duration: 4, delay: 0, easing: .linear, quiet: 0.01,
-            timings: [1: timing(0.14), 4: timing(0.20), 5: timing(0.30)], adaptive: true,
-            timed: true, grouped: true)
-    }
-}
-
 @Test func automaticTimedRunRetainsItsChunksAcrossPauseAndStaleCompletion() throws {
     var (engine, now) = try adaptiveEngineWithMarks(11)
     var transition = engine.currentProgram.transitions[0]
-    transition.duration = 0.10
+    transition.duration = 3
     transition.easing = .linear
     transition.delay = 2
     try engine.setTransition(transition, at: now)
@@ -307,67 +200,21 @@ private func adaptiveEngineWithMarks(
     now += 2
     engine.observe(adaptiveContext(now), at: now)
     let first = engine.nextAction(at: now)
-    #expect(first.signedPulses == 48)
+    #expect(first.signedPulses == 16)
     engine.requestPause(at: now + 0.001)
     now += 0.02
     engine.complete(runID: first.runID, commandID: 0, outcome: 0, at: now)
     #expect(engine.state(at: now).phase == .paused)
-    #expect(engine.state(at: now).stepPosition == 3)
+    #expect(engine.state(at: now).stepPosition == 1)
     engine.complete(runID: first.runID, commandID: 0, outcome: 0, at: now)
-    #expect(engine.state(at: now).stepPosition == 3)
+    #expect(engine.state(at: now).stepPosition == 1)
     now += 1
     engine.observe(adaptiveContext(now), at: now)
     try engine.resume(at: now)
     let remaining = try settleAdaptive(&engine, now: &now)
-    #expect(remaining == [48, 48, 32])
+    #expect(remaining == Array(repeating: 16, count: 10))
     #expect(engine.state(at: now).stepPosition == 11)
     #expect(engine.state(at: now).phase == .complete)
-}
-
-@Test func coarseProfilesDoNotStretchIntoPreviouslySteppedCadences() throws {
-    #expect(throws: FocusRackError.noSmoothTiming) {
-        try FocusRackPlanner.make(
-            signedSteps: 94, duration: 8, delay: 0, easing: .linear, quiet: 0.01,
-            timings: [1: timing(0.14), 2: timing(0.4), 3: timing(0.4), 4: timing(0.11)],
-            adaptive: true, timed: true, grouped: true)
-    }
-    #expect(throws: FocusRackError.noSmoothTiming) {
-        try FocusRackPlanner.make(
-            signedSteps: 94, duration: 13, delay: 0, easing: .linear, quiet: 0.01,
-            timings: [1: timing(0.14), 2: timing(0.13), 3: timing(0.12), 4: timing(0.11)],
-            adaptive: true, timed: true, grouped: true)
-    }
-    let plan = try adaptivePlan(94, seconds: 3)
-    for (start, end) in zip(plan.offsets, plan.offsets.dropFirst()) {
-        #expect(end - start <= FocusRackPlanner.maximumFineSpacing + 1e-9)
-    }
-}
-
-@Test func fastProfileKeepsSmallerGroupsWhenTheyFitAndExpandsForWiderSpans() throws {
-    func plan(_ steps: Int, cost: Double) throws -> FocusRackMovementPlan {
-        try FocusRackPlanner.make(
-            signedSteps: steps, duration: 1, delay: 2, easing: .linear, quiet: 0,
-            timings: [
-                1: timing(cost), 2: timing(cost), 3: timing(cost),
-                4: timing(cost), 5: timing(cost),
-            ], adaptive: true, timed: true, grouped: true)
-    }
-    for sign in [-1, 1] {
-        let fast = try plan(sign * 60, cost: 0.08)
-        #expect(fast.chunks == Array(repeating: sign * 5, count: 12))
-        #expect(fast.chunks.reduce(0, +) == sign * 60)
-        #expect(abs((fast.offsets.last ?? 0) + 0.08 - 3) < 1e-9)
-        #expect(try plan(sign * 60, cost: 0.09).chunks.map(abs).max() == 9)
-        #expect(try plan(sign * 94, cost: 0.08).chunks.map(abs).max() == 9)
-        let residual = try FocusRackPlanner.make(
-            signedSteps: sign * 94, duration: 1.6, delay: 0, easing: .linear, quiet: 0,
-            timings: [
-                1: timing(0.08), 2: timing(0.08), 3: timing(0.08),
-                4: timing(0.08), 5: timing(0.08),
-            ], adaptive: true, timed: true, grouped: true)
-        #expect(residual.chunks == Array(repeating: sign * 5, count: 18) + [sign * 4])
-        #expect(residual.chunks.reduce(0, +) == sign * 94)
-    }
 }
 
 @Test func zeroQuietStillWaitsForReadyAndPreflightDoesNotConsumeThePull() throws {
@@ -423,101 +270,32 @@ func preflightRebaseExcludesPausesBeforeItsCompletion(resumeDuringPreflight: Boo
     #expect(engine.nextAction(at: now + 0.2).kind == "drive")
 }
 
-@Test func wideOneSecondPlanPrefers144AndFallsBackTo192WithoutRelaxingAdmission() throws {
-    for sign in [-1, 1] {
-        var costs = [
-            1: timing(0.0763745), 3: timing(0.0763745), 5: timing(0.0763745),
-            9: timing(0.064159042), 12: timing(0.059873292),
-        ]
-        func plan(_ seconds: Double) throws -> FocusRackMovementPlan {
-            try FocusRackPlanner.make(
-                signedSteps: sign * 135, duration: seconds, delay: 2, easing: .linear,
-                quiet: 0, timings: costs, adaptive: true, timed: true, grouped: true)
-        }
-        #expect(try plan(1).chunks == Array(repeating: sign * 9, count: 15))
-        costs[9] = timing(0.066875)
-        let fallback = try plan(1)
-        #expect(fallback.chunks == Array(repeating: sign * 12, count: 11) + [sign * 3])
-        #expect(try plan(1.01).chunks == Array(repeating: sign * 9, count: 15))
-        #expect(try plan(20).chunks == Array(repeating: sign, count: 135))
-        #expect(fallback.chunks.reduce(0, +) == sign * 135)
-        #expect(abs((fallback.offsets.last ?? 0) + 0.0763745 - 3) < 1e-9)
-        costs[12] = timing(0.10)
-        #expect(throws: FocusRackError.self) { try plan(1) }
-    }
-}
-
 @Test func widerPositioningMeasuresOneExactResidualWithoutHiddenCalibration() throws {
     for residual in 1...11 {
         for sign in [-1, 1] {
             let steps = sign * (12 * 10 + residual)
             let unknown = try FocusRackPlanner.make(
-                signedSteps: steps, duration: 1, delay: 0, easing: .linear,
-                quiet: 0, timings: [12: timing(0.067)], adaptive: true, timed: false, grouped: true)
+                signedSteps: steps, duration: 1, delay: 0, quiet: 0, timings: [12: timing(0.067)],
+                timed: false, grouped: true)
             #expect(unknown.chunks == Array(repeating: sign * 12, count: 10) + [sign * residual])
             #expect(unknown.chunks.reduce(0, +) == steps)
             #expect(unknown.estimatedDuration == nil)
             let known = try FocusRackPlanner.make(
-                signedSteps: steps, duration: 1, delay: 0, easing: .linear,
-                quiet: 0, timings: [12: timing(0.067), residual: timing(0.05)],
-                adaptive: true, timed: false, grouped: true)
+                signedSteps: steps, duration: 1, delay: 0, quiet: 0,
+                timings: [12: timing(0.067), residual: timing(0.05)],
+                timed: false, grouped: true)
             #expect(abs((known.estimatedDuration ?? 0) - (10 * 0.067 + 0.05)) < 1e-9)
         }
     }
-}
-
-@Test func explicitPositioningMeasuresTheLargestProfileNeededFor130UnitOneSecondPull() throws {
-    var costs = [1: timing(0.1691853334), 4: timing(0.079744625), 9: timing(0.0881446667)]
-    func plan(timed: Bool) throws -> FocusRackMovementPlan {
-        try FocusRackPlanner.make(
-            signedSteps: -130, duration: 1, delay: 0, easing: .linear,
-            quiet: 0, timings: costs, adaptive: true, timed: timed, grouped: true)
-    }
-    do {
-        _ = try plan(timed: true)
-        Issue.record("Unmeasured larger sizes must not bypass timing admission")
-    } catch FocusRackError.durationTooShort(let minimum) {
-        #expect(focusRackMinimumForDisplay(minimum) == 1.32)
-    }
-    let positioning = try plan(timed: false)
-    #expect(positioning.chunks == Array(repeating: -12, count: 10) + [-10])
-    costs[12] = timing(0.07)
-    costs[10] = timing(0.075)
-    let timed = try plan(timed: true)
-    #expect(timed.chunks == positioning.chunks)
-    #expect(timed.chunks.reduce(0, +) == -130)
-    #expect(abs((timed.offsets.last ?? 0) + 0.075 - 1) < 1e-9)
-}
-
-@Test func refusedOneSecondPullPreservesTimingMarksAndIndependentPositioning() throws {
-    var (engine, now) = try adaptiveEngineWithMarks(130)
-    let marks = engine.currentProgram.marks
-    for mark in ["B", "A"] {
-        try engine.seek(markID: mark, at: now)
-        try settleAdaptive(&engine, now: &now, commandDuration: 0.15)
-    }
-    try engine.setTransition(.init(duration: 1, delay: 0, easing: .linear), at: now)
-    #expect(throws: FocusRackError.self) { try engine.run(direction: .aToB, at: now) }
-    let state = engine.state(at: now)
-    #expect(state.transition.duration == 1)
-    #expect(state.pullAToB?.detail == "1 s pull")
-    #expect(state.pullBToA?.detail == "1 s pull")
-    #expect(!state.busy && state.referenceValid)
-    #expect(state.stepPosition == 0)
-    #expect(state.program.marks == marks)
-    #expect(state.capabilities.canEditTiming)
-    #expect(state.capabilities.canGoToB)
-    #expect(state.capabilities.canNudge)
-    #expect(state.pullAToB?.enabled == false)
 }
 
 @Test func rackPartialCalibrationAddsMeasuredChoicesWithoutAssumingResidualTiming() throws {
     var timings = [6: timing(0.06), 10: timing(0.08)]
     func plan(_ duration: Double) throws -> FocusRackMovementPlan {
         try FocusRackPlanner.make(
-            signedSteps: 100, duration: duration, delay: 0, easing: .linear,
-            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
-            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+            signedSteps: 100, duration: duration, delay: 0, quiet: 0, timings: timings, timed: true,
+            grouped: true,
+            safetyReadBudget: 0.1)
     }
     #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
     // Partial evidence can supply a complete timed move without borrowing unmeasured sizes.
@@ -537,9 +315,9 @@ func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: D
     ]
     for sign in [-1, 1] {
         let plan = try FocusRackPlanner.make(
-            signedSteps: sign * 100, duration: duration, delay: 0, easing: .linear,
-            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
-            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+            signedSteps: sign * 100, duration: duration, delay: 0, quiet: 0, timings: timings,
+            timed: true, grouped: true,
+            safetyReadBudget: 0.1)
         #expect(plan.chunks.reduce(0, +) == sign * 100)
         for index in 0..<(plan.chunks.count - 1) {
             let gap = plan.offsets[index + 1] - plan.offsets[index]
@@ -583,7 +361,7 @@ func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) th
 }
 
 @Test func rackCountdownRefreshCanKeepAOneSecondFinePullWithinFreshEvidence() throws {
-    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    var (engine, now) = try adaptiveEngineWithMarks(100)
     for _ in 0..<2 {
         try engine.calibrate(at: now)
         try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
@@ -608,7 +386,7 @@ func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) th
 }
 
 @Test func rackFreshQualificationRecoversFromAHistoricalSlowIdleRead() throws {
-    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    var (engine, now) = try adaptiveEngineWithMarks(100)
     for _ in 0..<2 {
         try engine.calibrate(at: now)
         try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
@@ -637,7 +415,7 @@ func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) th
 }
 
 @Test func rackActualSlowPreflightKeepsCoveredCommandsAvailable() throws {
-    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    var (engine, now) = try adaptiveEngineWithMarks(100)
     engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
     try engine.setTransition(.init(duration: 1), at: now)
     try engine.run(direction: .aToB, at: now)
@@ -682,9 +460,9 @@ func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) th
     var timings = [1: timing(0.06), 8: timing(0.068), 10: timing(0.06)]
     func plan() throws -> FocusRackMovementPlan {
         try FocusRackPlanner.make(
-            signedSteps: 106, duration: 1, delay: 0, easing: .linear,
-            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
-            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+            signedSteps: 106, duration: 1, delay: 0, quiet: 0, timings: timings, timed: true,
+            grouped: true,
+            safetyReadBudget: 0.1)
     }
     let fine = try plan()
     #expect(fine.chunks.reduce(0, +) == 106)

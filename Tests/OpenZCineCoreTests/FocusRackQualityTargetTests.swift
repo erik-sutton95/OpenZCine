@@ -15,9 +15,9 @@ private func qualityTargetPlan(_ steps: Int, duration: Double) throws -> FocusRa
         return timing
     }
     return try FocusRackPlanner.make(
-        signedSteps: steps, duration: duration, delay: 0, easing: .linear, quiet: 0,
-        timings: timings, adaptive: true, timed: true, grouped: true,
-        profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+        signedSteps: steps, duration: duration, delay: 0, quiet: 0,
+        timings: timings, timed: true, grouped: true,
+        safetyReadBudget: 0.1)
 }
 
 @Test(arguments: [110, -110])
@@ -61,9 +61,9 @@ func rackThreeSecondTargetUsesTheFinestMeasuredFamilyThatFits(steps: Int) throws
         return timing
     }
     let plan = try FocusRackPlanner.make(
-        signedSteps: 100, duration: 1, delay: 0, easing: .linear, quiet: 0,
-        timings: timings, adaptive: true, timed: true, grouped: true,
-        profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+        signedSteps: 100, duration: 1, delay: 0, quiet: 0,
+        timings: timings, timed: true, grouped: true,
+        safetyReadBudget: 0.1)
     for index in plan.chunks.indices.dropLast() {
         let cost = try #require(costs[abs(plan.chunks[index])])
         #expect(plan.offsets[index + 1] - plan.offsets[index] >= cost + 0.002 - 1e-9)
@@ -79,9 +79,9 @@ private func genericPlan(
         return timing
     }
     return try FocusRackPlanner.make(
-        signedSteps: steps, duration: duration, delay: 0, easing: .linear, quiet: 0,
-        timings: timings, adaptive: true, timed: true, grouped: true,
-        profile: .calibratedFineExperiment, safetyReadBudget: readBudget)
+        signedSteps: steps, duration: duration, delay: 0, quiet: 0,
+        timings: timings, timed: true, grouped: true,
+        safetyReadBudget: readBudget)
 }
 
 private func expectFrozenSafety(
@@ -206,14 +206,14 @@ func rackNewMeasuredSizesEnableTheRequestedDurationForAnotherLens(steps: Int) th
     var unmeasured = valid
     unmeasured.count = 0
     let plan = try FocusRackPlanner.make(
-        signedSteps: 70, duration: 3, delay: 0, easing: .linear, quiet: 0,
-        timings: [0: valid, 1: invalid, 2: valid, 4: unmeasured, 13: valid], adaptive: true,
-        timed: true, grouped: true, profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+        signedSteps: 70, duration: 3, delay: 0, quiet: 0,
+        timings: [0: valid, 1: invalid, 2: valid, 4: unmeasured, 13: valid],
+        timed: true, grouped: true, safetyReadBudget: 0.1)
     #expect(plan.chunks == Array(repeating: 2, count: 35))
     #expect(throws: FocusRackError.calibrationRequired) {
         try FocusRackPlanner.make(
-            signedSteps: 70, duration: 3, delay: 0, easing: .linear, quiet: 0,
-            timings: [0: valid, 1: invalid, 4: unmeasured, 13: valid], adaptive: true,
-            timed: true, grouped: true, profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+            signedSteps: 70, duration: 3, delay: 0, quiet: 0,
+            timings: [0: valid, 1: invalid, 4: unmeasured, 13: valid],
+            timed: true, grouped: true, safetyReadBudget: 0.1)
     }
 }
