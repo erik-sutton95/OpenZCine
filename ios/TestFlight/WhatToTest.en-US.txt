@@ -1,27 +1,26 @@
 New and changed
 
-- Focus offers Native AF for saved subjects and Timed Rack for repeatable A/B moves. Native AF uses camera g6 speed. Timed Rack shows requested and expected times; Prepare lens measures timing with recording stopped.
+- Focus offers Native AF for saved subjects and Timed Rack for A/B moves. Native AF uses camera g6 speed. Timed Rack shows requested and expected times; Prepare lens measures timing with recording stopped.
 - Shared camera setup offers USB-C, camera Wi-Fi, Wi-Fi and Hotspot. DISP 3 has a REC chip, large timecode and setting tiles; tap to change, hold and drag to reorder.
-- Media and playback are faster on large cards. Full Resolution Caching keeps a played clip downloading after you close it and marks it CACHED. Playback scopes update more evenly.
-- Tap storage for free space, percentage or estimated time; Photo SHOTS shows a short count. FPS reads LINK until the first picture, colour sits beside codec in landscape, and portrait uses three columns.
+- Media has a staggered grid with upright portrait photos, live transfer speed, Exit selection and edge-to-edge zoom. Full Resolution Caching keeps played clips downloading after closing and marks them CACHED.
+- Tap storage for space, percentage or time; SHOTS shows a short count. FPS reads LINK until the first picture. Press and slide any value to change it. Landscape Photo puts setup values in the top corner and focus recenter in the picture corner.
 - Instant review reads RAW previews, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
 - Experimental gyro logging adds ring calibration, IBIS and Electronic VR setup and restore, mount-move warnings and a shareable Gyroflow log per take.
 
 Fixes
 
-- Live View stays smooth after connecting, warm restarts and Quality Bias changes, preserving readouts and timecode frames. Diagnostics distinguish incoming video, decoding and display interruptions.
-- Background recovery keeps your stills or video mode and no longer keeps the camera busy.
-- A dozing camera gets a wait of up to about 20 s; half-press the shutter during it. A silent camera says it may be asleep.
-- Take Over asks first; the phone losing the camera stops reconnecting. Refused Wi-Fi joins offer Settings and an explicit retry; abandoned connections stop.
+- Live View stays smooth after connecting, warm restarts and Quality Bias changes, preserving readouts and timecode frames. Diagnostics separate video, decoding and display interruptions.
+- Background recovery keeps your stills or video mode. A dozing camera gets a wait of up to about 20 s; half-press the shutter. Starting live view no longer freezes; a connect without live view ends after about 40 s with Try again.
+- Take Over asks first; the phone losing the camera stops reconnecting. Refused Wi-Fi joins offer Settings and retry; abandoned connections stop.
 - Auto ISO shows its limit, camera-owned values are dimmed and locked, hold SHUTTER to toggle its lock, and Reading camera settings shows at startup.
-- Photo turns LUTs and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo and hold takes a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
-- Sharing treats photos as photos and finishes clip copies first. Playback stays paused after Share or return. Download from RED opens over the player. GYRO avoids screen lock. Timed pulls warn on overruns; Stop and safety checks remain. Closing Focus restores settings when idle and preserves manual changes.
-- VoiceOver skips collapsed or covered controls; shutter labels describe actions. Setup asks for Local Network at its own step. Landscape View Assist hides covered values; focus setup reopens from Clean display and tap-to-focus no longer leaves pulls busy.
+- Photo turns LUTs and cinema tools off; video restores them. Shots and photos follow the stills card; CL/CH tap takes one photo and hold takes a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
+- Sharing treats photos as photos and finishes clip copies, including clips left mid-download. Leaving playback no longer drops Wi-Fi; a silent camera is named. Playback stays paused after Share or return. Download from RED opens over playback. GYRO avoids screen lock.
+- Closing Focus restores settings when idle and preserves manual changes. Timed pulls warn on overruns; Stop and safety checks remain. Focus recovers after Settings and reopening. VoiceOver skips covered controls; setup asks for Local Network at its own step.
 
 What to test
 
-- Save Native AF subjects and try both directions, including low contrast. For Timed Rack, set sharp A/B marks, Prepare lens with recording stopped, then compare 1, 3 and 6 second targets both ways. Check sharpness and steps; try Pause, Resume, Stop, interface lock, returning from Settings and reopening during restore. Two lenses have been tried; more testing is needed.
-- Rotate and inspect DISP 3, FPS, timecode and storage, then Photo SHOTS. Try RAW, JPEG and RAW+JPEG review in A, S, M and P; CL/CH tap then hold. Check the stills card and Photo/video LUT behavior.
-- On a full card, scroll, select and cache clips; check playback scopes and a wide Log3G10 clip. Verify CACHED after background download. With no RED LUTs stored, open Download from RED over a clip.
+- Save Native AF subjects and try both directions, including low contrast. For Timed Rack, set sharp A/B marks, Prepare lens while stopped, then compare 1, 3 and 6 second targets both ways. Check sharpness and steps; try Pause, Resume, Stop, lock, return from Settings and reopening during restore. Two lenses have been tried; more testing is needed.
+- Rotate and inspect DISP 3, FPS, timecode, storage and Photo SHOTS. Try RAW, JPEG and RAW+JPEG review in A, S, M and P; CL/CH tap then hold. Check the stills card and Photo/video LUT behavior.
+- On a full card, scroll, select and cache clips; check transfer speed, portrait photos, playback scopes and a wide Log3G10 clip. Verify CACHED after background download. With no RED LUTs stored, open Download from RED over a clip.
 - Test doze/wake, cancelled Wi-Fi retry and two-phone Take Over. Change Quality Bias, background and return; use Share Diagnostics if the picture drops out.
-- Mount the phone rigidly, enable gyro logging and complete ring calibration. Record short and long takes, check mount-move handling, share logs to Gyroflow and confirm IBIS and Electronic VR restore.
+- Mount the phone rigidly, enable gyro logging and calibrate. Record short and long takes, check mount-move handling, share logs to Gyroflow and confirm IBIS and Electronic VR restore.

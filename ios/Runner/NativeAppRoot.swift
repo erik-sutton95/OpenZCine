@@ -2751,7 +2751,14 @@ final class NativeAppModel {
     }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
     var mediaDownloadProgress: [String: Double] = [:]
-    @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
+    /// Per-clip download speed while a clip streams from the camera (OpenCine's one rate source,
+    /// the same the shared library feeds for its own transfers).
+    @ObservationIgnored let mediaDownloadRates = MonitorTransferRates<String>()
+    /// The one camera stream running per clip id; a second caller joins it.
+    @ObservationIgnored private var mediaDownloadFlights: [String: MediaDownloadFlight] = [:]
+    /// Clip ids whose last camera stream ended because the camera stopped answering (the link
+    /// died mid-transfer), so delivery can say so instead of the generic connection advice.
+    @ObservationIgnored private(set) var mediaStreamsLostCamera: Set<String> = []
     /// Deletion progress while a batch delete runs — non-nil hides the per-item grid churn behind
     /// one progress bar, and the grid refreshes once when it clears.
     private var mediaDeletionProgressOverride: MonitorMediaDeletionProgress?
@@ -2828,6 +2835,31 @@ final class NativeAppModel {
     }
     /// Per-slot card capacity from the last `refreshMediaStorageSlots` pass.
     var mediaStorageSlots: [MediaStorageSlotDisplay] = []
+    /// The end of one clip's camera stream. A joiner's cancellation ends only its own wait.
+    @MainActor final class MediaDownloadFlight {
+        private var finished = false
+        private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+        func finish() {
+            finished = true
+            let held = waiters
+            waiters = [:]
+            for waiter in held.values { waiter.resume() }
+        }
+        func wait() async {
+            let id = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if finished || Task.isCancelled {
+                        continuation.resume()
+                    } else {
+                        waiters[id] = continuation
+                    }
+                }
+            } onCancel: {
+                Task { @MainActor in self.waiters.removeValue(forKey: id)?.resume() }
+            }
+        }
+    }
     /// Actual native stream task captured by an item; retired cleanup cannot stop a successor.
     final class MediaClipStreamTicket {
         let task: Task<Void, Never>
@@ -3378,6 +3410,9 @@ final class NativeAppModel {
         connectionFailureDetail = ""
         connectionPhase = .joiningWiFi
         isConnectionProgressPresented = true
+        // A join that fails before it dials retries the way it always did; only a dial it makes
+        // records a target for Try again.
+        failedCardRetryTarget = nil
         connectionMessage = ConnectionProgressCopy.statusDetail(
             phase: .joiningWiFi,
             deviceName: deviceName,
@@ -3572,6 +3607,13 @@ final class NativeAppModel {
         return saved.host
     }
 
+    /// Whether a redialling loop's last dial is resolved: connected, or established and
+    /// preparing live view, which has its own bounded exit (the first frame, or the phase
+    /// watchdog failing the attempt with Try again). Redialling then tears the session down.
+    private var dialResolved: Bool {
+        isConnected || connection == .preparingLiveView
+    }
+
     /// Dials one known host through the single-flighted connect until it lands or attempts run
     /// out. Returns whether this loop resolved the card — connected, or handed off to the
     /// post-pairing wait; the last attempt's failure card stays up.
@@ -3580,6 +3622,7 @@ final class NativeAppModel {
         viaCameraAccessPointJoin: Bool = false
     ) async -> Bool {
         cameraHost = host
+        let clock = connectionHostClock
         for attempt in 1...maxAttempts {
             // `isConnectionProgressPresented` goes false when the operator taps Cancel/Close
             // on the card — stop retrying then, even though the .handshaking phase isn't one
@@ -3588,10 +3631,12 @@ final class NativeAppModel {
             connectToCamera(viaCameraAccessPointJoin: viaCameraAccessPointJoin)
             // Wait for the single-flighted attempt to resolve (success or ~10s Init timeout).
             while isEstablishingConnection {
-                try? await Task.sleep(for: .milliseconds(200))
+                try? await clock.sleep(.milliseconds(200))
                 guard !Task.isCancelled else { return false }
             }
-            if isConnected { return true }
+            // Redialling over a session preparing live view tore it down, and the reconnect
+            // phase written below hid the stall from the live view budget.
+            if dialResolved { return true }
             // Pairing just handed the card to the "Confirm on camera" wait (the only thing that
             // arms this). Retrying over that hand-off is what overwrote the instruction before
             // the operator could read it and then redialled a body busy rebooting its access
@@ -3604,7 +3649,7 @@ final class NativeAppModel {
             connectionProgressShowsFailure = false
             connectionPhase = .discovering
             connectionMessage = "Reconnecting to \(deviceName)…"
-            try? await Task.sleep(for: .seconds(2))
+            try? await clock.sleep(.seconds(2))
         }
         return false
     }
@@ -4012,6 +4057,7 @@ final class NativeAppModel {
                 discoveredCamera: discoveredCamera,
                 setup: setup
             )
+            failedCardRetryTarget = .init(host: host, camera: discoveredCamera, setup: setup)
         }
 
         stopDiscoveryLoop()
@@ -4041,6 +4087,7 @@ final class NativeAppModel {
         }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
         let previousTeardown = sessionTeardownTask
+        let clock = connectionHostClock
         establishmentTask = Task { [weak self] in
             // Only this generation's owner may release the latch — a stale attempt finishing late
             // must not unlatch the attempt that replaced it.
@@ -4073,7 +4120,7 @@ final class NativeAppModel {
             // a cold first connect has nothing to wait for. [verify-on-HW: tune this settle to the
             // camera's real slot-release time.]
             if hadPriorSession {
-                try? await Task.sleep(for: .milliseconds(1200))
+                try? await clock.sleep(.milliseconds(1200))
             }
             guard self?.connectionGeneration == generation else { return }
             let store = NativeCameraConnectionStore.shared
@@ -4468,23 +4515,24 @@ final class NativeAppModel {
     /// divider, so the 0.5s tick lands the breach within half a second and cannot alias the budget.
     private func startConnectionTimeoutWatchdog(generation: Int, isUSB: Bool) {
         connectionTimeoutTask?.cancel()
+        let clock = connectionHostClock
         connectionTimeoutTask = Task { [weak self] in
             var watchedPhase = self?.connectionPhase ?? .idle
-            var phaseStartedAt = ContinuousClock.now
+            var phaseStartedAt = clock.now()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await clock.sleep(.milliseconds(500))
                 guard !Task.isCancelled, let self, self.connectionGeneration == generation else {
                     return
                 }
                 let phase = self.connectionPhase
                 if phase != watchedPhase {
                     watchedPhase = phase
-                    phaseStartedAt = .now
+                    phaseStartedAt = clock.now()
                     continue
                 }
                 guard
                     let budget = CameraConnectionTimeout.budgetSeconds(for: phase, isUSB: isUSB),
-                    ContinuousClock.now - phaseStartedAt >= .seconds(budget)
+                    clock.now() - phaseStartedAt >= .seconds(budget)
                 else { continue }
                 var message = CameraConnectionTimeout.timeoutMessage(
                     phase: phase, deviceName: self.connectionProgressDeviceName)
@@ -4512,6 +4560,15 @@ final class NativeAppModel {
         }
     }
 
+    /// The clock a connection attempt waits on: the phase watchdog's budgets and the reconnect
+    /// settle before a fresh Init.
+    private var connectionHostClock: HostClock {
+        #if DEBUG
+            if let connectionClock { return connectionClock }
+        #endif
+        return .live
+    }
+
     /// Ends the in-flight attempt with exactly the disposal an explicit cancel performs — stale
     /// transport, PTP session, sockets, tasks, queued writes and camera identity released, and the
     /// single-flight latch freed — then surfaces a retryable failure.
@@ -4523,7 +4580,10 @@ final class NativeAppModel {
         diagnostic: AppDiagnosticEvent,
         logReason: String
     ) {
-        guard isEstablishingConnection else { return }
+        // The connect task ends at `enterLiveView`, releasing the latch while the attempt is
+        // still preparing live view. That phase keeps its budget: without it a stall after the
+        // handshake left "Starting live view" up forever (hardware pass 2026-10-28).
+        guard isEstablishingConnection || connectionPhase == .preparingLiveView else { return }
         logConnection("attempt failed host=\(cameraHost) — \(logReason)")
         AppDiagnostics.shared.record(diagnostic)
         disconnectCameraSession(resetConnection: false)
@@ -4540,8 +4600,27 @@ final class NativeAppModel {
     /// backing out and tapping the camera again — without making them do it.
     func retryConnectionAttempt() {
         guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
-        connectToCamera(operatorRequested: true)
+        guard let target = failedCardRetryTarget else {
+            connectToCamera(operatorRequested: true)
+            return
+        }
+        // The camera and setup that failed, not whatever discovery selected since: the failure
+        // restarts discovery, which can move `cameraHost` to another body. The camera's current
+        // discovery entry keeps the held-by-another-device check up to date.
+        cameraHost = target.host
+        let camera = target.camera.map { failed in
+            discoveredCameras.first { $0.id == failed.id } ?? failed
+        }
+        connectToCamera(camera, setup: target.setup, operatorRequested: true)
     }
+
+    /// What the operator's latest connect dialled, so Try again repeats exactly that attempt.
+    private struct ConnectionRetryTarget {
+        let host: String
+        let camera: DiscoveredCamera?
+        let setup: PTPIPSavedCameraRecord?
+    }
+    @ObservationIgnored private var failedCardRetryTarget: ConnectionRetryTarget?
 
     private func startupConnectionMessage(
         for strategy: CameraConnectionStrategy,
@@ -4801,6 +4880,11 @@ final class NativeAppModel {
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
 
+        /// SIMULATED time for a connection attempt (the phase watchdog and the reconnect settle),
+        /// so a test crosses a phase budget or a retry without waiting in real time. `nil` keeps
+        /// the real clocks.
+        @ObservationIgnored var connectionClock: HostClock?
+
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
@@ -4924,6 +5008,16 @@ final class NativeAppModel {
                 .property(
                     .movieFileType,
                     PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data))
+            // The movie AF modes and the stills speeds a body enumerates, so their readouts
+            // press-drag over an advertised set as on a camera.
+            for (property, picker) in [
+                (PTPPropertyCode.movieFocusMode, CameraPicker.focus),
+                (.stillShutterSpeed, .stillShutter),
+            ] {
+                let options = picker.modes.first?.options ?? []
+                applyBootstrapObservation(
+                    .options(property, options.isEmpty ? picker.options : options))
+            }
             let driver = NikonQuickDemoDriver(model: self)
             let session = NikonCameraSession(driver: driver, serialNumber: "SIMULATED-quick")
             driver.session = session
@@ -6503,7 +6597,7 @@ final class NativeAppModel {
                     while self.isEstablishingConnection, !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(200))
                     }
-                    if self.isConnected { return }
+                    if self.dialResolved { return }
                     // Give the ZR a moment to release its stale session before the next Init.
                     try? await Task.sleep(for: .seconds(2))
                 } else {
@@ -8175,8 +8269,13 @@ final class NativeAppModel {
                     lease.release()
                     break
                 }
-                // A frame captured before the device went away or changed is stale.
-                guard let handoff = await renderer.image(from: lease),
+                // A frame captured before the device went away or changed is stale. Every capture
+                // device decodes with the HDMI capture correction; its identity rides along for
+                // the readout, and a frame of the device before carries an older generation,
+                // which the fence check refuses.
+                guard
+                    let handoff = await renderer.image(
+                        from: lease, device: source.captureDeviceIdentity),
                     source.fence.isCurrent(lease.generation)
                 else { continue }
                 await self.presentHDMIFrame(
@@ -12365,13 +12464,6 @@ final class NativeAppModel {
         assist.desqueeze(visible: renderedLiveAssistTools.contains(.desqueeze))
     }
 
-    /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
-    /// photography toolset. Eligibility is resolved before choosing the canonical first two.
-    var renderedFitScopes: [MonitorAssistTool] {
-        let rendered = renderedLiveAssistTools
-        return preferences.displayedFitScopes(on: rendered)
-    }
-
     /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take
     /// the camera started (or stopped) while the prompt was up was inverted by "Start" (or "Stop").
     func confirmRecordToggle() {
@@ -14014,6 +14106,15 @@ final class NativeAppModel {
         return family.depths.first
     }
 
+    /// One release from the shared compact drum on a ladder value, written through the path the
+    /// picker's drawer writes (the tab the drag started on), while the monitor is in front.
+    func applyQuickLadder(_ identity: NikonLadderQuickIdentity, value: String) {
+        guard identity.snapshot.options.contains(value), isMonitorPresented,
+            !screenWakeSuppressedForBackground
+        else { return }
+        applyPicker(identity.picker, mode: identity.mode, value: value)
+    }
+
     /// One release from the shared compact picker, bounded through the native safe-point queue.
     func applyQuickPicker(
         _ picker: CameraPicker, value: String, identity: NikonCaptureQuickIdentity
@@ -15009,6 +15110,15 @@ struct NativeAppRoot: View {
         .statusBarHidden(true)
         .monitorBrowserHandoffReturn(model.browserHandoff)
         .task {
+            // Thumbnails cached before they carried their still's orientation draw portrait
+            // stills sideways: retire them once, off the main actor, so the grid fetches them
+            // again upright.
+            let store = model.mediaClipStore
+            await Task.detached(priority: .utility) {
+                store.retireUnorientedStillThumbnails()
+            }.value
+        }
+        .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
             _ = model.shell
@@ -15614,7 +15724,9 @@ extension NativeAppModel {
         guard !thumblessClipIDs.contains(clip.id) else { return }
         guard !mediaClipStore.hasThumbnail(cameraID: clip.cameraID, filename: clip.filename)
         else { return }
-        if let data = try? await session.getThumb(handle: handle) {
+        // The shared Nikon layer tags a still's thumbnail with the still's own orientation (one
+        // small head read), so the cached file draws upright in every cell, strip and preview.
+        if let data = try? await session.getUprightThumb(handle: handle, filename: clip.filename) {
             // Validate before caching: the body occasionally returns truncated/garbage thumb
             // bytes (seen on-device as repeated ImageIO 'JPEG err=7' spam); caching them would
             // poison the cell decode on every realisation. Invalid data is remembered in-memory
@@ -15622,12 +15734,12 @@ extension NativeAppModel {
             if UIImage(data: data) != nil {
                 try? mediaClipStore.saveThumbnail(
                     cameraID: clip.cameraID, filename: clip.filename, data: data)
-                // A thumb that DOES carry EXIF answers the orientation for free — grid cells
-                // fall back to this row value when a later decode meets stripped bytes.
-                if clip.exifOrientation == nil,
-                    let orientation = MediaCellImageLoader.exifOrientation(in: data)
+                // The tag answers the still's orientation: the row keeps it, so the staggered
+                // grid sizes a portrait card tall from metadata on every later layout.
+                if let url = try? mediaClipStore.thumbURL(
+                    cameraID: clip.cameraID, filename: clip.filename)
                 {
-                    cacheEXIFOrientation(orientation, for: clip)
+                    resolveEXIFOrientation(for: clip, at: url)
                 }
             } else {
                 thumblessClipIDs.insert(clip.id)
@@ -15636,17 +15748,30 @@ extension NativeAppModel {
     }
 
     private func streamClip(_ clip: MediaClip) async {
-        if isClipDownloaded(clip) { return }
-        if mediaDownloadInFlight.contains(clip.id) {
-            while mediaDownloadInFlight.contains(clip.id), !isClipDownloaded(clip) {
-                try? await Task.sleep(for: .milliseconds(50))
-                if Task.isCancelled { return }
-            }
-            return
+        // Join the stream already running for this clip. One that ends without the whole clip
+        // (the player was closed and cancelled it) is resumed below from its partial bytes, so
+        // Share or Download of that clip never fails on the cancelled stream (owner report
+        // 2026-10-28).
+        // The clip's handle belongs to the camera session admitted now; a stream started after
+        // the wait must still use that session, never a replacement that reuses the handle.
+        let admitted = cameraSession
+        let generation = connectionGeneration
+        while let running = mediaDownloadFlights[clip.id] {
+            await running.wait()
+            if Task.isCancelled { return }
         }
-        guard let session = cameraSession, let handle = clip.handle else { return }
-        mediaDownloadInFlight.insert(clip.id)
-        defer { mediaDownloadInFlight.remove(clip.id) }
+        if isClipDownloaded(clip) { return }
+        guard let session = admitted, cameraSession === session,
+            connectionGeneration == generation, let handle = clip.handle
+        else { return }
+        let flight = MediaDownloadFlight()
+        mediaDownloadFlights[clip.id] = flight
+        mediaStreamsLostCamera.remove(clip.id)
+        defer {
+            if mediaDownloadFlights[clip.id] === flight { mediaDownloadFlights[clip.id] = nil }
+            mediaDownloadRates.end(clip.id)
+            flight.finish()
+        }
         let bucket = clip.cameraID
         let total = clip.sizeBytes
         do {
@@ -15655,6 +15780,8 @@ extension NativeAppModel {
                 cameraID: bucket, filename: clip.filename,
                 onProgress: { offset in
                     mediaDownloadProgress[clip.id] = Double(offset) / Double(total)
+                    // The first report is the resumed offset: the reading starts from it.
+                    mediaDownloadRates.record(clip.id, totalBytes: offset)
                 })
             if Task.isCancelled {
                 mediaDownloadProgress[clip.id] = nil
@@ -15670,6 +15797,9 @@ extension NativeAppModel {
                 return
             }
             mediaDownloadProgress[clip.id] = nil
+            if NativeCameraSessionError.isLinkFailure(error) {
+                mediaStreamsLostCamera.insert(clip.id)
+            }
             mediaLibraryLogger.error(
                 "streamClip(\(clip.filename, privacy: .private(mask: .hash))) failed: \(error.localizedDescription, privacy: .private(mask: .hash))"
             )

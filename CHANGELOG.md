@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-30
+
+Public beta, cumulative since the 2026-10-18 open beta (0.2.5). The operator-facing iOS and
+Android lists are in the [0.2.8 release notes](handbook/src/content/docs/releases/0-2-8.md).
+
 This beta is a parity and reliability update built on the shared OpenCine
 foundation. Camera setup, monitor chrome, settings, View Assist, media and
 playback share more components and behavior across the OpenCapture apps while
@@ -443,3 +448,15 @@ the next external beta.
 
 - All GitHub Actions in CI are pinned to full commit SHAs, and Docker-based actions to image
   digests, to prevent tag-hijack supply-chain attacks.
+
+### Public beta additions
+
+- Media grid is staggered: portrait photos stand upright and every item fills the space above it.
+- Caching and downloads show a live speed beside the percentage.
+- Media selection leads with an Exit selection close; the bar keeps All, Share and Delete.
+- Pinch-zoomed playback fills the screen past the clip's letterbox.
+- Landscape Photo moves setup values to the status corner.
+- iOS: connecting no longer freezes on Starting live view.
+- Share finishes a clip whose cache the player left running or stopped.
+- iOS: leaving the player no longer drops the camera on Wi-Fi, and Share names a camera that stopped responding.
+- iOS: photo values and the movie focus mode press and slide like every readout.

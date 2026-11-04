@@ -10,6 +10,8 @@ import SwiftUI
 import UIKit
 import XCTest
 
+import struct MonitorPresentation.MonitorReadoutInteraction
+
 @testable import Runner
 
 /// F03 P1 regressions against the app's own composition: the root, the shell and the shared live
@@ -532,6 +534,61 @@ final class LiveSurfaceRegressionTests: XCTestCase {
     }
 
     // MARK: Shared capture popups
+
+    /// SIMULATED quick camera: a press that slides two detents along a readout and lifts, through
+    /// the shared readout interaction, returning the value the release proposes and the result.
+    private func pressAndDrag(
+        _ model: NativeAppModel, _ picker: CameraPicker, detents: Double = 2,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> (proposed: String, shown: String) {
+        let quick = try XCTUnwrap(
+            model.operatorNativeQuick(for: picker),
+            "\(picker) must offer the shared press-and-drag drum", file: file, line: line)
+        var press = MonitorReadoutInteraction()
+        press.begin()
+        // The first 14 pt open the drum without lifting; the rest scrubs it.
+        XCTAssertTrue(press.move(x: -15, y: 0), file: file, line: line)
+        press.move(x: -15 - 56 * detents, y: 3)
+        guard case .commit(let translation) = press.end() else {
+            XCTFail("a horizontal press-drag must commit on release", file: file, line: line)
+            return ("", "")
+        }
+        let proposed = try XCTUnwrap(
+            quick.snapshot.changedValue(at: quick.snapshot.position(translation: translation)),
+            "\(picker): the drag must land on another detent", file: file, line: line)
+        model.commitOperatorNativeQuick(quick.identity, value: proposed)
+        return (proposed, model.cameraValue(for: picker))
+    }
+
+    /// Owner hardware pass 2026-10-28: on Z the photography values (and the movie focus mode)
+    /// only opened their drawer on a tap; a press could not slide straight into a value as it does
+    /// on every other readout and in the other apps. Each one now press-drags through the shared
+    /// readout interaction and writes the value it lands on.
+    func testSIMULATEDNativeReadoutsPressAndDragLikeEveryOtherValue() async throws {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        model.startDemoSession()
+        model.seedQuickDemoCamera()
+        // The bound session publishes its first snapshot asynchronously.
+        for _ in 0..<200 where model.shell.control.snapshot?.connection != .ready {
+            await Task.yield()
+        }
+        XCTAssertEqual(model.shell.control.snapshot?.connection, .ready)
+        let focus = try pressAndDrag(model, .focus, detents: 1)
+        XCTAssertEqual(focus.shown, focus.proposed)
+
+        model.demoTogglePhotographyMode()
+        for picker: CameraPicker in [.stillISO, .stillShutter] {
+            let before = model.cameraValue(for: picker)
+            let result = try pressAndDrag(model, picker)
+            XCTAssertNotEqual(result.proposed, before)
+            XCTAssertEqual(result.shown, result.proposed, "\(picker) must take the dragged value")
+        }
+
+        // A value the camera owns stays a tap: Auto ISO opens no drum to drag.
+        model.switchStillAutoISO(enabled: true)
+        XCTAssertNil(model.operatorNativeQuick(for: .stillISO))
+    }
 
     /// Every camera picker except the two independent-switch panels draws on the shared ladder
     /// sheet, movie and photo alike, so no Nikon-only drum panel remains.

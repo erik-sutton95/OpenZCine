@@ -636,6 +636,48 @@ struct FocusAFSettingsAdapterTests {
         #expect(rack.nativeRack.lastSelectedMark == nil)
     }
 
+    @Test("A retired session response cannot complete a replacement session's Native target")
+    func replacementSessionRetiresHeldNativeTarget() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack, result: .notFocused)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        rack.armNativeTarget(.a)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.2, y: 0.5)))
+        await wire.holdNextTargetResponse()
+        let service = Task { await model.debugServiceNativeFocusTarget() }
+        for _ in 0..<1_000 {
+            if await wire.targetHeld { break }
+            await Task.yield()
+        }
+        #expect(await wire.targetHeld)
+        let replacementWire = FocusAFQueueTransport(values: .target(.nativeAF))
+        let replacement = try await NativeCameraSession.establish(
+            transport: replacementWire, host: "usb:SIMULATED-native-replacement",
+            cameraName: "SIMULATED", requestPairing: false)
+        defer { replacement.close() }
+        model.debugAdoptEstablishedMediaSession(replacement)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        try await drain(model, rack: rack, result: .notFocused)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        rack.armNativeTarget(.b)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.8, y: 0.6)))
+        let replacementID = rack.nativeRack.dispatchedRequest?.id
+        #expect(replacementID != nil)
+        await wire.releaseTargetResponse()
+        #expect(await service.value)
+        #expect(rack.nativeRack.dispatchedRequest?.id == replacementID)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await replacementWire.targetCommands.count == 1)
+        #expect(rack.nativeRack.lastSelectedMark == .b)
+    }
+
     @Test("Native saved targets use the real safe-point slot and report command acknowledgment")
     func nativeTargetAcknowledgesSerializedCommand() async throws {
         let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))

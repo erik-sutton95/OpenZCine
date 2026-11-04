@@ -1,4 +1,5 @@
 import Foundation
+import MonitorPresentation
 import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
@@ -126,9 +127,9 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     /// On-card R3D filename paired with this proxy by stem (nil when unlinked).
     var linkedR3DFilename: String? = nil
     var isFavorite: Bool = false
-    /// EXIF orientation (1–8) of the full still, learned from the full file's header — the
-    /// camera's PTP thumbnails can be EXIF-stripped, so grid/filmstrip decodes use this as the
-    /// fallback to show portrait shots upright. Additive/Codable — nil until resolved.
+    /// EXIF orientation (1–8) of the full still, learned from the full file's header. Camera
+    /// thumbnails arrive tagged with it already; grid/filmstrip decodes use this as the fallback
+    /// for a thumbnail that carries none. Additive/Codable — nil until resolved.
     var exifOrientation: Int? = nil
     /// Cached camera star rating (0–5), mirrored from the body on every rating write so the
     /// Favorites filter agrees with the shots starred during a shoot. Additive/Codable —
@@ -242,6 +243,14 @@ extension MediaClip {
     /// during the shoot lands under the Favorites tab without a per-cell camera round-trip.
     var isFavorited: Bool {
         isFavorite || (starRating ?? 0) >= 1
+    }
+
+    /// Width over height as the grid shows it: the listed pixel size, turned for a still whose
+    /// orientation the row has learned (from its tagged thumbnail or its full file).
+    var uprightAspectRatio: Double? {
+        MonitorMediaMasonry.uprightAspect(
+            width: pixelWidth.map(Int.init), height: pixelHeight.map(Int.init),
+            exifOrientation: exifOrientation)
     }
 
     /// This clip as a burst-detection frame: capture identity plus a format/dimensions signature
@@ -381,12 +390,25 @@ struct MediaClipStore: @unchecked Sendable {
 
     /// Every bucket directory currently on disk (camera serials + `local`).
     func allBucketIDs() -> [String] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-        return names.filter { name in
+        bucketIDs(named: (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+    }
+
+    private func bucketIDs(named names: [String]) -> [String] {
+        names.filter { name in
             var isDirectory: ObjCBool = false
             let path = root.appendingPathComponent(name).path
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
                 && isDirectory.boolValue
+        }
+    }
+
+    /// A directory's names for a pass that must see everything: an absent directory holds
+    /// nothing, while one that exists but cannot be listed is unknown (nil), never empty.
+    private func checkedListing(of directory: URL) -> [String]? {
+        do {
+            return try fileManager.contentsOfDirectory(atPath: directory.path)
+        } catch {
+            return fileManager.fileExists(atPath: directory.path) ? nil : []
         }
     }
 
@@ -427,6 +449,57 @@ struct MediaClipStore: @unchecked Sendable {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
     }
+
+    /// Camera thumbnails cached before thumbnails carried their still's orientation draw
+    /// portrait stills sideways. Once per library, removes the cached thumbnail of every camera
+    /// still whose rows have not learned its orientation (a learned row still turns its old
+    /// thumbnail upright, and a RAW and JPEG of one stem share a thumbnail), so the grid fetches it again through the orientation-tagging read.
+    /// The library is marked done only after a complete pass: a folder that cannot be listed, a
+    /// bucket whose index cannot be read or a thumbnail that could not be removed is tried again
+    /// on the next launch.
+    func retireUnorientedStillThumbnails() {
+        let marker = root.appendingPathComponent(Self.orientedThumbnailsMarker)
+        guard !fileManager.fileExists(atPath: marker.path) else { return }
+        guard let rootNames = checkedListing(of: root) else { return }
+        var complete = true
+        for bucket in bucketIDs(named: rootNames) where bucket != Self.localBucketID {
+            let indexed: [MediaClip]
+            do {
+                indexed = try observedIndex(cameraID: bucket)
+            } catch {
+                complete = false
+                continue
+            }
+            guard let names = checkedListing(of: directory(for: bucket)) else {
+                complete = false
+                continue
+            }
+            // Same-stem stills (a RAW and its JPEG) are separate rows that share one cached
+            // thumbnail, so a thumbnail is kept while any row using it has learned its orientation.
+            var thumbnailIsOriented: [URL: Bool] = [:]
+            for clip in reconciledRows(cameraID: bucket, indexed: indexed, diskNames: names).values
+            where clip.mediaKind == .photo {
+                guard let thumb = try? thumbURL(cameraID: bucket, filename: clip.filename),
+                    fileManager.fileExists(atPath: thumb.path)
+                else { continue }
+                thumbnailIsOriented[thumb, default: false] =
+                    thumbnailIsOriented[thumb, default: false] || clip.exifOrientation != nil
+            }
+            for (thumb, oriented) in thumbnailIsOriented where !oriented {
+                do {
+                    try fileManager.removeItem(at: thumb)
+                } catch {
+                    if fileManager.fileExists(atPath: thumb.path) { complete = false }
+                }
+            }
+        }
+        guard complete else { return }
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        _ = fileManager.createFile(atPath: marker.path, contents: Data())
+    }
+
+    /// Present once a library's cached thumbnails all carry their still's orientation.
+    static let orientedThumbnailsMarker = ".thumbnails-oriented-v1"
 
     func isDownloaded(cameraID: String, filename: String) -> Bool {
         guard let url = try? localURL(cameraID: cameraID, filename: filename) else { return false }

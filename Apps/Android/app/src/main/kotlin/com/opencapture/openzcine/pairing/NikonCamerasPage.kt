@@ -116,27 +116,7 @@ internal fun nikonIntegrationSlots(
     onChooseConnection: () -> Unit,
 ): IntegrationSlots =
     IntegrationSlots(
-        pairing = {
-            ChooseConnectionEntry(onChooseConnection)
-            val cameras by connector.usbCameras.collectAsState()
-            val pending = cameras.filter {
-                it.access == UsbPtpCameraAccess.NEEDS_PERMISSION || it.access == UsbPtpCameraAccess.DENIED
-            }
-            pending.forEach { camera ->
-                val detail = stringResource(usbCameraDetailResource(camera.access))
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(camera.displayName, fontWeight = FontWeight.SemiBold)
-                    Text(detail, fontSize = 11.sp)
-                    val action = stringResource(R.string.action_allow)
-                    MonitorCameraAction(
-                        text = action, primary = false, enabled = true,
-                        contentDescription = action,
-                        onClick = { connector.requestUsbPermission(camera) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        },
+        pairing = { ChooseConnectionEntry(onChooseConnection) },
         addSetup = { camera, done ->
             addSetupFlow(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
         },

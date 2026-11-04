@@ -936,8 +936,13 @@ actor LargeTransferTransport: CameraTransport {
     private var propertyValues: [PTPPropertyCode: Data] = [:]
     private var refuseWrite = false
     private var readEntered = false
+    private var readsEntered = 0
+    private var readWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var entered: CheckedContinuation<Void, Never>?
     private var releaseRead: CheckedContinuation<Void, Never>?
+    /// How a scripted object read fails: the link dies, or the camera refuses it.
+    enum ReadFailure: Sendable { case linkLost, refused }
+    private var readFailures: [Int: ReadFailure] = [:]
     init(
         operations: [PTPOperationCode], chunks: [Data] = [],
         totalBytes: UInt64 = UInt64(UInt32.max) + 700, holdRead: Bool = false,
@@ -951,6 +956,8 @@ actor LargeTransferTransport: CameraTransport {
     }
     func clear() { calls = [] }
     func refuseNextWrite() { refuseWrite = true }
+    /// The `number`th object read (counting from 1) fails this way.
+    func failRead(_ number: Int, _ failure: ReadFailure) { readFailures[number] = failure }
     func executeTransaction(
         operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
         dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
@@ -979,6 +986,21 @@ actor LargeTransferTransport: CameraTransport {
         case .getObjectSize: data = Data(ByteCoding.uint64LE(totalBytes))
         case .getObjectInfo: data = objectInfo()
         case .getPartialObject, .getPartialObjectEx:
+            readsEntered += 1
+            let ready = readWaiters.filter { $0.count <= readsEntered }
+            readWaiters.removeAll { $0.count <= readsEntered }
+            for waiter in ready { waiter.continuation.resume() }
+            switch readFailures.removeValue(forKey: readsEntered) {
+            case .linkLost: throw NativeCameraSessionError.connectionClosed
+            case .refused:
+                let refusal =
+                    ByteCoding.uint16LE(PTPResponseCode.deviceBusy.rawValue)
+                    + ByteCoding.uint32LE(transactionID ?? 1)
+                return PTPIPTransactionResult(
+                    operationResponse: try PTPOperationResponse(payloadBytes: refusal),
+                    data: Data())
+            case nil: break
+            }
             if holdRead {
                 readEntered = true
                 entered?.resume()
@@ -997,6 +1019,11 @@ actor LargeTransferTransport: CameraTransport {
     func waitUntilRead() async {
         if readEntered { return }
         await withCheckedContinuation { entered = $0 }
+    }
+    /// Returns once `count` object reads have reached the camera.
+    func waitUntilReads(_ count: Int) async {
+        if readsEntered >= count { return }
+        await withCheckedContinuation { readWaiters.append((count, $0)) }
     }
     func release() {
         releaseRead?.resume()
@@ -1118,3 +1145,158 @@ extension NikonMediaLibraryAdoptionTests {
         }
     }
 #endif
+
+/// REQ-MEDIA-THUMB-ORIENTATION: camera thumbnails now arrive tagged with their still's
+/// orientation. Ones cached earlier drew portrait stills sideways in the Media grid and stayed
+/// cached, so they are retired once and fetched again upright.
+@Suite("Camera thumbnails cached without their still's orientation")
+struct NikonUnorientedThumbnailRetirementTests {
+    private static let camera = "6002199"
+
+    private static func row(_ filename: String, orientation: Int? = nil) -> MediaClip {
+        var clip = MediaClip(
+            cameraID: camera, filename: filename, handle: 0x1001, storageID: 0x0001_0001,
+            sizeBytes: 5_000_000, captureDate: "20261025T111844")
+        clip.exifOrientation = orientation
+        return clip
+    }
+
+    @Test func aStillsOldThumbnailIsFetchedAgainOnceAndOthersAreKept() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let portrait = Self.row("_NZR2887.JPG")
+        let raw = Self.row("_NZR1697.NEF")
+        let learned = Self.row("_NZR2811.JPG", orientation: 8)
+        let clip = Self.row("C0001.MOV")
+        store.upsertBatch([portrait, raw, learned, clip], cameraID: Self.camera)
+        let local = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "IMG_0001.JPG", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261025T111844")
+        store.upsertBatch([local], cameraID: local.cameraID)
+        let thumbnail = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        for row in [portrait, raw, learned, clip, local] {
+            try store.saveThumbnail(cameraID: row.cameraID, filename: row.filename, data: thumbnail)
+        }
+
+        store.retireUnorientedStillThumbnails()
+
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: raw.filename))
+        // A row that learned its orientation still turns its old thumbnail upright.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: learned.filename))
+        // A clip's thumbnail has no orientation to gain; a local photo has no camera to ask.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: clip.filename))
+        #expect(store.hasThumbnail(cameraID: local.cameraID, filename: local.filename))
+
+        // Thumbnails fetched afterwards carry the orientation and are never retired again.
+        try store.saveThumbnail(cameraID: Self.camera, filename: portrait.filename, data: thumbnail)
+        store.retireUnorientedStillThumbnails()
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: portrait.filename))
+    }
+
+    @Test func aThumbnailSharedWithAnOrientedStillOfTheSameStemIsKept() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        // A RAW+JPEG pair lists as two rows that share one cached thumbnail.
+        let raw = Self.row("_NZR2887.NEF")
+        let jpeg = Self.row("_NZR2887.JPG", orientation: 8)
+        let unorientedRaw = Self.row("_NZR2890.NEF")
+        let unorientedJPEG = Self.row("_NZR2890.JPG")
+        store.upsertBatch([raw, jpeg, unorientedRaw, unorientedJPEG], cameraID: Self.camera)
+        let thumbnail = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        try store.saveThumbnail(cameraID: Self.camera, filename: jpeg.filename, data: thumbnail)
+        try store.saveThumbnail(
+            cameraID: Self.camera, filename: unorientedJPEG.filename, data: thumbnail)
+
+        store.retireUnorientedStillThumbnails()
+
+        // The JPEG learned its orientation and still draws the shared thumbnail upright.
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: jpeg.filename))
+        #expect(store.hasThumbnail(cameraID: Self.camera, filename: raw.filename))
+        // A pair where neither row learned its orientation is fetched again.
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: unorientedJPEG.filename))
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: unorientedRaw.filename))
+    }
+
+    @Test func aLibraryWhoseIndexCannotBeReadIsRetiredOnceItCanBe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let portrait = Self.row("_NZR2887.JPG")
+        MediaClipStore(root: root).upsertBatch([portrait], cameraID: Self.camera)
+        try MediaClipStore(root: root).saveThumbnail(
+            cameraID: Self.camera, filename: portrait.filename,
+            data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+        let index = root.appendingPathComponent(Self.camera).appendingPathComponent("index.json")
+        let readable = try Data(contentsOf: index)
+        try Data("{ not an index".utf8).write(to: index)
+
+        // Which cached thumbnails belong to stills is unknown, so nothing is decided yet.
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+
+        try readable.write(to: index)
+        MediaClipStore(root: root).retireUnorientedStillThumbnails()
+        #expect(
+            !MediaClipStore(root: root).hasThumbnail(
+                cameraID: Self.camera, filename: portrait.filename))
+    }
+
+    @Test func aLibraryWhoseFoldersCannotBeListedIsRetiredOnceTheyCanBe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = UnlistableFolderFileManager()
+        let store = MediaClipStore(root: root, fileManager: files)
+        // A still found on disk but never indexed is known only through its bucket's listing.
+        let bucket = store.directory(for: Self.camera)
+        try FileManager.default.createDirectory(at: bucket, withIntermediateDirectories: true)
+        try Data([0xFF, 0xD8]).write(to: bucket.appendingPathComponent("_NZR2887.JPG"))
+        try store.saveThumbnail(
+            cameraID: Self.camera, filename: "_NZR2887.JPG", data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+
+        // While the media root or the camera's folder cannot be listed, its stills are unknown.
+        for unlistable in [root, bucket] {
+            files.unlistable = unlistable.standardizedFileURL.path
+            store.retireUnorientedStillThumbnails()
+            #expect(store.hasThumbnail(cameraID: Self.camera, filename: "_NZR2887.JPG"))
+        }
+
+        files.unlistable = nil
+        store.retireUnorientedStillThumbnails()
+        #expect(!store.hasThumbnail(cameraID: Self.camera, filename: "_NZR2887.JPG"))
+    }
+}
+
+/// Fails the listing of one folder that exists, as an unreadable directory does.
+private final class UnlistableFolderFileManager: FileManager, @unchecked Sendable {
+    var unlistable: String?
+
+    override func contentsOfDirectory(atPath path: String) throws -> [String] {
+        if let unlistable, URL(fileURLWithPath: path).standardizedFileURL.path == unlistable {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        return try super.contentsOfDirectory(atPath: path)
+    }
+}
+
+/// The staggered grid sizes a card from its row: a still's listed pixel size is the stored
+/// sensor frame, so a portrait still's card turns tall once its orientation is learned.
+@Suite("A media card's shape in the staggered grid")
+struct NikonMediaCardShapeTests {
+    @Test func aPortraitStillsCardTurnsTallOnceItsOrientationIsKnown() {
+        var still = MediaClip(
+            cameraID: "6002199", filename: "_NZR2887.JPG", handle: 0x1001,
+            storageID: 0x0001_0001, sizeBytes: 5_000_000, captureDate: "20261028T111844")
+        #expect(still.uprightAspectRatio == nil)
+        still.pixelWidth = 6048
+        still.pixelHeight = 4032
+        #expect(still.uprightAspectRatio == 1.5)
+        still.exifOrientation = 8
+        #expect(still.uprightAspectRatio == 4032.0 / 6048.0)
+        still.exifOrientation = 3
+        #expect(still.uprightAspectRatio == 1.5)
+    }
+}

@@ -57,13 +57,34 @@ extension UVCVideoSourceState {
 /// The monitor's downstream consumers already assume a real bitmap: the scope tap in particular
 /// hard-guards on `image.cgImage` (`LiveFrameProcessor.swift:176`) and silently produces nothing
 /// without one. A `UIImage(ciImage:)` would render on screen and quietly kill every scope, so each
-/// frame is rendered through a `CIContext` to a `CGImage` — the same shape the JPEG path produces
-/// via `preparingForDisplay()`.
+/// frame is rendered through a `CIContext` to a `CGImage`, the same shape the JPEG path produces.
 ///
-/// ponytail: one GPU→CGImage render per frame. That is the honest cost of matching the existing
+/// ## Why the render is `LiveFrameDecoding`
+///
+/// The bitmap holds the camera's own R'G'B' code values, as the camera's JPEG live view does,
+/// because every look, scope and exposure tool reads them as they are. A plain
+/// `CIImage(cvPixelBuffer:)` is colour managed from the colour space the iPad's capture pipeline
+/// writes onto the frame's IOSurface (BT.709 primaries, SMPTE 240M transfer), which re-encoded
+/// the signal before the look saw it: code 128 showed as 138.5 through the dongle.
+///
+/// ## Capture calibration
+///
+/// Each frame decodes with OpenCine's HDMI capture correction (`CaptureCalibration.forDevice`),
+/// which applies to every UVC capture device: the camera's YCbCr HDMI through a USB-C dongle loses
+/// about 1.8 codes of positive Cb and Cr against in-camera recordings (negative chroma about
+/// none), which desaturates flat log pictures most, and every dongle tried showed the same tint.
+/// The measured per-channel Y'CbCr curves run on the code values inside the same render. The USB
+/// identity `UVCVideoSource` reads from the device is passed along for the readout and for a
+/// known-good exception, should a device ever measure clean.
+///
+/// ponytail: one GPU to CGImage render per frame. That is the honest cost of matching the existing
 /// `liveFrameImage: UIImage?` contract, and it replaces a JPEG decode rather than adding to it. If
 /// 1080p60 proves too heavy on hardware, the upgrade is to route the `CVPixelBuffer` straight into
 /// `MetalFeedFrameBaker` and leave `liveFrameImage` for the scope tap alone.
+///
+/// Leases arrive as YCbCr carrying the matrix OpenCineApple decided (BT.709 for an HD signal
+/// whose dongle reports none or the UVC class default); `CIImage(cvPixelBuffer:)` decodes with
+/// that attachment, so this render is where the HDMI picture becomes RGB.
 ///
 /// An actor so the render runs off the main actor, one frame at a time, inside the consumer's
 /// serial loop. Frames the newest-wins stream drops are never rendered.
@@ -72,15 +93,15 @@ actor UVCFrameRenderer {
     /// working set on a path that already runs alongside the Metal feed baker's own context.
     private let renderContext = CIContext(options: [.cacheIntermediates: false])
 
-    /// Renders `lease` and releases it, returning the capture buffer to its pool. Nil when the
-    /// lease was already released or the render failed.
-    func image(from lease: DecodedFrameLease) -> UVCFrameHandoff? {
+    /// Renders `lease`, captured from `device`, and releases it, returning the capture buffer to
+    /// its pool. Nil when the lease was already released or the render failed.
+    func image(from lease: DecodedFrameLease, device: CaptureDeviceIdentity?) -> UVCFrameHandoff? {
         defer { lease.release() }
-        guard let pixelBuffer = lease.pixelBuffer else { return nil }
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
-        guard
+        let calibration = CaptureCalibration.forDevice(device)
+        guard let pixelBuffer = lease.pixelBuffer,
             let rendered = autoreleasepool(invoking: {
-                renderContext.createCGImage(source, from: source.extent)
+                LiveFrameDecoding.cgImage(
+                    pixelBuffer, context: renderContext, calibration: calibration)
             })
         else { return nil }
         return UVCFrameHandoff(image: UIImage(cgImage: rendered))

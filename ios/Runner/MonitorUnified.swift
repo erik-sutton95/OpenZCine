@@ -65,6 +65,31 @@ struct NikonCaptureQuickIdentity: Hashable, Sendable {
     }
 }
 
+/// A native quick gesture on a value the drawer edits through its ladder (every photography
+/// value, the movie focus mode): the tab the camera is on, its exact labels and the reported value
+/// the drag starts from, as the drawer would show them.
+struct NikonLadderQuickIdentity: Hashable, Sendable {
+    let source: MonitorCaptureSourceIdentity
+    let authority: ControlAuthority
+    let picker: CameraPicker
+    let mode: Int
+    let snapshot: MonitorReadoutSnapshot
+}
+
+/// The captured source of one native quick gesture: the recording format and codec keep their
+/// bounded transport admission; the other native values write through their drawer's own path.
+enum NikonOperatorQuickIdentity: Hashable, Sendable {
+    case recording(NikonCaptureQuickIdentity)
+    case ladder(NikonLadderQuickIdentity)
+
+    var picker: CameraPicker {
+        switch self {
+        case .recording(let identity): identity.picker
+        case .ladder(let identity): identity.picker
+        }
+    }
+}
+
 extension NativeAppModel {
     var operatorLiveIdentity: MonitorOperatorLiveIdentity {
         .init(
@@ -73,10 +98,78 @@ extension NativeAppModel {
             pictureOwner: liveFrameSource.map(ObjectIdentifier.init))
     }
 
+    /// The quick drum a press on this picker's readout opens, or nil when it only opens the
+    /// drawer. Every native picker value offers one, as on the other apps and on Android.
     func operatorNativeQuick(for picker: CameraPicker)
-        -> MonitorOperatorNativeCaptureQuick<NikonCaptureQuickIdentity>?
+        -> MonitorOperatorNativeCaptureQuick<NikonOperatorQuickIdentity>?
     {
-        buildNativeQuick(for: picker, allowPending: false)
+        if picker == .resolution || picker == .codec {
+            return buildNativeQuick(for: picker, allowPending: false).map {
+                .init(
+                    identity: .recording($0.identity), snapshot: $0.snapshot, enabled: $0.enabled,
+                    delayed: $0.delayed)
+            }
+        }
+        return ladderQuick(for: picker).map {
+            .init(identity: .ladder($0), snapshot: $0.snapshot, enabled: true)
+        }
+    }
+
+    /// The opening tab of the picker's drawer as a quick drum. Only an admitted, unlocked tab
+    /// whose drum starts on the camera's reported value qualifies; a common setting keeps its
+    /// common field, and the format and codec keep their own bounded path.
+    private func ladderQuick(for picker: CameraPicker) -> NikonLadderQuickIdentity? {
+        guard picker.nikonControlSetting == nil, picker.usesLadderSheet, picker != .audio,
+            picker != .resolution, picker != .codec,
+            let state = shell.control.snapshot, state.connection == .ready,
+            !interfaceLocked, !relayControlSurrendered, !sessionRecovery.isRecovering,
+            chromeEditorMode == nil, activePanel == nil, !lockedControls.contains(picker),
+            monitorAvailability.cameraControls
+        else { return nil }
+        switch state.authority {
+        case .owner, .lease: break
+        default: return nil
+        }
+        let popup = capturePopupState(
+            for: picker, initialMode: nil, lensApertures: irisApertures,
+            codecRows: codecFamilies
+        ).presentation
+        // The size readout adjusts the image size; the area is the drawer's first tab.
+        let index =
+            picker == .stillSize
+            ? popup.tabs.firstIndex { $0.key == .value(1) } : popup.initialTab
+        guard popup.lock == nil, let index, popup.tabs.indices.contains(index) else { return nil }
+        let tab = popup.tabs[index]
+        guard case .value(let mode) = tab.key, !tab.disabled, tab.ladder.lock == nil,
+            tab.tint == nil, let current = tab.ladder.current,
+            ladderQuickDomainLanded(picker, mode: mode),
+            current == ladderQuickReportedValue(picker),
+            tab.ladder.values.contains(current),
+            Set(tab.ladder.values).count == tab.ladder.values.count
+        else { return nil }
+        return NikonLadderQuickIdentity(
+            source: .init(
+                camera: state.session, epoch: state.epoch, monitor: shell.monitor?.id,
+                pictureOwner: liveFrameSource.map(ObjectIdentifier.init),
+                picture: videoSource.rawValue),
+            authority: state.authority, picker: picker, mode: mode,
+            snapshot: MonitorReadoutSnapshot(
+                title: popup.title, options: tab.ladder.values, selection: current,
+                marked: tab.ladder.marked))
+    }
+
+    /// A value the body enumerates drags only over the body's own set once it has landed, never
+    /// the drawer's fallback ladder (the Android rule too).
+    private func ladderQuickDomainLanded(_ picker: CameraPicker, mode: Int) -> Bool {
+        guard let property = advertisedProperty(picker, index: mode) else { return true }
+        return cameraControlOptions[property]?.isEmpty == false
+    }
+
+    /// The camera's reported value a quick drag starts from: never a drawer fallback.
+    private func ladderQuickReportedValue(_ picker: CameraPicker) -> String? {
+        let value =
+            picker == .stillSize ? cameraPropertySnapshot.imageSize : cameraValue(for: picker)
+        return value.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private func buildNativeQuick(for picker: CameraPicker, allowPending: Bool)
@@ -155,8 +248,25 @@ extension NativeAppModel {
         return .init(identity: identity, snapshot: snapshot, enabled: true, delayed: true)
     }
 
-    func operatorNativeQuickIsCurrent(_ identity: NikonCaptureQuickIdentity) -> Bool {
+    func operatorNativeQuickIsCurrent(_ identity: NikonOperatorQuickIdentity) -> Bool {
         operatorNativeQuick(for: identity.picker)?.identity == identity
+    }
+
+    func operatorNativeQuickIsCurrent(_ identity: NikonCaptureQuickIdentity) -> Bool {
+        operatorNativeQuickIsCurrent(.recording(identity))
+    }
+
+    /// One release of a native quick drum: the value lands only while the gesture's captured
+    /// source is still the camera's current one.
+    func commitOperatorNativeQuick(_ identity: NikonOperatorQuickIdentity, value: String) {
+        guard operatorNativeQuickIsCurrent(identity) else { return }
+        switch identity {
+        case .recording(let recording):
+            guard recording.snapshot.options.contains(value) else { return }
+            applyQuickPicker(recording.picker, value: value, identity: recording)
+        case .ladder(let ladder):
+            applyQuickLadder(ladder, value: value)
+        }
     }
 
     /// Own optimistic selection may advance; source, circuits and advertised domains may not.
@@ -207,6 +317,19 @@ final class NikonPictureSourceSession: CameraSession {
             subscriber.finish()
         }
         subscribers.removeAll()
+    }
+}
+
+extension CameraPicker {
+    /// How often the value changes: shooting mode, drive, metering and Picture Control set the
+    /// scene up; ISO, shutter, aperture, white balance and focus are ridden. A landscape photo
+    /// monitor shows setup values in the status row's trailing corner and keeps the ridden values
+    /// along the bottom (OpenCine `MonitorStatusCorner`).
+    var captureGroup: MonitorCaptureReadoutGroup {
+        switch self {
+        case .stillMode, .stillDrive, .stillMeter, .stillPicture: .setup
+        default: .ridden
+        }
     }
 }
 
@@ -291,7 +414,8 @@ struct NikonMonitorShell: View {
                     + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue),
                 dimmed: cue.dimmed,
                 holdAction: cue.holdsShutterLock && model.videoSource != .relay
-                    ? { model.toggleShutterLockOnCamera() } : nil)
+                    ? { model.toggleShutterLockOnCamera() } : nil,
+                group: picker.captureGroup)
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
@@ -393,7 +517,7 @@ struct NikonMonitorShell: View {
             subtitle: picker.sharedCaptureSheet?.subtitle ?? model.pickerSubtitle(for: picker))
     }
     private var captureInputs:
-        MonitorOperatorCaptureInputs<NikonLiveReadoutKey, Section, NikonCaptureQuickIdentity>
+        MonitorOperatorCaptureInputs<NikonLiveReadoutKey, Section, NikonOperatorQuickIdentity>
     {
         .init(
             readouts: readouts, panel: panel, haptics: model.preferences.hapticsEnabled,
@@ -423,10 +547,8 @@ struct NikonMonitorShell: View {
                 return model.operatorNativeQuickIsCurrent(identity)
             },
             nativeCommit: { key, identity, value in
-                guard key == .picker(identity.picker), model.operatorNativeQuickIsCurrent(identity),
-                    identity.snapshot.options.contains(value)
-                else { return }
-                model.applyQuickPicker(identity.picker, value: value, identity: identity)
+                guard key == .picker(identity.picker) else { return }
+                model.commitOperatorNativeQuick(identity, value: value)
             })
     }
     private var record: MonitorOperatorRecordSource {
@@ -440,7 +562,7 @@ struct NikonMonitorShell: View {
                     request: model.toggleRecording, cancel: model.cancelRecordToggle,
                     confirm: model.confirmRecordToggle) : nil)
     }
-    private var source: MonitorOperatorLiveSource<NikonLiveReadoutKey, NikonCaptureQuickIdentity> {
+    private var source: MonitorOperatorLiveSource<NikonLiveReadoutKey, NikonOperatorQuickIdentity> {
         .init(
             identity: { model.operatorLiveIdentity }, available: { model.monitorAvailableSections },
             picture: { Self.picture(model) },
@@ -478,21 +600,15 @@ struct NikonMonitorShell: View {
             configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),
             paradeIntensityScale: 1)
     }
-    private func assists(_ layout: FieldMonitorLayout) -> MonitorOperatorLiveAssists {
+    /// The palette and the tools the shared surface draws. Every rendered scope floats, in
+    /// landscape and in portrait fit and fill alike, as in the other apps.
+    static func liveAssists(_ model: NativeAppModel) -> MonitorOperatorLiveAssists {
         @Bindable var model = model
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
         return .init(
-            scopes: Self.assistSource(model),
+            scopes: assistSource(model),
             tools: { model.liveAssistPaletteTools.map(\.selection) },
-            rendered: {
-                Set(
-                    model.renderedLiveAssistTools.filter {
-                        !layout.portrait || layout.fillsPicture
-                            || !MonitorAssistTool.scopeTools.contains($0)
-                            || model.renderedFitScopes.contains($0)
-                    }.map(\.selection))
-            },
-            fitted: { model.renderedFitScopes.map(\.selection) },
+            rendered: { Set(model.renderedLiveAssistTools.map(\.selection)) },
             signalOptions: .init(
                 falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference,
@@ -585,7 +701,8 @@ struct NikonMonitorShell: View {
             ?? FieldMonitorLayout(width: context.viewportWidth, height: context.viewportHeight)
         MonitorOperatorLiveSurface(
             host: model, control: model.shell.control, session: model.operatorSession,
-            layout: live, source: source, assists: assists(layout), views: bodyViews(layout),
+            layout: live, source: source, assists: Self.liveAssists(model),
+            views: bodyViews(layout),
             portraitAspect: portraitAspect,
             picture: {
                 GeometryReader { picture in

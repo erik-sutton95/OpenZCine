@@ -21,8 +21,9 @@ actor MediaCellImageLoader {
 
     /// The downsampled image at `url` (long edge ≤ `maxPixelSize`), or `nil` if unreadable.
     /// `kCGImageSourceCreateThumbnailWithTransform` bakes in EXIF orientation, so the cell shows
-    /// exactly the picture a full decode would have. `fallbackOrientation` covers EXIF-stripped
-    /// camera thumbnails whose real orientation was learned from the full file.
+    /// exactly the picture a full decode would have. Camera thumbnails arrive tagged with their
+    /// still's orientation; `fallbackOrientation` covers thumbnails that still carry none (a HEIF
+    /// still's) once the row learned it from the full file.
     func downsampled(
         at url: URL, maxPixelSize: Int, fallbackOrientation: Int? = nil
     ) -> sending UIImage? {
@@ -71,14 +72,7 @@ actor MediaCellImageLoader {
         }
     }
 
-    /// The EXIF orientation (1–8) recorded in the image bytes; nil when the file carries none
-    /// (the discriminator between "already upright" and "needs the cached fallback").
-    nonisolated static func exifOrientation(in data: Data) -> Int? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        return exifOrientation(source: source)
-    }
-
-    /// File variant, used to learn a still's orientation from its streamed full bytes.
+    /// The EXIF orientation (1–8) of a still's streamed full file; nil when it carries none.
     nonisolated static func exifOrientation(atFile url: URL) -> Int? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return exifOrientation(source: source)
@@ -161,13 +155,18 @@ struct MediaBrowserView: View {
                                 ? record.payload.sizeBytes : nil,
                             durationSeconds: nil, dateKey: nil, colorLabel: nil,
                             progress: model.isClipStreaming(record.payload)
-                                ? model.mediaDownloadProgress[record.payload.id] : nil)
+                                ? model.mediaDownloadProgress[record.payload.id] : nil,
+                            // Every running camera stream has a reading (the player's, the
+                            // gallery's Download, a Share), and none outlives its stream.
+                            transferRate: model.mediaDownloadRates.rate(record.payload.id))
                     },
                     cell: { record, context in
                         model.mediaCellItem(
                             record.payload, list: context.list, selecting: context.selecting,
                             duration: context.duration, projection: projection)
-                    }, begin: begin, refresh: model.refreshCameraMediaInventory,
+                    },
+                    aspectRatio: { record in record.payload.uprightAspectRatio }, begin: begin,
+                    refresh: model.refreshCameraMediaInventory,
                     close: model.dismissMediaLibrary, open: open,
                     share: { records, token in
                         guard library.isCurrent(token),
@@ -652,6 +651,24 @@ struct MediaPhotoViewer: View {
     @State private var context: NikonPhotoContext?
     @State private var delivery: NikonDeliveryRequest?
 
+    /// The playback page's view assists on a still: the same panel stores, tool order and
+    /// offered tools as Nikon clip playback, with false colour and zebra menus that read the
+    /// still's own signal.
+    private var photoAssistTools: MonitorPhotoAssistTools<NikonMonitorLooks> {
+        let menus = NikonAssistMenuAdapter.photo(model: model)
+        let usage = Binding(
+            get: { [model] in model.assistToolUsage },
+            set: { [model] in model.assistToolUsage = $0 })
+        let signal = MonitorOperatorSignalOptions(
+            falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+            reference: menus.falseColorReference)
+        return .init(
+            stores: model.scopePanels.playbackStores, looks: .signal, palette: LiveDesign.self,
+            usage: usage,
+            availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
+            signalOptions: signal, configureDisplay: nikonScopeDisplay)
+    }
+
     var body: some View {
         Group {
             if let context {
@@ -686,7 +703,8 @@ struct MediaPhotoViewer: View {
                             capture.isCurrent
                         else { return }
                         delivery = .init(capture: capture)
-                    }, deletedReturning: onDeletedReturning)
+                    }, deletedReturning: onDeletedReturning,
+                    assistTools: photoAssistTools)
             } else {
                 ProgressView().tint(MonitorTheme.accent).frame(
                     maxWidth: .infinity, maxHeight: .infinity

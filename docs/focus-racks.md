@@ -205,10 +205,10 @@ Marks, thumbnails, position and
 armed state are never restored from storage.
 
 Collapse preserves a compact transport strip. Clean mode and interface lock retain Pause and
-Stop; unlock before resuming. The shared monitor reserves temporary space for the panel while
-preserving saved scope positions. Drag the header grip to move the panel inside the safe monitor
+Stop; unlock before resuming. Floating scopes avoid the panel as they avoid the other monitor controls,
+without changing saved scope positions. Drag the header grip to move the panel inside the safe monitor
 area; accessibility actions also move or reset its position. Placement belongs to the current
-session and adapts to rotation or collapse. Scope reservation follows the panel without changing
+session and adapts to rotation or collapse. The scope obstacle follows the panel without changing
 saved scope positions. Setup scrolls; the header and transport remain fixed within the panel.
 Landscape keeps the panel inside the picture, left of the system rail. Expanded portrait setup
 uses the safe monitor area and surrounding letterbox; compact transport remains on the picture.

@@ -316,8 +316,8 @@ extension NativeAppModel {
 
     /// The shared assist engine's policy for the scopes shown now (and an open scope inspector),
     /// on the operator's crush/clip compensation. The picture effects stay on the Nikon image
-    /// graph; only an armed LUT rides along, so VECTOR reads the graded monitor picture as on
-    /// every app. `full` samples every scope regardless of the tools on (demo seeds).
+    /// graph, and every scope reads the camera signal, never the monitoring LUT. `full` samples
+    /// every scope regardless of the tools on (demo seeds).
     func liveScopePolicy(full: Bool = false) -> MonitorAssistPolicy {
         let visible = scopeSamplingLiveAssistTools
         var policy = MonitorAssistPolicy()
@@ -327,34 +327,26 @@ extension NativeAppModel {
         policy.vectorscope = full || visible.contains(.vectorscope)
         policy.trafficLights = full || visible.contains(.trafficLights)
         policy.trafficThreshold = assist.crushClipCompensation.pixelFractionThreshold
-        if policy.vectorscope, let armed = armedScopeLUT(visibleTools: visible) {
-            let packed = Self.packed(armed)
-            policy.image.lutDimension = packed.size
-            policy.image.lutRGBA = packed.rgba
-        }
         return policy
     }
 
-    /// One packed copy of an armed cube for the scope policy, or (`forRenderer`) of the cube a
-    /// GPU picture renderer can consume, for the shared playback picture.
-    static func packed(_ armed: (key: String, cube: CubeLUT), forRenderer: Bool = false)
-        -> (size: Int, rgba: Data)
+    /// One packed copy of an armed cube a GPU picture renderer can consume, for the shared
+    /// playback picture.
+    static func packedForRenderer(_ armed: (key: String, cube: CubeLUT)) -> (size: Int, rgba: Data)
     {
-        let store = forRenderer ? armedRendererLUTMemo : armedScopeLUTMemo
-        let packed = store.withLock { memo -> PackedScopeLUT in
+        let packed = armedRendererLUTMemo.withLock { memo -> PackedLUT in
             if let memo, memo.key == armed.key { return memo }
-            let cube = forRenderer ? armed.cube.preparedForRenderer() : armed.cube
+            let cube = armed.cube.preparedForRenderer()
             let rgba = cube.rgbaComponents.withUnsafeBytes { Data($0) }
-            let next: PackedScopeLUT = (armed.key, cube.size, rgba)
+            let next: PackedLUT = (armed.key, cube.size, rgba)
             memo = next
             return next
         }
         return (packed.size, packed.rgba)
     }
 
-    /// The operator's LUT when the LUT tool is on, so VECTOR reads the graded monitor picture,
-    /// keyed by its stored revision.
-    func armedScopeLUT(visibleTools: Set<MonitorAssistTool>) -> (key: String, cube: CubeLUT)? {
+    /// The operator's LUT when the LUT tool is on, keyed by its stored revision.
+    func armedLUT(visibleTools: Set<MonitorAssistTool>) -> (key: String, cube: CubeLUT)? {
         guard
             let selection = LUTResolution.active(
                 visibleTools: visibleTools, selected: assistConfiguration.selectedLUT),
@@ -393,8 +385,8 @@ extension NativeAppModel {
 }
 
 /// The Nikon source facts the shared assist engine reads (A1-05). The transfer and the clip
-/// travel with each frame; this supplies the display cube VECTOR maps log through when no
-/// operator LUT is armed.
+/// travel with each frame; this supplies the display cube VECTOR maps log through, whatever
+/// monitoring LUT the operator arms.
 extension MonitorAssistConfiguration {
     static let nikonMonitor = MonitorAssistConfiguration(
         defaultScopeLook: { NikonScopeLook.display(for: $0) }, logSubsystem: "OpenZCine")
@@ -414,10 +406,9 @@ enum NikonScopeLook {
     }
 }
 
-/// One packed copy of the armed LUT for the scope policy, which is rebuilt per frame.
-private typealias PackedScopeLUT = (key: String, size: Int, rgba: Data)
-private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialState: nil)
-private let armedRendererLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialState: nil)
+/// One packed copy of the armed LUT for the playback picture, which is rebuilt per frame.
+private typealias PackedLUT = (key: String, size: Int, rgba: Data)
+private let armedRendererLUTMemo = OSAllocatedUnfairLock<PackedLUT?>(initialState: nil)
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {
