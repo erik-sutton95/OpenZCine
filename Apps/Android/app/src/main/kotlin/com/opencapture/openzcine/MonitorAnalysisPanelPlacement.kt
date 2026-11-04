@@ -46,8 +46,9 @@ internal data class MonitorAnalysisPanelLayout(
         require(
             safeBounds.x >= viewport.x &&
                 safeBounds.y >= viewport.y &&
-                safeBounds.x + safeBounds.width <= viewport.x + viewport.width &&
-                safeBounds.y + safeBounds.height <= viewport.y + viewport.height,
+                // Compare remaining extents: re-adding a fractional inset can round past the edge.
+                safeBounds.width <= viewport.maxX - safeBounds.x &&
+                safeBounds.height <= viewport.maxY - safeBounds.y,
         ) {
             "monitor analysis safe bounds must remain inside the viewport"
         }

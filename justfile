@@ -181,6 +181,10 @@ lint: swift-lint
 # Run production Swift tests.
 test: swift-test
 
+# Run timed-rack, Native AF, automatic AF settings, mode policy and wire regressions.
+focus-rack-test:
+    swift test --filter 'rack|FocusRack|NativeAFRack|FocusControlMode|FocusAFSettings'
+
 # Explain how to run the native production app without invoking prototype tooling.
 run:
     #!/usr/bin/env bash

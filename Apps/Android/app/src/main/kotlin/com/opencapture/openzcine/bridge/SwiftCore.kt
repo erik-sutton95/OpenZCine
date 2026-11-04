@@ -16,6 +16,13 @@ import java.util.TimeZone
  * `Sources/OpenZCineAndroidFacade/SwiftCoreJNI.swift`.
  */
 object SwiftCore {
+    /** Creates a shared Swift rack runner bound to one current native connection owner. */
+    external fun focusRackCreate(connectionOwner: Long, templatesJSON: String): String?
+    /** Sends observations and semantic intents; returns state, never camera commands. */
+    external fun focusRackStep(owner: String, requestJSON: String): String?
+    /** Requests native cancellation before releasing a session-local rack owner. */
+    external fun focusRackClose(owner: String)
+
     /**
      * True when the Swift core library is bundled and loaded. False (with no
      * crash) when the APK was built without running `just android-core` first.

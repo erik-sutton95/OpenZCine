@@ -1,5 +1,4 @@
-- Shared setup, DISP 3 with REC chip and large timecode; experimental gyro logs add guided calibration and mount-move warnings.
-- Faster Media: staggered grid with upright portrait photos, live transfer speed, Exit selection, zoom to the screen edge.
-- Landscape Photo puts setup values in the top corner.
-- Smoother live view, camera wake and Take Over.
-- Sharper instant review, one photo per CL/CH tap, Photo turns LUTs off, plus shots and sharing fixes.
+- Native AF and Timed Rack: A/B targets, Prepare lens, timing estimates and Stop.
+- Shared setup, DISP 3 and guided gyro calibration.
+- Faster Media: staggered grid, upright photos, transfer speed, Exit selection and edge-to-edge zoom.
+- Landscape Photo setup values in the top corner. Smoother live view, camera wake and Take Over; sharper instant review, CL/CH capture, Photo LUT and sharing fixes.

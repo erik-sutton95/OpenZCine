@@ -8,6 +8,7 @@ import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -25,6 +26,28 @@ class MonitorAnalysisPanelPlacementTest {
                 layout = layout,
             ),
         )
+    }
+
+    @Test
+    fun `fractional animated insets can fill the viewport without a rounding rejection`() {
+        val viewport = MonitorRect(0f, 0f, 411.42856f, 411.42856f)
+        val inset = 16.14f
+        val safe = MonitorRect(inset, inset, viewport.width - inset, viewport.height - inset)
+        assertTrue(safe.maxX > viewport.maxX)
+        assertTrue(safe.maxY > viewport.maxY)
+
+        assertEquals(safe, MonitorAnalysisPanelLayout(viewport, safe).safeBounds)
+    }
+
+    @Test
+    fun `analysis bounds still reject actual overflow on either axis`() {
+        val viewport = MonitorRect(0f, 0f, 411.42856f, 411.42856f)
+        val inset = 16.14f
+        val safe = MonitorRect(inset, inset, viewport.width - inset, viewport.height - inset)
+        for (overflow in listOf(safe.copy(width = Math.nextUp(safe.width)),
+            safe.copy(height = Math.nextUp(safe.height)))) {
+            assertFailsWith<IllegalArgumentException> { MonitorAnalysisPanelLayout(viewport, overflow) }
+        }
     }
 
     @Test

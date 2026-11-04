@@ -78,6 +78,10 @@ internal class MFDriveController(
     private var refusalRunStartedAt: Long? = null
     private var nearPulses: Int? = null
     private var infinityPulses: Int? = null
+    private var nativeDrivesPending = 0
+
+    /** Whether an external dial command is queued or still awaiting its native outcome. */
+    val isBusy: Boolean get() = nativeDrivesPending > 0 || driveJob?.isActive == true || pendingPulses != 0
 
     /**
      * Drops the in-flight drive and everything queued behind it, freeing `cameraCommandMutex`
@@ -139,13 +143,15 @@ internal class MFDriveController(
         while (pendingPulses != 0 && coroutineContext.isActive) {
             val pending = pendingPulses
             pendingPulses = 0
-            val outcome =
+            nativeDrivesPending++
+            val outcome = try {
                 runCatching {
                     session.mfDrive(
                         towardNear = pending < 0,
                         pulses = min(abs(pending), MAX_PULSES),
                     )
                 }.getOrElse { MFDriveOutcome.Refused(DEVICE_BUSY_RESPONSE) }
+            } finally { nativeDrivesPending-- }
             when (outcome) {
                 MFDriveOutcome.Complete, MFDriveOutcome.StepTooSmall -> {
                     // Position already advanced optimistically on the drag (in drive()).

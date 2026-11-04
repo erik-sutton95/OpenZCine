@@ -47,6 +47,33 @@ class MFDriveControllerTest {
     }
 
     @Test
+    fun `cancelled dial stays unsettled until its noncancellable native outcome returns`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val session = object : CameraSession {
+            override val state = MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected)
+            override val recordingState = MutableStateFlow(CameraRecordingState.STANDBY)
+            override suspend fun connect() = Unit
+            override suspend fun disconnect() = Unit
+            override suspend fun setRecording(recording: Boolean) = Unit
+            override suspend fun mfDrive(towardNear: Boolean, pulses: Int): MFDriveOutcome =
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    gate.await()
+                    MFDriveOutcome.Complete
+                }
+        }
+        val controller = MFDriveController(session)
+        controller.drive(this, 8)
+        testScheduler.runCurrent()
+        assertTrue(controller.isBusy)
+        controller.cancel()
+        testScheduler.runCurrent()
+        assertTrue(controller.isBusy)
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        assertFalse(controller.isBusy)
+    }
+
+    @Test
     fun `gesture pulses accumulate while one drive is in flight`() = runTest {
         val session = FakeSession()
         val controller = MFDriveController(session)
