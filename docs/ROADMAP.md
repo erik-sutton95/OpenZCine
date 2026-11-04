@@ -132,9 +132,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   stay in Gyroflow.
   See [the workflow and hardware validation requirements](gyro-logging.md).
 
-- **Programmable A/B focus racks** (local implementation, discussion #11): shared timing,
+- **Programmable A/B focus racks** (in review, discussion #11): shared timing,
   session-local acknowledged marks, Pause/Resume and timing templates for iOS and Android.
-  Local work adds Native AF picture A/B targets, immediate selection and delayed directional
+  The implementation adds Native AF picture A/B targets, immediate selection and delayed directional
   actions alongside Timed Rack, with camera-set AF speed and separate movement authority on both
   shells. Timed duration targets retain their requested value while showing a longer execution
   estimate when needed; runtime overruns warn and extend playback. A shared measured planner
