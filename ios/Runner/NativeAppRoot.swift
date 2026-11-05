@@ -1208,8 +1208,6 @@ final class NativeAppModel {
         var macCaptureDeviceID = UserDefaults.standard.string(forKey: "mac.capture.device") ?? ""
         var macCaptureFrameRate =
             UserDefaults.standard.integer(forKey: "mac.capture.fps") == 30 ? 30 : 60
-        @ObservationIgnored private var macCaptureTapBusy = false
-        @ObservationIgnored private var macCaptureLastTap: CFTimeInterval = 0
         @ObservationIgnored private var macWebcamGeneration: UInt64 = 0
         @ObservationIgnored private lazy var macWebcamProcessor = LiveFrameProcessor(
             fileStore: lutFileStore)
@@ -8143,66 +8141,17 @@ final class NativeAppModel {
                     lease.release()
                     break
                 }
-                #if targetEnvironment(macCatalyst)
-                    guard source.fence.isCurrent(lease.generation), let pixels = lease.pixelBuffer
-                    else {
-                        lease.release()
-                        continue
-                    }
-                    // CI-backed facade retains the native surface without a CPU bitmap readback.
-                    // Decoded to code values with the capture correction, as the phone path does.
-                    let image = UIImage(
-                        ciImage: LiveFrameDecoding.image(
-                            pixels,
-                            calibration: CaptureCalibration.forDevice(source.captureDeviceIdentity)))
-                    let stamp =
-                        lease.timeNs > 0
-                        ? CMTime(value: lease.timeNs, timescale: 1_000_000_000)
-                        : CMClockGetTime(CMClockGetHostTimeClock())
-                    await self.presentHDMIFrame(
-                        image, source: source,
-                        generation: lease.generation, timestamp: stamp)
-                    // Only the bounded analysis/relay tap makes a CGImage. It cannot queue
-                    // behind preview, and its completion remains qualified by the capture source.
-                    let now = CACurrentMediaTime()
-                    let interval = self.relayPeerCount > 0 ? 1.0 / 30 : 1.0 / 10
-                    if !self.macCaptureTapBusy, now - self.macCaptureLastTap >= interval {
-                        self.macCaptureTapBusy = true
-                        self.macCaptureLastTap = now
-                        let tap = DecodedFrameLease(
-                            pixels, stream: lease.stream,
-                            generation: lease.generation, timeNs: lease.timeNs)
-                        Task { [weak self, weak source] in
-                            let handoff = await renderer.image(
-                                from: tap, device: source?.captureDeviceIdentity)
-                            guard let self else { return }
-                            defer { self.macCaptureTapBusy = false }
-                            guard let source, let handoff, self.videoSource == .hdmiCapture,
-                                self.uvcSource === source, source.fence.isCurrent(tap.generation)
-                            else { return }
-                            self.sampleScopesIfDue(clean: handoff.image) {
-                                [weak self, weak source] in
-                                guard let self, let source else { return false }
-                                return self.uvcSource === source
-                                    && source.fence.isCurrent(tap.generation)
-                            }
-                            self.broadcastRelayFrame(image: handoff.image)
-                        }
-                    }
-                    lease.release()
-                #else
-                    // A frame captured before the device went away or changed is stale. Every capture
-                    // device decodes with the HDMI capture correction; its identity rides along for
-                    // the readout, and a frame of the device before carries an older generation,
-                    // which the fence check refuses.
-                    guard
-                        let handoff = await renderer.image(
-                            from: lease, device: source.captureDeviceIdentity),
-                        source.fence.isCurrent(lease.generation)
-                    else { continue }
-                    await self.presentHDMIFrame(
-                        handoff.image, source: source, generation: lease.generation)
-                #endif
+                // A frame captured before the device went away or changed is stale. Every capture
+                // device decodes with the HDMI capture correction; its identity rides along for
+                // the readout, and a frame of the device before carries an older generation,
+                // which the fence check refuses.
+                guard
+                    let handoff = await renderer.image(
+                        from: lease, device: source.captureDeviceIdentity),
+                    source.fence.isCurrent(lease.generation)
+                else { continue }
+                await self.presentHDMIFrame(
+                    handoff.image, source: source, generation: lease.generation)
             }
         }
         Task { await source.start() }
@@ -8258,7 +8207,6 @@ final class NativeAppModel {
         // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
         publishNativeFrame(
             display, clean: image, owner: .capture(source, generation), timestamp: timestamp)
-        #if !targetEnvironment(macCatalyst)
             sampleScopesIfDue(clean: image) { [weak self, weak source] in
                 guard let self, let source else { return false }
                 return self.videoSource == .hdmiCapture && self.uvcSource === source
@@ -8272,7 +8220,6 @@ final class NativeAppModel {
                 timecode: liveTimecode,
                 isRecording: isRecording)
             broadcastRelayFrame(image: image)
-        #endif
         if !isMonitorPresented { isMonitorPresented = true }
         if isStreamRecovering { isStreamRecovering = false }
     }
