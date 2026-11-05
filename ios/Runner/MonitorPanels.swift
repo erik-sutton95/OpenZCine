@@ -3,6 +3,9 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
+#if targetEnvironment(macCatalyst)
+    import OpenCineVirtualCamera
+#endif
 import OpenCineCameraControls
 import OpenCineMedia
 import OpenCineNikon
@@ -1412,24 +1415,25 @@ struct OperatorSettingsPanel: View {
 
     private var platformSharingGroups: [MonitorSettingsSourceGroup] {
         #if targetEnvironment(macCatalyst)
+            guard let host = DesktopModuleHost.current else { return [] }
             return [
                 .init(
-                    id: "sharing.virtualCamera", title: "Virtual Webcam",
+                    id: "sharing.virtualCamera", title: "Webcam Output",
                     properties: [
                         .init(
-                            id: "sharing.virtualCamera.enabled", title: "OpenZCine Camera",
+                            id: "sharing.virtualCamera.enabled", title: "Send to OpenCine input",
                             help:
-                                "Shares clean video with the monitor LUT in webcam apps. Monitor overlays stay in OpenZCine. First use opens the signed camera companion for macOS approval.",
+                                "Shares clean video with the monitor LUT with webcam apps. Monitor overlays stay here.",
                             value: .toggle(
                                 .init(
                                     value: Binding(
-                                        get: { MacVirtualCamera.shared.isEnabled },
-                                        set: { MacVirtualCamera.shared.setEnabled($0) }),
+                                        get: { host.output.isEnabled },
+                                        set: { host.output.setEnabled($0) }),
                                     help: "", feedback: settingsFeedback))),
                         .init(
                             id: "sharing.virtualCamera.status", title: "Status",
-                            help: "The current native camera output state.",
-                            value: .reported(MacVirtualCamera.shared.statusText)),
+                            help: "The current camera input state.",
+                            value: .reported(host.output.statusText)),
                     ])
             ]
         #else

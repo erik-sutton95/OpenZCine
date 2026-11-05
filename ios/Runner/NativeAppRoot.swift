@@ -7,6 +7,9 @@ import Observation
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
+#if targetEnvironment(macCatalyst)
+    import OpenCineVirtualCamera
+#endif
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
@@ -1196,7 +1199,8 @@ final class NativeAppModel {
 
         var macCaptureDevices: [(id: String, name: String)] {
             UVCVideoSource.availableCaptureDevices.filter {
-                !["OpenZCine.VirtualCamera", "99AF34B4-61A6-4B31-A31B-A9808A147FF0"].contains($0.id)
+                !$0.id.hasPrefix("OpenCine.Camera.")
+                    && !["OpenZCine.VirtualCamera", "99AF34B4-61A6-4B31-A31B-A9808A147FF0"].contains($0.id)
             }
         }
 
@@ -2395,7 +2399,8 @@ final class NativeAppModel {
     }
     private func retireNativePictureSource() {
         #if targetEnvironment(macCatalyst)
-            macWebcamGeneration = MacVirtualCamera.shared.resetSource()
+            macWebcamGeneration = DesktopModuleHost.current?.output.resetSource() ?? 0
+            DesktopModuleHost.current?.report(.idle)
         #endif
         relayBroadcastPipeline?.retireSource()
         watchRelay.retireSource()
@@ -2420,12 +2425,13 @@ final class NativeAppModel {
         if liveFrameImage !== image { liveFrameImage = image }
         nativeInspectorImage = clean
         #if targetEnvironment(macCatalyst)
-            if MacVirtualCamera.shared.isEnabled {
+            if let host = DesktopModuleHost.current, host.output.isEnabled {
+                host.report(.live(cameraName: nil))
                 let look = LiveImageEffects(lut: liveImageEffects.lut)
                 if let frame = macWebcamProcessor.outputCIImage(for: clean, effects: look)
                     ?? CIImage(image: clean, options: [.colorSpace: NSNull()])
                 {
-                    MacVirtualCamera.shared.submit(
+                    host.output.submit(
                         frame,
                         timestamp: timestamp ?? CMClockGetTime(CMClockGetHostTimeClock()),
                         sourceGeneration: macWebcamGeneration)
@@ -2437,7 +2443,6 @@ final class NativeAppModel {
         /// `ZC_DEMO_WEBCAM_TEST=1`: a moving test picture through the same publish path as the
         /// camera loop, for proving the webcam output with no camera attached.
         func startMacWebcamTestFeed() {
-            MacVirtualCamera.shared.setEnabled(true)
             for name in [
                 UIScene.willDeactivateNotification, UIScene.didActivateNotification,
                 UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification,
@@ -8099,7 +8104,7 @@ final class NativeAppModel {
         uvcSource?.stop()
         uvcSource = nil
         #if targetEnvironment(macCatalyst)
-            macWebcamGeneration = MacVirtualCamera.shared.resetSource()
+            macWebcamGeneration = DesktopModuleHost.current?.output.resetSource() ?? 0
         #endif
         hdmiCaptureState = .waitingForDevice
     }
@@ -14769,6 +14774,9 @@ struct NativeAppRoot: View {
                 store.retireUnorientedStillThumbnails()
             }.value
         }
+        #if targetEnvironment(macCatalyst)
+            .task { DesktopModuleHost.current?.start() }
+        #endif
         .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
@@ -14781,6 +14789,10 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.didEnterBackgroundNotification)
             {
+                #if targetEnvironment(macCatalyst)
+                    // A dock module's hidden tab is still feeding its webcam input.
+                    if DesktopModuleHost.current != nil { continue }
+                #endif
                 model.shell.setSceneActive(false)
             }
         }
