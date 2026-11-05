@@ -1,4 +1,6 @@
 import AVFAudio
+import CoreImage
+import CoreMedia
 import MonitorUI
 import Network
 import Observation
@@ -1198,6 +1200,45 @@ final class NativeAppModel {
     @ObservationIgnored private var lastLoggedHDMIFrameSize: CGSize?
     /// The live capture session. Non-nil only while `videoSource == .hdmiCapture`.
     @ObservationIgnored private var uvcSource: UVCVideoSource?
+    @ObservationIgnored private var hdmiCaptureLifetime = UUID()
+    #if targetEnvironment(macCatalyst)
+        var macCaptureDeviceID = UserDefaults.standard.string(forKey: "mac.capture.device") ?? ""
+        var macCaptureFrameRate =
+            UserDefaults.standard.integer(forKey: "mac.capture.fps") == 30 ? 30 : 60
+        @ObservationIgnored private var macCaptureTapBusy = false
+        @ObservationIgnored private var macCaptureLastTap: CFTimeInterval = 0
+        @ObservationIgnored private var macWebcamGeneration: UInt64 = 0
+        @ObservationIgnored private lazy var macWebcamProcessor = LiveFrameProcessor(
+            fileStore: lutFileStore)
+
+        var macCaptureDevices: [(id: String, name: String)] {
+            UVCVideoSource.availableCaptureDevices.filter {
+                !["OpenZCine.VirtualCamera", "99AF34B4-61A6-4B31-A31B-A9808A147FF0"].contains($0.id)
+            }
+        }
+
+        func selectMacCaptureDevice(_ id: String) {
+            guard macCaptureDeviceID != id,
+                id.isEmpty || macCaptureDevices.contains(where: { $0.id == id })
+            else { return }
+            macCaptureDeviceID = id
+            UserDefaults.standard.set(id, forKey: "mac.capture.device")
+            if videoSource == .hdmiCapture {
+                stopHDMICapture()
+                startHDMICapture()
+            }
+        }
+
+        func selectMacCaptureFrameRate(_ rate: Int) {
+            guard [30, 60].contains(rate), macCaptureFrameRate != rate else { return }
+            macCaptureFrameRate = rate
+            UserDefaults.standard.set(rate, forKey: "mac.capture.fps")
+            if videoSource == .hdmiCapture {
+                stopHDMICapture()
+                startHDMICapture()
+            }
+        }
+    #endif
 
     /// Whether this monitor session has a camera behind it at all.
     ///
@@ -2370,6 +2411,9 @@ final class NativeAppModel {
         }
     }
     private func retireNativePictureSource() {
+        #if targetEnvironment(macCatalyst)
+            macWebcamGeneration = MacVirtualCamera.shared.resetSource()
+        #endif
         relayBroadcastPipeline?.retireSource()
         watchRelay.retireSource()
         nativePictureBus.closeSource(nativePictureSource)
@@ -2380,7 +2424,10 @@ final class NativeAppModel {
     }
     /// Retain an accepted held raster through recovery; only a newly admitted picture or clear
     /// retires its render lease. Acquisition callbacks separately check the captured actual source.
-    private func publishNativeFrame(_ image: UIImage, clean: UIImage, owner: NativePictureOwner) {
+    private func publishNativeFrame(
+        _ image: UIImage, clean: UIImage, owner: NativePictureOwner,
+        timestamp: CMTime? = nil
+    ) {
         if !owner.matches(nativePictureOwner) {
             retireNativePictureSource()
             nativePictureOwner = owner
@@ -2393,7 +2440,52 @@ final class NativeAppModel {
         if let tap = liveStreamTap, let picture = clean.cgImage {
             tap.submit(picture, effects: liveStreamEffects, timeNs: nil)
         }
+        #if targetEnvironment(macCatalyst)
+            if MacVirtualCamera.shared.isEnabled {
+                let look = LiveImageEffects(lut: liveImageEffects.lut)
+                if let frame = macWebcamProcessor.outputCIImage(for: clean, effects: look)
+                    ?? CIImage(image: clean, options: [.colorSpace: NSNull()])
+                {
+                    MacVirtualCamera.shared.submit(
+                        frame,
+                        timestamp: timestamp ?? CMClockGetTime(CMClockGetHostTimeClock()),
+                        sourceGeneration: macWebcamGeneration)
+                }
+            }
+        #endif
     }
+    #if DEBUG && targetEnvironment(macCatalyst)
+        /// `ZC_DEMO_WEBCAM_TEST=1`: a moving test picture through the same publish path as the
+        /// camera loop, for proving the webcam output with no camera attached.
+        func startMacWebcamTestFeed() {
+            MacVirtualCamera.shared.setEnabled(true)
+            for name in [
+                UIScene.willDeactivateNotification, UIScene.didActivateNotification,
+                UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification,
+            ] {
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+                    note in
+                    FileHandle.standardError.write(Data("scene \(note.name.rawValue)\n".utf8))
+                }
+            }
+            Task { @MainActor [weak self] in
+                let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1920, height: 1080))
+                var tick = 0
+                while let self {
+                    tick += 1
+                    let position = CGFloat((tick * 8) % 1920)
+                    let frame = renderer.image { context in
+                        UIColor(red: 0.1, green: 0.3, blue: 0.5, alpha: 1).setFill()
+                        context.fill(CGRect(x: 0, y: 0, width: 1920, height: 1080))
+                        UIColor.white.setFill()
+                        context.fill(CGRect(x: position, y: 0, width: 120, height: 1080))
+                    }
+                    self.publishNativeFrame(frame, clean: frame, owner: .local)
+                    try? await Task.sleep(for: .milliseconds(33))
+                }
+            }
+        }
+    #endif
     /// AF / face-detection boxes from the latest live-view frame's header, drawn over the feed.
     var liveViewFocus: PTPLiveViewFocusInfo? {
         didSet {
@@ -3356,7 +3448,9 @@ final class NativeAppModel {
                 }
             }
             guard isCurrent() else { throw CancellationError() }
-            self?.sessionJoinedCameraAccessPoint = true
+            #if !targetEnvironment(macCatalyst)
+                self?.sessionJoinedCameraAccessPoint = true
+            #endif
             let connectedSSID = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
             guard isCurrent(), let connectedSSID, !connectedSSID.isEmpty else { return }
             CameraWiFiCredentialStore.savePassword(credentials.password, forSSID: connectedSSID)
@@ -3527,9 +3621,15 @@ final class NativeAppModel {
                 // instead of dropping them back on the wizard to tap the camera they chose.
                 connectToCamera(camera)
             } else {
-                surfaceCameraWiFiJoinFailure(
-                    "Joined \(deviceName) but couldn't find the camera on its network. Keep the camera on its connection screen and try again."
-                )
+                #if targetEnvironment(macCatalyst)
+                    surfaceCameraWiFiJoinFailure(
+                        "Join \(deviceName)'s network in System Settings > Wi-Fi, keep the camera on its connection screen, then try again. Manual IP is also available."
+                    )
+                #else
+                    surfaceCameraWiFiJoinFailure(
+                        "Joined \(deviceName) but couldn't find the camera on its network. Keep the camera on its connection screen and try again."
+                    )
+                #endif
             }
         } catch is CancellationError {
             dismissConnectionProgress()
@@ -7992,16 +8092,32 @@ final class NativeAppModel {
         // it, so clearing here would blank the AF box and meters for one tick and nothing more.
         if cameraSession == nil { clearFrameHeaderDerivedState() }
         linkMeter.restart()
+        let captureLifetime = UUID()
+        hdmiCaptureLifetime = captureLifetime
+        #if targetEnvironment(macCatalyst)
+            let selectedCaptureID: String? = macCaptureDeviceID.isEmpty ? nil : macCaptureDeviceID
+            let requestedCaptureMode: UVCCaptureMode? = .init(
+                width: 1920, height: 1080,
+                framesPerSecond: Double(macCaptureFrameRate))
+        #else
+            let selectedCaptureID: String? = nil
+            let requestedCaptureMode: UVCCaptureMode? = nil
+        #endif
         let source = UVCVideoSource(
             queueLabel: "com.opencapture.openzcine.uvc-capture",
             logSubsystem: "com.opencapture.openzcine",
-            onStateChange: { [weak self] state in self?.applyHDMICaptureState(state) })
+            selectedDeviceID: selectedCaptureID, requestedMode: requestedCaptureMode,
+            onStateChange: { [weak self] state in
+                guard let self, self.hdmiCaptureLifetime == captureLifetime else { return }
+                self.applyHDMICaptureState(state)
+            })
         // The first frame's claimed colorimetry, appended to the settings readout. One line of
         // evidence that splits "the camera sends its recording gamma over HDMI" (apply the
         // monitoring LUT, or set the camera's HDMI output to SDR) from "the dongle mis-tags the
         // signal" (our side to correct) — without it both read as "the app shifted my colors".
         source.onSignalColorimetry = { [weak self] summary in
-            guard let self, case .streaming(let name, let format) = self.hdmiCaptureState
+            guard let self, self.hdmiCaptureLifetime == captureLifetime,
+                case .streaming(let name, let format) = self.hdmiCaptureState
             else { return }
             self.applyHDMICaptureState(
                 .streaming(
@@ -8023,17 +8139,62 @@ final class NativeAppModel {
                     lease.release()
                     break
                 }
-                // A frame captured before the device went away or changed is stale. Every capture
-                // device decodes with the HDMI capture correction; its identity rides along for
-                // the readout, and a frame of the device before carries an older generation,
-                // which the fence check refuses.
-                guard
-                    let handoff = await renderer.image(
-                        from: lease, device: source.captureDeviceIdentity),
-                    source.fence.isCurrent(lease.generation)
-                else { continue }
-                await self.presentHDMIFrame(
-                    handoff.image, source: source, generation: lease.generation)
+                #if targetEnvironment(macCatalyst)
+                    guard source.fence.isCurrent(lease.generation), let pixels = lease.pixelBuffer
+                    else {
+                        lease.release()
+                        continue
+                    }
+                    // CI-backed facade retains the native surface without a CPU bitmap readback.
+                    let image = UIImage(ciImage: CIImage(cvPixelBuffer: pixels))
+                    let stamp =
+                        lease.timeNs > 0
+                        ? CMTime(value: lease.timeNs, timescale: 1_000_000_000)
+                        : CMClockGetTime(CMClockGetHostTimeClock())
+                    await self.presentHDMIFrame(
+                        image, source: source,
+                        generation: lease.generation, timestamp: stamp)
+                    // Only the bounded analysis/relay tap makes a CGImage. It cannot queue
+                    // behind preview, and its completion remains qualified by the capture source.
+                    let now = CACurrentMediaTime()
+                    let interval = self.relayPeerCount > 0 ? 1.0 / 30 : 1.0 / 10
+                    if !self.macCaptureTapBusy, now - self.macCaptureLastTap >= interval {
+                        self.macCaptureTapBusy = true
+                        self.macCaptureLastTap = now
+                        let tap = DecodedFrameLease(
+                            pixels, stream: lease.stream,
+                            generation: lease.generation, timeNs: lease.timeNs)
+                        Task { [weak self, weak source] in
+                            let handoff = await renderer.image(
+                                from: tap, device: source?.captureDeviceIdentity)
+                            guard let self else { return }
+                            defer { self.macCaptureTapBusy = false }
+                            guard let source, let handoff, self.videoSource == .hdmiCapture,
+                                self.uvcSource === source, source.fence.isCurrent(tap.generation)
+                            else { return }
+                            self.sampleScopesIfDue(clean: handoff.image) {
+                                [weak self, weak source] in
+                                guard let self, let source else { return false }
+                                return self.uvcSource === source
+                                    && source.fence.isCurrent(tap.generation)
+                            }
+                            self.broadcastRelayFrame(image: handoff.image)
+                        }
+                    }
+                    lease.release()
+                #else
+                    // A frame captured before the device went away or changed is stale. Every capture
+                    // device decodes with the HDMI capture correction; its identity rides along for
+                    // the readout, and a frame of the device before carries an older generation,
+                    // which the fence check refuses.
+                    guard
+                        let handoff = await renderer.image(
+                            from: lease, device: source.captureDeviceIdentity),
+                        source.fence.isCurrent(lease.generation)
+                    else { continue }
+                    await self.presentHDMIFrame(
+                        handoff.image, source: source, generation: lease.generation)
+                #endif
             }
         }
         Task { await source.start() }
@@ -8041,6 +8202,7 @@ final class NativeAppModel {
 
     /// Tears the capture path down. Safe when it was never started.
     private func stopHDMICapture() {
+        hdmiCaptureLifetime = UUID()
         hdmiConsumerTask?.cancel()
         hdmiConsumerTask = nil
         // The frame loop takes control servicing back when it restarts; two pumps would double
@@ -8048,13 +8210,16 @@ final class NativeAppModel {
         monitorRuntime?.stopPreview()
         uvcSource?.stop()
         uvcSource = nil
+        #if targetEnvironment(macCatalyst)
+            macWebcamGeneration = MacVirtualCamera.shared.resetSource()
+        #endif
         hdmiCaptureState = .waitingForDevice
     }
 
     /// Displays one captured frame, and feeds the scope tap and watch relay from it.
     private func presentHDMIFrame(
         _ image: UIImage, source: UVCVideoSource,
-        generation: StreamGeneration
+        generation: StreamGeneration, timestamp: CMTime? = nil
     ) async {
         guard videoSource == .hdmiCapture, uvcSource === source,
             source.fence.isCurrent(generation)
@@ -8083,20 +8248,23 @@ final class NativeAppModel {
         // also writes the focus box. On a header-less source the only thing that knows where the
         // AF point is, is our own `ChangeAfArea`; passing nil here wiped the box about one frame
         // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
-        publishNativeFrame(display, clean: image, owner: .capture(source, generation))
-        sampleScopesIfDue(clean: image) { [weak self, weak source] in
-            guard let self, let source else { return false }
-            return self.videoSource == .hdmiCapture && self.uvcSource === source
-                && source.fence.isCurrent(generation)
-        }
-        // The CPU path returns a distinct display-baked image; the Metal path returns the clean
-        // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
-        watchRelay.ingestFrame(
-            image: display,
-            applying: display === image ? liveImageEffects : nil,
-            timecode: liveTimecode,
-            isRecording: isRecording)
-        broadcastRelayFrame(image: image)
+        publishNativeFrame(
+            display, clean: image, owner: .capture(source, generation), timestamp: timestamp)
+        #if !targetEnvironment(macCatalyst)
+            sampleScopesIfDue(clean: image) { [weak self, weak source] in
+                guard let self, let source else { return false }
+                return self.videoSource == .hdmiCapture && self.uvcSource === source
+                    && source.fence.isCurrent(generation)
+            }
+            // The CPU path returns a distinct display-baked image; the Metal path returns the clean
+            // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
+            watchRelay.ingestFrame(
+                image: display,
+                applying: display === image ? liveImageEffects : nil,
+                timecode: liveTimecode,
+                isRecording: isRecording)
+            broadcastRelayFrame(image: image)
+        #endif
         if !isMonitorPresented { isMonitorPresented = true }
         if isStreamRecovering { isStreamRecovering = false }
     }

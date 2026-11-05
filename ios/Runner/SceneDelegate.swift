@@ -20,7 +20,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        guard scene is UIWindowScene else { return }
+        guard let windowScene = scene as? UIWindowScene else { return }
+        #if targetEnvironment(macCatalyst)
+            windowScene.sizeRestrictions?.minimumSize = CGSize(width: 960, height: 540)
+        #endif
         configureWindowMargins(in: scene)
         AppDiagnostics.shared.record(.sceneConnected)
     }
