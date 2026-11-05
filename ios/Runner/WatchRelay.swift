@@ -23,71 +23,102 @@ private struct WatchNativePreview: @unchecked Sendable {
         (@MainActor (RelayWatchCommandAdmission) -> OpenZCineCore.WatchCommandResult)?
     var onAdmittedCapture:
         (@MainActor (RelayWatchCommandAdmission) -> OpenZCineCore.WatchCommandResult)?
-    var onReachabilityChanged: (@MainActor @Sendable () -> Void)? {
-        get { relay.onReachabilityChanged }
-        set { relay.onReachabilityChanged = newValue }
-    }
-    private var frameRenderer: LiveFrameRenderer?
-    private let relay: WatchPhoneRelay<DeployedWatchRelayCodec, WatchNativePreview>
-    init() {
-        relay = WatchPhoneRelay(
-            codec: DeployedWatchRelayCodec(),
-            policy: .init(
-                pacing: .init(
-                    profiles: [
-                        .init(maximumWidth: 832, qualityPercent: 50),
-                        .init(maximumWidth: 672, qualityPercent: 45),
-                        .init(maximumWidth: 512, qualityPercent: 40),
-                    ], roundTripThresholds: [0.20, 0.35], initialIndex: 0,
-                    initialRoundTripHint: 0.15, maximumSampleSeconds: 5),
-                stateDelivery: .reachableMessage, releasesOutstandingOnRetirement: true),
-            encode: { preview, profile in
-                guard
-                    let bytes = await WatchRelay.thumbnailJPEG(
-                        from: preview.image, applying: preview.effects, renderer: preview.renderer,
-                        maxWidth: CGFloat(profile.maximumWidth),
-                        quality: CGFloat(profile.qualityPercent) / 100)
-                else { return nil }
-                return OpenZCineCore.WatchRelayFrame(
-                    jpeg: bytes, timecode: preview.timecode,
-                    isRecording: preview.isRecording)
-            })
-        relay.onAdmittedCommand = { [weak self] action, admission in
-            let fallback = OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: false, error: "unavailable")
-            switch action {
-            case .toggleRecord:
-                return self?.onAdmittedToggleRecord?(admission) ?? self?.onToggleRecord?()
-                    ?? fallback
-            case .capture:
-                return self?.onAdmittedCapture?(admission) ?? self?.onCapture?() ?? fallback
-            case .resume: return fallback  // Resume recovery is owned by the shared runtime.
-            }
+    #if targetEnvironment(macCatalyst)
+        var onReachabilityChanged: (@MainActor @Sendable () -> Void)?
+    #else
+        var onReachabilityChanged: (@MainActor @Sendable () -> Void)? {
+            get { relay.onReachabilityChanged }
+            set { relay.onReachabilityChanged = newValue }
         }
+        private var frameRenderer: LiveFrameRenderer?
+        private let relay: WatchPhoneRelay<DeployedWatchRelayCodec, WatchNativePreview>
+    #endif
+    init() {
+        #if !targetEnvironment(macCatalyst)
+            relay = WatchPhoneRelay(
+                codec: DeployedWatchRelayCodec(),
+                policy: .init(
+                    pacing: .init(
+                        profiles: [
+                            .init(maximumWidth: 832, qualityPercent: 50),
+                            .init(maximumWidth: 672, qualityPercent: 45),
+                            .init(maximumWidth: 512, qualityPercent: 40),
+                        ], roundTripThresholds: [0.20, 0.35], initialIndex: 0,
+                        initialRoundTripHint: 0.15, maximumSampleSeconds: 5),
+                    stateDelivery: .reachableMessage, releasesOutstandingOnRetirement: true),
+                encode: { preview, profile in
+                    guard
+                        let bytes = await WatchRelay.thumbnailJPEG(
+                            from: preview.image, applying: preview.effects,
+                            renderer: preview.renderer,
+                            maxWidth: CGFloat(profile.maximumWidth),
+                            quality: CGFloat(profile.qualityPercent) / 100)
+                    else { return nil }
+                    return OpenZCineCore.WatchRelayFrame(
+                        jpeg: bytes, timecode: preview.timecode,
+                        isRecording: preview.isRecording)
+                })
+            relay.onAdmittedCommand = { [weak self] action, admission in
+                let fallback = OpenZCineCore.WatchCommandResult(
+                    accepted: false, isRecording: false, error: "unavailable")
+                switch action {
+                case .toggleRecord:
+                    return self?.onAdmittedToggleRecord?(admission) ?? self?.onToggleRecord?()
+                        ?? fallback
+                case .capture:
+                    return self?.onAdmittedCapture?(admission) ?? self?.onCapture?() ?? fallback
+                case .resume: return fallback  // Resume recovery is owned by the shared runtime.
+                }
+            }
+        #endif
     }
-    var isReady: Bool { relay.isReady }
-    func activate() { relay.activate() }
-    func ingestState(_ state: OpenZCineCore.WatchRelayState) { relay.ingestState(state) }
-    func retireSource() { relay.retireSource() }
-    func close() { relay.close() }
+    var isReady: Bool {
+        #if targetEnvironment(macCatalyst)
+            false
+        #else
+            relay.isReady
+        #endif
+    }
+    func activate() {
+        #if !targetEnvironment(macCatalyst)
+            relay.activate()
+        #endif
+    }
+    func ingestState(_ state: OpenZCineCore.WatchRelayState) {
+        #if !targetEnvironment(macCatalyst)
+            relay.ingestState(state)
+        #endif
+    }
+    func retireSource() {
+        #if !targetEnvironment(macCatalyst)
+            relay.retireSource()
+        #endif
+    }
+    func close() {
+        #if !targetEnvironment(macCatalyst)
+            relay.close()
+        #endif
+    }
     func ingestFrame(
         image: UIImage, applying effects: LiveImageEffects? = nil,
         timecode: Timecode, isRecording: Bool
     ) {
-        guard isReady else { return }
-        let renderer: LiveFrameRenderer?
-        if let effects, !effects.isIdentity {
-            if frameRenderer == nil {
-                frameRenderer = LiveFrameRenderer(fileStore: CustomLUTStore())
+        #if !targetEnvironment(macCatalyst)
+            guard isReady else { return }
+            let renderer: LiveFrameRenderer?
+            if let effects, !effects.isIdentity {
+                if frameRenderer == nil {
+                    frameRenderer = LiveFrameRenderer(fileStore: CustomLUTStore())
+                }
+                renderer = frameRenderer
+            } else {
+                renderer = nil
             }
-            renderer = frameRenderer
-        } else {
-            renderer = nil
-        }
-        relay.ingestPreview(
-            WatchNativePreview(
-                image: image, effects: effects, renderer: renderer,
-                timecode: timecode, isRecording: isRecording))
+            relay.ingestPreview(
+                WatchNativePreview(
+                    image: image, effects: effects, renderer: renderer,
+                    timecode: timecode, isRecording: isRecording))
+        #endif
     }
 
     // Preserve the original exercised static selectors as bounded native adapters.

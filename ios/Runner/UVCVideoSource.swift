@@ -25,7 +25,11 @@ extension UVCVideoSourceState {
         case .permissionDenied:
             "Allow camera access in Settings so the app can read the capture device."
         case .waitingForDevice:
-            "Connect the HDMI capture device and the camera's HDMI output."
+            #if targetEnvironment(macCatalyst)
+                "Choose the HDMI / USB input in Operator Setup > Link, and connect the camera output."
+            #else
+                "Connect the HDMI capture device and the camera's HDMI output."
+            #endif
         case .starting:
             "Starting HDMI capture…"
         case .streaming(let deviceName, let format):

@@ -442,7 +442,12 @@ struct StartupFirstPairWizardView: View {
     /// that and starts the monitor instead of listing cameras.
     private func captureDeviceStep(_ page: inout CameraPairingPresentation) {
         let supported = UVCVideoSource.isSupportedHardware
-        let ready = supported && captureDeviceName != nil
+        #if targetEnvironment(macCatalyst)
+            let ready =
+                supported && model.macCaptureDevices.contains { $0.id == model.macCaptureDeviceID }
+        #else
+            let ready = supported && captureDeviceName != nil
+        #endif
         page.body =
             "The camera isn't contacted on this path. Nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
         page.checks = [
@@ -463,18 +468,29 @@ struct StartupFirstPairWizardView: View {
             return
                 "iOS doesn't expose USB capture devices to apps. This path works on iPad. Use USB‑C or Wi‑Fi on this device."
         }
-        if let captureDeviceName {
-            return "\(captureDeviceName): connect the camera's HDMI output to it and start."
-        }
-        #if DEBUG
-            // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
-            // identical to an iPad with the cable unplugged, and the result would be unreadable.
-            if !UVCVideoSource.isDocumentedHardware {
+        #if targetEnvironment(macCatalyst)
+            if let selected = model.macCaptureDevices.first(where: {
+                $0.id == model.macCaptureDeviceID
+            }) {
                 return
-                    "Debug build: this device isn't documented to expose USB capture devices, so it will most likely find nothing. Plug one in and see."
+                    "\(selected.name). The selected 1080p mode will be checked when capture starts."
             }
+            return
+                "Choose the attached HDMI / USB capture device below, or select it later in Operator Setup > Link."
+        #else
+            if let captureDeviceName {
+                return "\(captureDeviceName): connect the camera's HDMI output to it and start."
+            }
+            #if DEBUG
+                // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
+                // identical to an iPad with the cable unplugged, and the result would be unreadable.
+                if !UVCVideoSource.isDocumentedHardware {
+                    return
+                        "Debug build: this device isn't documented to expose USB capture devices, so it will most likely find nothing. Plug one in and see."
+                }
+            #endif
+            return "Connect the capture device to this iPad, then the camera's HDMI output into it."
         #endif
-        return "Connect the capture device to this iPad, then the camera's HDMI output into it."
     }
 
     /// Nearby cameras for Phone Hotspot, USB-C and the set's network: tap one to select it, then
@@ -557,6 +573,34 @@ struct StartupFirstPairWizardView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         case .chooseTransport:
             transportCards
+        #if targetEnvironment(macCatalyst)
+            case .discoverAndPair where transport == .hdmiCapture:
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker(
+                        "HDMI / USB Input",
+                        selection: Binding(
+                            get: { model.macCaptureDeviceID },
+                            set: { model.selectMacCaptureDevice($0) })
+                    ) {
+                        Text("Choose a device").tag("")
+                        ForEach(model.macCaptureDevices, id: \.id) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Picker(
+                        "1080p Capture Rate",
+                        selection: Binding(
+                            get: { model.macCaptureFrameRate },
+                            set: { model.selectMacCaptureFrameRate($0) })
+                    ) {
+                        Text("30 fps").tag(30)
+                        Text("60 fps").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(12)
+        #endif
         case .prepareCamera, .connectNetwork, .discoverAndPair:
             EmptyView()
         }

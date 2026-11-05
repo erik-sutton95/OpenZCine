@@ -1,7 +1,10 @@
 import MonitorUI
 import OpenZCineCore
 import SwiftUI
-import VisionKit
+
+#if !targetEnvironment(macCatalyst)
+    import VisionKit
+#endif
 
 /// Apple-native modal that reads the camera's on-screen Connection wizard (SSID + Key) with the
 /// phone's rear camera and hands validated credentials back to the connect popup. VisionKit does
@@ -31,7 +34,11 @@ struct CameraWiFiScannerScreen: View {
         self.onCapture = onCapture
         self.onManualEntry = onManualEntry
         self.onCancel = onCancel
-        _showsManualEntry = State(initialValue: startsInManualEntry)
+        #if targetEnvironment(macCatalyst)
+            _showsManualEntry = State(initialValue: true)
+        #else
+            _showsManualEntry = State(initialValue: startsInManualEntry)
+        #endif
     }
 
     var body: some View {
@@ -120,14 +127,18 @@ struct CameraWiFiScannerScreen: View {
     /// Rounded viewfinder window holding the live scan feed (or a placeholder when unsupported).
     private var viewfinder: some View {
         ZStack {
-            if DataScannerViewController.isSupported {
-                CameraWiFiScannerRepresentable(
-                    onCapture: onCapture,
-                    onIssue: { scanIssue = $0 }
-                )
-            } else {
+            #if targetEnvironment(macCatalyst)
                 unsupportedPlaceholder
-            }
+            #else
+                if DataScannerViewController.isSupported {
+                    CameraWiFiScannerRepresentable(
+                        onCapture: onCapture,
+                        onIssue: { scanIssue = $0 }
+                    )
+                } else {
+                    unsupportedPlaceholder
+                }
+            #endif
         }
         .aspectRatio(4.0 / 3.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
@@ -212,10 +223,12 @@ struct CameraWiFiScannerScreen: View {
             .frame(maxWidth: .infinity)
 
             HStack(spacing: 12) {
-                Button("Back to scan") {
-                    manualSubmissionAttempted = false
-                    showsManualEntry = false
-                }
+                #if !targetEnvironment(macCatalyst)
+                    Button("Back to scan") {
+                        manualSubmissionAttempted = false
+                        showsManualEntry = false
+                    }
+                #endif
                 Button("Cancel", role: .cancel, action: onCancel)
             }
             .font(.body.weight(.semibold))
@@ -237,86 +250,89 @@ struct CameraWiFiScannerScreen: View {
     }
 }
 
-/// Wraps `DataScannerViewController` and reports the first frame whose recognized text yields a
-/// valid Nikon SSID + key.
-private struct CameraWiFiScannerRepresentable: UIViewControllerRepresentable {
-    let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
-    let onIssue: (CameraWiFiScreenParser.Result) -> Void
+#if !targetEnvironment(macCatalyst)
+    /// Wraps `DataScannerViewController` and reports the first frame whose recognized text yields a
+    /// valid Nikon SSID + key.
+    private struct CameraWiFiScannerRepresentable: UIViewControllerRepresentable {
+        let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
+        let onIssue: (CameraWiFiScreenParser.Result) -> Void
 
-    func makeUIViewController(context: Context) -> DataScannerViewController {
-        let scanner = DataScannerViewController(
-            recognizedDataTypes: [.text()],
-            qualityLevel: .accurate,
-            recognizesMultipleItems: true,
-            isHighFrameRateTrackingEnabled: false,
-            isPinchToZoomEnabled: true,
-            isGuidanceEnabled: false,
-            isHighlightingEnabled: true
-        )
-        scanner.delegate = context.coordinator
-        return scanner
-    }
-
-    func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
-        try? scanner.startScanning()
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onCapture: onCapture, onIssue: onIssue)
-    }
-
-    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
-        private let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
-        private let onIssue: (CameraWiFiScreenParser.Result) -> Void
-        private var didCapture = false
-        private var lastIssue: CameraWiFiScreenParser.Result?
-
-        init(
-            onCapture: @escaping (CameraWiFiScreenParser.Credentials) -> Void,
-            onIssue: @escaping (CameraWiFiScreenParser.Result) -> Void
-        ) {
-            self.onCapture = onCapture
-            self.onIssue = onIssue
+        func makeUIViewController(context: Context) -> DataScannerViewController {
+            let scanner = DataScannerViewController(
+                recognizedDataTypes: [.text()],
+                qualityLevel: .accurate,
+                recognizesMultipleItems: true,
+                isHighFrameRateTrackingEnabled: false,
+                isPinchToZoomEnabled: true,
+                isGuidanceEnabled: false,
+                isHighlightingEnabled: true
+            )
+            scanner.delegate = context.coordinator
+            return scanner
         }
 
-        func dataScanner(
-            _ scanner: DataScannerViewController,
-            didAdd addedItems: [RecognizedItem],
-            allItems: [RecognizedItem]
-        ) {
-            handle(allItems, scanner)
+        func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
+            try? scanner.startScanning()
         }
 
-        func dataScanner(
-            _ scanner: DataScannerViewController,
-            didUpdate updatedItems: [RecognizedItem],
-            allItems: [RecognizedItem]
-        ) {
-            handle(allItems, scanner)
+        func makeCoordinator() -> Coordinator {
+            Coordinator(onCapture: onCapture, onIssue: onIssue)
         }
 
-        // ponytail: accept the first frame that fully validates rather than voting across N
-        // frames — the popup shows the result for the operator to confirm/edit before joining,
-        // which is the human vote. Add frame-consensus if field glare proves it necessary.
-        private func handle(_ items: [RecognizedItem], _ scanner: DataScannerViewController) {
-            guard !didCapture else { return }
-            let lines = items.compactMap { item -> String? in
-                if case .text(let text) = item { return text.transcript }
-                return nil
+        final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+            private let onCapture: (CameraWiFiScreenParser.Credentials) -> Void
+            private let onIssue: (CameraWiFiScreenParser.Result) -> Void
+            private var didCapture = false
+            private var lastIssue: CameraWiFiScreenParser.Result?
+
+            init(
+                onCapture: @escaping (CameraWiFiScreenParser.Credentials) -> Void,
+                onIssue: @escaping (CameraWiFiScreenParser.Result) -> Void
+            ) {
+                self.onCapture = onCapture
+                self.onIssue = onIssue
             }
-            let result = CameraWiFiScreenParser.result(lines: lines)
-            switch result {
-            case .credentials(let credentials):
-                didCapture = true
-                scanner.stopScanning()
-                onCapture(credentials)
-            case .needsKey, .unsupportedSSID:
-                guard lastIssue != result else { return }
-                lastIssue = result
-                onIssue(result)
-            case .noCredentials:
-                break
+
+            func dataScanner(
+                _ scanner: DataScannerViewController,
+                didAdd addedItems: [RecognizedItem],
+                allItems: [RecognizedItem]
+            ) {
+                handle(allItems, scanner)
+            }
+
+            func dataScanner(
+                _ scanner: DataScannerViewController,
+                didUpdate updatedItems: [RecognizedItem],
+                allItems: [RecognizedItem]
+            ) {
+                handle(allItems, scanner)
+            }
+
+            // ponytail: accept the first frame that fully validates rather than voting across N
+            // frames — the popup shows the result for the operator to confirm/edit before joining,
+            // which is the human vote. Add frame-consensus if field glare proves it necessary.
+            private func handle(_ items: [RecognizedItem], _ scanner: DataScannerViewController) {
+                guard !didCapture else { return }
+                let lines = items.compactMap { item -> String? in
+                    if case .text(let text) = item { return text.transcript }
+                    return nil
+                }
+                let result = CameraWiFiScreenParser.result(lines: lines)
+                switch result {
+                case .credentials(let credentials):
+                    didCapture = true
+                    scanner.stopScanning()
+                    onCapture(credentials)
+                case .needsKey, .unsupportedSSID:
+                    guard lastIssue != result else { return }
+                    lastIssue = result
+                    onIssue(result)
+                case .noCredentials:
+                    break
+                }
             }
         }
     }
-}
+
+#endif

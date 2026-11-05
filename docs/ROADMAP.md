@@ -8,6 +8,17 @@
 The active milestone delivers a production-quality native iOS app that connects to a Nikon ZR
 camera over PTP-IP and provides record control and live-view monitoring.
 
+## Mac Catalyst monitor rebuild (In Progress)
+
+- Preserve the Catalyst app with native-buffer HDMI/UVC preview and explicit input selection.
+- Keep wireless Nikon control independent from the selected HDMI picture source.
+- Provide a signed native virtual webcam with bounded buffers and clean LUT-treated output.
+- Verify actual producer/receiver frames, sustained pacing and source reconnection on hardware.
+- Complete shared-Core consumer verification and reviewed integration before release.
+
+Scope and verification limits: [Mac host guide](macos-host.md). This is a Mac-only
+platform deliverable; no public release or hardware qualification is implied.
+
 ## Phases
 
 ### Phase 0 — Flutter Prototype (Complete)

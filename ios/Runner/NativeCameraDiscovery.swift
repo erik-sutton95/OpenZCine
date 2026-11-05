@@ -58,11 +58,15 @@ enum NativeNetworkInterfaceSnapshot {
 
     /// Reads the SSID of the Wi‑Fi network the phone is currently using, if available.
     static func currentWiFiSSID() async -> String? {
-        await withCheckedContinuation { continuation in
-            NEHotspotNetwork.fetchCurrent { network in
-                continuation.resume(returning: network?.ssid)
+        #if targetEnvironment(macCatalyst)
+            return nil
+        #else
+            await withCheckedContinuation { continuation in
+                NEHotspotNetwork.fetchCurrent { network in
+                    continuation.resume(returning: network?.ssid)
+                }
             }
-        }
+        #endif
     }
 
     /// Whether the Wi‑Fi radio is up. iOS has no direct query, but the AWDL peer link (`awdl0`)

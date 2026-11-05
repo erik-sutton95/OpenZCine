@@ -118,6 +118,10 @@ ios-build:
 ios-test *args:
     ./scripts/ios-test.sh {{args}}
 
+# Build the Mac Catalyst module with optional task-owned derived data and Xcode settings.
+macos-build *args:
+    ./scripts/macos-build.sh {{args}}
+
 # Build the watchOS companion app for the simulator.
 watch-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch -destination 'generic/platform=watchOS Simulator' CODE_SIGNING_ALLOWED=NO build
