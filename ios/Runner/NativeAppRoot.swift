@@ -2400,7 +2400,6 @@ final class NativeAppModel {
     private func retireNativePictureSource() {
         #if targetEnvironment(macCatalyst)
             macWebcamGeneration = DesktopModuleHost.current?.output.resetSource() ?? 0
-            DesktopModuleHost.current?.report(.idle)
         #endif
         relayBroadcastPipeline?.retireSource()
         watchRelay.retireSource()
@@ -2426,7 +2425,7 @@ final class NativeAppModel {
         nativeInspectorImage = clean
         #if targetEnvironment(macCatalyst)
             if let host = DesktopModuleHost.current, host.output.isEnabled {
-                host.report(.live(cameraName: nil))
+                host.noteFrame()
                 let look = LiveImageEffects(lut: liveImageEffects.lut)
                 if let frame = macWebcamProcessor.outputCIImage(for: clean, effects: look)
                     ?? CIImage(image: clean, options: [.colorSpace: NSNull()])
