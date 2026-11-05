@@ -8038,7 +8038,11 @@ final class NativeAppModel {
                         continue
                     }
                     // CI-backed facade retains the native surface without a CPU bitmap readback.
-                    let image = UIImage(ciImage: CIImage(cvPixelBuffer: pixels))
+                    // Decoded to code values with the capture correction, as the phone path does.
+                    let image = UIImage(
+                        ciImage: LiveFrameDecoding.image(
+                            pixels,
+                            calibration: CaptureCalibration.forDevice(source.captureDeviceIdentity)))
                     let stamp =
                         lease.timeNs > 0
                         ? CMTime(value: lease.timeNs, timescale: 1_000_000_000)
