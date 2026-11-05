@@ -1270,11 +1270,16 @@ struct OperatorSettingsPanel: View {
                                         }
                                     }
                                 } label: {
-                                    Text(
-                                        model.macCaptureDevices.first {
-                                            $0.id == model.macCaptureDeviceID
-                                        }?.name
-                                            ?? "Choose a device")
+                                    HStack(spacing: 6) {
+                                        Text(
+                                            model.macCaptureDevices.first {
+                                                $0.id == model.macCaptureDeviceID
+                                            }?.name
+                                                ?? "Choose a device")
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }))))
                 source.append(
                     choice(
