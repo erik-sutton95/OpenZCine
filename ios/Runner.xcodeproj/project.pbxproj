@@ -30,6 +30,8 @@
 		OZC000000000000000000013 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000012 /* OpenZCineCore */; };
 		OCC000000000000000000003 /* OpenCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OCC000000000000000000002 /* OpenCineCore */; };
 		F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000A02 /* OpenCineFrameIO */; };
+		DSK000000000000000000000 /* OpenCineVirtualCamera in Frameworks */ = {isa = PBXBuildFile; platformFilters = (maccatalyst, ); productRef = DSK000000000000000000010 /* OpenCineVirtualCamera */; };
+		DSK000000000000000000001 /* OpenCineDesktopKit in Frameworks */ = {isa = PBXBuildFile; platformFilters = (maccatalyst, ); productRef = DSK000000000000000000011 /* OpenCineDesktopKit */; };
 		APL000000000000000000001 /* OpenCineApple in Frameworks */ = {isa = PBXBuildFile; productRef = APL000000000000000000002 /* OpenCineApple */; };
 		C0DE000000000000000000F1 /* PhotographyChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F2 /* PhotographyChrome.swift */; };
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
@@ -105,7 +107,6 @@
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
 		RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVID00000000000000000001 /* MonitorRelayVideo.swift */; };
-		MACV00000000000000000002 /* MacVirtualCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = MACV00000000000000000001 /* MacVirtualCamera.swift */; };
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
 		INFR00000000000000000002 /* InfrastructureCameraFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = INFR00000000000000000001 /* InfrastructureCameraFinder.swift */; };
 		WTCH00000000000000000006 /* WatchRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = WTCH00000000000000000005 /* WatchRelay.swift */; };
@@ -306,7 +307,6 @@
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
 		RVID00000000000000000001 /* MonitorRelayVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayVideo.swift; sourceTree = "<group>"; };
-		MACV00000000000000000001 /* MacVirtualCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVirtualCamera.swift; sourceTree = "<group>"; };
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
 		INFR00000000000000000001 /* InfrastructureCameraFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfrastructureCameraFinder.swift; sourceTree = "<group>"; };
 		WTCH00000000000000000005 /* WatchRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRelay.swift; sourceTree = "<group>"; };
@@ -359,6 +359,8 @@
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
+				DSK000000000000000000000 /* OpenCineVirtualCamera in Frameworks */,
+				DSK000000000000000000001 /* OpenCineDesktopKit in Frameworks */,
 				APL000000000000000000001 /* OpenCineApple in Frameworks */,
 				5C2FCD7436D4E972C805B88C /* OpenCineRelayApple in Frameworks */,
 				300E5F949AB41695CC76538F /* OpenCineWatch in Frameworks */,
@@ -508,7 +510,6 @@
 				C0DE00000000000000000019 /* NativeCameraDiscovery.swift */,
 				INFR00000000000000000001 /* InfrastructureCameraFinder.swift */,
 				UVCV00000000000000000001 /* UVCVideoSource.swift */,
-				MACV00000000000000000001 /* MacVirtualCamera.swift */,
 				RLNK00000000000000000001 /* MonitorRelayLink.swift */,
 				RVID00000000000000000001 /* MonitorRelayVideo.swift */,
 				C0DE00000000000000000025 /* LinkExperience.swift */,
@@ -625,6 +626,8 @@
 				OCC000000000000000000002 /* OpenCineCore */,
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
+				DSK000000000000000000010 /* OpenCineVirtualCamera */,
+				DSK000000000000000000011 /* OpenCineDesktopKit */,
 				APL000000000000000000002 /* OpenCineApple */,
 				4C0197227D33847B6C0F93C4 /* OpenCineRelayApple */,
 				178DF1758616937177B63BF7 /* OpenCineWatch */,
@@ -878,7 +881,6 @@
 				C0DE00000000000000000016 /* NativeCameraConnectionStore.swift in Sources */,
 				C0DE00000000000000000018 /* NativeCameraDiscovery.swift in Sources */,
 				UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */,
-				MACV00000000000000000002 /* MacVirtualCamera.swift in Sources */,
 				RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */,
 				RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */,
 				C0DE00000000000000000024 /* LinkExperience.swift in Sources */,
@@ -1522,6 +1524,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineFrameIO;
+		};
+		DSK000000000000000000010 /* OpenCineVirtualCamera */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineVirtualCamera;
+		};
+		DSK000000000000000000011 /* OpenCineDesktopKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineDesktopKit;
 		};
 		APL000000000000000000002 /* OpenCineApple */ = {
 			isa = XCSwiftPackageProductDependency;
