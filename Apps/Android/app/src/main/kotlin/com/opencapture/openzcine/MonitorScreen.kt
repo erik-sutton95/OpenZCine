@@ -317,6 +317,7 @@ internal fun MonitorScreen(
     clearNote: (String) -> Unit = {},
     gyroState: GyroCaptureState? = null,
     onOpenGyroLogs: () -> Unit = {},
+    teleprompter: com.opencapture.opencine.appkit.MonitorTeleprompterModel? = null,
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -2108,13 +2109,18 @@ internal fun MonitorScreen(
         val rendered = nikonLiveRenderedTools(liveAssistTools, scopesSampled = scopeSource !== emptyScopes) {
             assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
         }
+        val visibleGyroState = gyroState?.takeIf { state ->
+            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
+                (state.enabled || state.pill.kind == GyroPillKind.ERROR) && state.pill.kind != GyroPillKind.HIDDEN &&
+                (!isClean || gyroPillVisibleInCleanMode(state.pill.kind))
+        }
         key(session) {
             // The instant review covers the whole monitor (iOS): the floating assist palette moves
             // into this window beneath it rather than staying in its popup window above it.
             com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
-                    { usage = it; usageStore.value = it }, nikonUsageSeed),
+                    { usage = it; usageStore.value = it }, nikonUsageSeed, teleprompter = teleprompter),
                 MonitorOperatorBodyViews(
                     dashboard = { accepts ->
                         // DISP 3 hero: the header's status, with no hero digits when nothing feeds
@@ -2416,11 +2422,7 @@ internal fun MonitorScreen(
             }
         }
 
-        gyroState?.takeIf { state ->
-            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
-                (state.enabled || state.pill.kind == GyroPillKind.ERROR) &&
-                (!isClean || gyroPillVisibleInCleanMode(state.pill.kind))
-        }?.let { state ->
+        visibleGyroState?.let { state ->
             // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
             Box(Modifier.align(Alignment.TopStart).zone(fieldLayout.appBadge), contentAlignment = Alignment.CenterStart) {
                 GyroPillChip(state.pill, onClick = onOpenGyroLogs)

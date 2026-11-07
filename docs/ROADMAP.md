@@ -125,6 +125,13 @@ transport, OCR, and cloud-account adapters remain separate, explicitly scoped fo
 
 Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–5 milestone spine:
 
+- **Teleprompter** (in progress, [OpenCine #339](https://github.com/erik-sutton95/OpenCine/issues/339)):
+  preview pasted text, TXT/Markdown files and direct HTTPS script links before
+  saving offline. PROMPT in View Assist toggles the reader over the existing
+  live picture; hold for opacity, preview, text size, speed and mirror controls.
+  Shared behavior and UI live in OpenCine. Speech following and word highlighting
+  are deferred. See [the workflow and acceptance checks](teleprompter.md).
+
 - **Phone gyro logging for Gyroflow** (in progress, discussion #212): opt-in, camera-REC-driven
   motion logs on iOS and Android, with pre/post coverage, capture-health diagnostics, durable
   recovery, native sharing, saved phone-mount presets, and guided automatic mount calibration

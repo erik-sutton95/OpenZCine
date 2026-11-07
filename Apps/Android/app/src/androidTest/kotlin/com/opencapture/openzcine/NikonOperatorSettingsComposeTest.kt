@@ -71,6 +71,42 @@ import org.junit.runner.RunWith
 class NikonOperatorSettingsComposeTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun disconnectedSettingsPreviewAndAcceptTheSharedOfflineScript() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("teleprompter-settings-entry", Context.MODE_PRIVATE)
+        val scripts = context.getSharedPreferences("teleprompter-settings-script", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        scripts.edit().clear().commit()
+        val prompter = com.opencapture.opencine.appkit.MonitorTeleprompterModel(scripts)
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        show(OperatorSettings(preferences), MonitorSettingsTab.CONTROLS, teleprompter = prompter)
+        var previousClipboard: android.content.ClipData? = null
+        composeRule.runOnIdle {
+            previousClipboard = clipboard.primaryClip
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Script", "Read this saved script offline."))
+        }
+        try {
+            composeRule.onNodeWithTag("settings.controls.teleprompter").performScrollTo().performClick()
+            composeRule.onNodeWithTag("teleprompter.import.paste").performClick()
+            composeRule.waitUntil(timeoutMillis = 5_000) { prompter.candidate != null }
+            composeRule.onNodeWithTag("teleprompter.import.preview").assertIsDisplayed()
+            composeRule.runOnIdle { assertFalse(prompter.hasScript) }
+            composeRule.onNodeWithTag("teleprompter.import.use").performClick()
+            composeRule.runOnIdle {
+                assertEquals("Read this saved script offline.", prompter.script?.text)
+                assertFalse(prompter.playing)
+            }
+            composeRule.onNodeWithTag("teleprompter.close").performClick()
+            composeRule.onNodeWithTag("settings.controls.teleprompter").assertIsDisplayed()
+        } finally {
+            composeRule.runOnIdle {
+                previousClipboard?.let(clipboard::setPrimaryClip) ?: clipboard.clearPrimaryClip()
+            }
+            preferences.edit().clear().commit()
+            scripts.edit().clear().commit()
+        }
+    }
+
     @Test fun sharedSafetyControlsPersistExistingKeysAndEveryTabRemainsReachable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("z2-settings-page", Context.MODE_PRIVATE)
@@ -592,9 +628,12 @@ class NikonOperatorSettingsComposeTest {
         savedCameras: List<SavedCamera> = emptyList(),
         declaredModes: (() -> List<MonitorDisplayMode>)? = null,
         editorAvailable: (() -> Boolean)? = null,
+        teleprompter: com.opencapture.opencine.appkit.MonitorTeleprompterModel? = null,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cache = MediaCacheStore(Files.createTempDirectory(context.cacheDir.toPath(), "z2-settings"))
+        val scriptOwner = teleprompter ?: com.opencapture.opencine.appkit.MonitorTeleprompterModel(
+            context.getSharedPreferences("z2-settings-scripts", Context.MODE_PRIVATE))
         composeRule.setContent {
             OpenZCineTheme {
                 val operatorSession = rememberTestOperatorSession(assists, settings)
@@ -604,6 +643,7 @@ class NikonOperatorSettingsComposeTest {
                 OperatorSettingsScreen(
                     session = session, controlSession = null, assists = assists,
                     operatorSession = operatorSession, editsLiveView = editsCurrentLiveView,
+                    teleprompter = scriptOwner,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     onReportProblem = {},

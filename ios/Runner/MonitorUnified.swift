@@ -619,7 +619,7 @@ struct NikonMonitorShell: View {
                 if let tool = MonitorAssistTool(rawValue: $0.rawValue) {
                     model.toggleAssist(tool, context: .liveView)
                 }
-            })
+            }, teleprompter: model.teleprompter)
     }
     private func bodyViews(_ layout: FieldMonitorLayout) -> MonitorOperatorBodyViews {
         .init(
@@ -635,6 +635,12 @@ struct NikonMonitorShell: View {
             feedMarks: AnyView(EmptyView()),
             waiting: model.videoSource == .relay && model.relayFailureReason != nil
                 ? AnyView(RelayJoinRecovery()) : nil)
+    }
+    private var showsGyroPill: Bool {
+        model.activePanel == nil && model.gyroCapture.pill.kind != .hidden
+            && (model.displayMode != .clean || model.gyroCapture.pill.kind == .error
+                || model.gyroCapture.pill.kind == .mountMoved
+                || model.gyroCapture.pill.kind == .gaps)
     }
     private var connectionControl: AnyView? {
         if model.videoSource == .relay, model.relayHoldsControl || model.relayAllowsControlRequests
@@ -686,11 +692,7 @@ struct NikonMonitorShell: View {
             lookMenu: { NikonLUTPicker() }
         )
         .overlay {
-            if model.activePanel == nil,
-                model.displayMode != .clean || model.gyroCapture.pill.kind == .error
-                    || model.gyroCapture.pill.kind == .mountMoved
-                    || model.gyroCapture.pill.kind == .gaps
-            {
+            if showsGyroPill {
                 // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
                 GyroPillView(state: model.gyroCapture.pill) {
                     model.gyroCapture.logsPresented = true

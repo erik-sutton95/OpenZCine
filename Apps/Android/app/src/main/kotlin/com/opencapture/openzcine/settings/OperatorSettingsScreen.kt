@@ -83,6 +83,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.ExposureAssistCameraInput
@@ -144,6 +146,7 @@ internal fun OperatorSettingsScreen(
     assists: NikonAssists,
     /** The display owner the Display rows edit. */
     operatorSession: MonitorOperatorSessionModel,
+    teleprompter: com.opencapture.opencine.appkit.MonitorTeleprompterModel,
     /** Whether a live monitor sits under these settings, so Edit view can open on it. */
     editsLiveView: Boolean = false,
     settings: OperatorSettings,
@@ -174,6 +177,7 @@ internal fun OperatorSettingsScreen(
     gyro: MonitorSettingsGyroSource? = null,
     onClose: () -> Unit,
 ) {
+    var teleprompterPresented by rememberSaveable { mutableStateOf(false) }
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val capabilities = if (controlSession == null) null else controlSession.snapshots.collectAsState().value.capabilities
     val cameraControls = ControlCapabilities.derive(capabilities ?: CapabilitySnapshot(), NIKON_CAPTURE_PROFILE,
@@ -321,7 +325,8 @@ internal fun OperatorSettingsScreen(
         },
         autoRotate = MonitorSettingsAutoRotate(settings.autoRotateFeedEnabled.value,
             { settings.autoRotateFeedEnabled.value = it }, stringResource(R.string.settings_auto_rotate_feed),
-            stringResource(R.string.help_controls_auto_rotate_feed)))
+            stringResource(R.string.help_controls_auto_rotate_feed)),
+        teleprompter = { teleprompterPresented = true })
     val account = frameioController?.let { controller ->
         accountSource(controller, retainedAccount, accountCurrent ?: { localAccountCurrent })
     }
@@ -349,6 +354,29 @@ internal fun OperatorSettingsScreen(
     // Seeds the session once per requested landing tab, before the first frame draws.
     remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }
     MonitorOperatorSettingsScreen(configuration, assistSections, display, operatorSession, cacheOwner)
+    if (teleprompterPresented) {
+        Dialog(
+            onDismissRequest = { teleprompterPresented = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            // A Dialog has its own window; retain the operator's existing screen-awake preference.
+            val prompterView = LocalView.current
+            val keepAwake = settings.keepScreenAwake.value
+            DisposableEffect(prompterView, keepAwake) {
+                val previous = prompterView.keepScreenOn
+                prompterView.keepScreenOn = keepAwake
+                onDispose { prompterView.keepScreenOn = previous }
+            }
+            MonitorTeleprompterScreen(teleprompter,
+                onClose = { teleprompterPresented = false },
+                onUseScript = if (session != null) ({
+                    assists.shared.teleprompterEnabled = true
+                    assists.shared.persist()
+                    teleprompterPresented = false
+                    closeOwned()
+                }) else null)
+        }
+    }
 }
 
 /** Actual broadcast service observations and admitted native actions. */

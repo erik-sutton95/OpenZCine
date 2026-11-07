@@ -40,6 +40,20 @@ confirmation, haptics, keep-screen-awake and Bluetooth shutter or volume-button
 triggers are under **Settings → Controls**. Lock the interface to prevent
 accidental picker changes.
 
+### Teleprompter
+
+Open **Operator Setup → Controls → Teleprompter** to paste text, choose a TXT or
+Markdown file, or load a direct HTTPS text link. Review the preview before
+**Use script** replaces the saved offline copy. Web pages and sign-in pages
+are not supported script links.
+
+On the live monitor, tap **PROMPT** in View Assist to show or hide the reader.
+Hold PROMPT for text size, speed, mirroring, background opacity and live-preview
+controls. The existing camera picture and recording controls stay in place;
+teleprompter controls never start or stop recording. Without a camera, use
+**Read** in the script manager. Playback pauses when you hide the reader
+or leave the app. This version uses timed scrolling without speech tracking.
+
 Pinch the live view to zoom anywhere in the frame; tap-to-focus follows the
 zoom. Fit shows the whole 16:9 picture; in portrait, pinch switches between fit
 and a center-cropped fill.

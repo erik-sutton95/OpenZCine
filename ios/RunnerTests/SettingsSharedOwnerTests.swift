@@ -3,6 +3,7 @@ import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
+import OpenCineApple
 import OpenCineCameraControls
 import OpenCineHostedAccessibility
 import OpenZCineCore
@@ -207,8 +208,11 @@ extension SettingsSharedOwnerTests {
             rows[tab] = titles
         }
         #expect(
-            ["Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter"]
-                .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
+            [
+                "Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter",
+                "Teleprompter",
+            ]
+            .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
         #expect(rows[.display]?.contains("HDR display") == true, "\(rows[.display] ?? [])")
         // A2-78: one Processing card, after the connection and before Your cameras, as in
         // Pocket and Insta, with the shared Feed Upscaler first.
@@ -299,5 +303,57 @@ extension SettingsSharedOwnerTests {
         model.screenCaptured = false
         model.hdrDisplay = false
         #expect(!LiveHDRDisplay.app.preferredEnabled && !PreferencesStore.hdrDisplay)
+    }
+}
+
+extension SettingsSharedOwnerTests {
+    @Test func teleprompterPresentationKeepsTheExistingLiveFrameLeaseAndRecordingState() throws {
+        let storage = UserDefaults.standard
+        let keys = ["teleprompter.backgroundOpacity", "teleprompter.showsPreview"]
+        let saved = keys.map { storage.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    storage.set(value, forKey: key)
+                } else {
+                    storage.removeObject(forKey: key)
+                }
+            }
+        }
+        let model = NativeAppModel()
+        model.startDemoSession()
+        model.liveFrameImage = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image {
+            context in
+            UIColor.black.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }
+        let source = try #require(model.liveFrameSource)
+        let monitor = try #require(model.shell.monitor?.id)
+        let recording = model.isRecording
+        model.assist.teleprompterEnabled = true
+        model.teleprompter.backgroundOpacity = 0.6
+        model.teleprompter.showsPreview = false
+        #expect(model.liveFrameSource === source && source.isActive)
+        #expect(model.shell.monitor?.id == monitor)
+        #expect(model.activePanel == nil && model.connection == .connected)
+        #expect(model.isRecording == recording)
+        model.assist.teleprompterEnabled = false
+        #expect(model.liveFrameSource === source && source.isActive)
+        #expect(model.shell.monitor?.id == monitor && model.isRecording == recording)
+    }
+}
+
+extension SettingsSharedOwnerTests {
+    @Test func teleprompterCleanViewPinSurvivesTheNikonPreferenceRoundTrip() throws {
+        let domain = "teleprompter-clean-pin-" + UUID().uuidString
+        let storage = try #require(UserDefaults(suiteName: domain))
+        defer { storage.removePersistentDomain(forName: domain) }
+        let state = NikonAssistState.restore(storage: storage)
+        state.teleprompterEnabled = true
+        state.toggleCleanViewPin(.teleprompter)
+        state.persist()
+        let restored = NikonAssistState.restore(storage: storage)
+        #expect(restored.teleprompterEnabled)
+        #expect(restored.cleanViewPinnedTools.contains(.teleprompter))
     }
 }
