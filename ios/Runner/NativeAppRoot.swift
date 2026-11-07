@@ -1146,6 +1146,8 @@ final class NativeAppModel {
     /// The one display owner (Core): the DISP modes this source offers and the current one, each
     /// mode's chrome, the chrome editor, the interface lock and the connect-tap arming. Layouts
     /// saved before it seed once from the video side of the retired per-capture layouts.
+    /// Shared script and reader state retained across Settings and the live monitor.
+    let teleprompter = MonitorTeleprompterModel(defaults: DemoHarness.teleprompterDefaults)
     @ObservationIgnored lazy var operatorSession = MonitorOperatorSessionModel(
         shell: shell, assist: assist, display: PreferencesStore.display(seededFrom: preferences))
     var displayMode: MonitorDisplayMode { operatorSession.mode }

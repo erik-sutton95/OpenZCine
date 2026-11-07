@@ -43,6 +43,7 @@ class SystemRowsComposeTest {
                     controlSession = null,
                     assists = assists,
                     operatorSession = rememberTestOperatorSession(assists, settings),
+                    teleprompter = androidx.compose.runtime.remember { com.opencapture.opencine.appkit.MonitorTeleprompterModel(context) },
                     settings = settings,
                     mediaCacheStore = cache,
                     systemSettingsActions = actions,

@@ -48,6 +48,7 @@ internal class AppRoot(
 ) : AutoCloseable {
     private val app = context.applicationContext
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val teleprompter = com.opencapture.opencine.appkit.MonitorTeleprompterModel(app)
 
     var monitorSession by mutableStateOf(demo?.first)
 

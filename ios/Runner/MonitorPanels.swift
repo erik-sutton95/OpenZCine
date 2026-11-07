@@ -1073,6 +1073,7 @@ struct OperatorSettingsPanel: View {
     @Environment(\.openURL) private var openURL
     @State private var relayPasscodeDraft: String?
     @State private var reliabilityOptIn = ReliabilityDiagnostics.reporting.isOptedIn
+    @State private var teleprompterPresented = false
 
     var body: some View {
         let _ = model.settingsAccount.accountRevision
@@ -1085,6 +1086,18 @@ struct OperatorSettingsPanel: View {
                 operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()
+        .fullScreenCover(isPresented: $teleprompterPresented) {
+            MonitorTeleprompterScreen(
+                model: model.teleprompter, onClose: { teleprompterPresented = false },
+                onUseScript: model.isMonitorPresented
+                    ? {
+                        model.assist.teleprompterEnabled = true
+                        model.assist.persist()
+                        teleprompterPresented = false
+                        closeSettings()
+                    } : nil
+            )
+        }
         .onAppear {
             model.settingsAccount.bind(accountActions)
             model.settingsSupport.bind(supportActions)
@@ -1099,6 +1112,12 @@ struct OperatorSettingsPanel: View {
         }
     }
 
+    private func closeSettings() {
+        model.settingsAccount.retire()
+        model.settingsSupport.retire()
+        model.dismissMediaLibrary()
+    }
+
     private func configuration(insets: EdgeInsets) -> MonitorOperatorSettingsConfiguration<
         NikonMonitorLooks
     > {
@@ -1108,11 +1127,7 @@ struct OperatorSettingsPanel: View {
             phase: isConnected
                 ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
             isLive: isConnected, sharingSubtitle: "Broadcast this feed and manage its watchers.",
-            close: {
-                model.settingsAccount.retire()
-                model.settingsSupport.retire()
-                model.dismissMediaLibrary()
-            },
+            close: closeSettings,
             disconnect: {
                 model.settingsAccount.retire()
                 model.settingsSupport.retire()
@@ -1153,7 +1168,8 @@ struct OperatorSettingsPanel: View {
                         enabled: preferenceBinding(\.autoRotateFeedEnabled),
                         help:
                             "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
-                    ))),
+                    )),
+                teleprompter: { teleprompterPresented = true }),
             display: .init(
                 hdr: .init(
                     value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),

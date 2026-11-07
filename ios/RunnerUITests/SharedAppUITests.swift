@@ -649,6 +649,372 @@ final class SettingsUIFlowTests: SharedAppUITestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    func testDisconnectedTeleprompterSavesTheScriptAndKeepsPlaybackExplicit() throws {
+        // This fixture runs on the task simulator; reading another test process’s clipboard can prompt.
+        defer { UIPasteboard.general.items = [] }
+        let script =
+            String(
+                repeating:
+                    "Welcome to our camera test.\n\nWe pause between paragraphs and keep the camera controls separate.\n\n",
+                count: 6)
+        UIPasteboard.general.string = script
+        launch(
+            ReviewLaunch(screen: .cameras),
+            environment: [
+                "ZC_DEMO_CAMERA_LIST": "1",
+                "ZC_DEMO_TELEPROMPTER_SUITE": "teleprompter-ui-test." + UUID().uuidString,
+            ])
+        rotate(.landscapeLeft)
+        let settings = app.buttons["cameras.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        let controls = app.buttons["monitor.settings.tab.Controls"]
+        reveal(controls, in: app.scrollViews["monitor.settings.tabs"], portrait: false)
+        controls.tap()
+        openTeleprompterFromControls()
+        let managerControls = app.descendants(matching: .any)["teleprompter.manager.controls"]
+            .firstMatch
+        XCTAssertTrue(managerControls.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.descendants(matching: .any)["teleprompter.manager.preview"].firstMatch.exists)
+        XCTAssertFalse(app.buttons["teleprompter.read"].exists)
+        capture("z-teleprompter-empty-settings-landscape")
+        app.buttons["teleprompter.import.paste"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(identifier: "teleprompter.import.preview")
+                .firstMatch.waitForExistence(timeout: 5))
+        capture("z-teleprompter-import-preview-landscape")
+        app.buttons["teleprompter.import.use"].tap()
+        rotate(.portrait)
+        XCTAssertTrue(app.buttons["teleprompter.read"].isHittable)
+        XCTAssertTrue(app.sliders["teleprompter.fontSize"].isHittable)
+        XCTAssertTrue(app.sliders["teleprompter.speed"].isHittable)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["teleprompter.manager.preview"].firstMatch.exists)
+        capture("z-teleprompter-settings-portrait")
+        rotate(.landscapeLeft)
+        app.buttons["teleprompter.read"].tap()
+        let play = app.buttons["teleprompter.play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        play.tap()
+        XCTAssertEqual(play.label, "Pause")
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        rotate(.landscapeLeft)
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        XCTAssertEqual(play.label, "Play")
+        func scriptTop() throws -> CGFloat {
+            try XCTUnwrap(
+                app.staticTexts.matching(
+                    NSPredicate(format: "label BEGINSWITH %@", "Welcome to our camera test.")
+                )
+                .allElementsBoundByIndex.first
+            ).frame.minY
+        }
+        let pausedPosition = try scriptTop()
+        let quickSettings = app.buttons["teleprompter.settings"]
+        let reset = app.buttons["teleprompter.reset"]
+        XCTAssertTrue(quickSettings.isHittable)
+        XCTAssertGreaterThan(play.frame.midX, app.frame.midX)
+        XCTAssertLessThan(play.frame.minX, reset.frame.minX)
+        XCTAssertLessThan(reset.frame.minX, quickSettings.frame.minX)
+        quickSettings.tap()
+        XCTAssertTrue(app.sliders["teleprompter.fontSize"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.sliders["teleprompter.fontSize"].isHittable)
+        XCTAssertTrue(app.sliders["teleprompter.speed"].isHittable)
+        app.sliders["teleprompter.fontSize"].adjust(toNormalizedSliderPosition: 1)
+        app.sliders["teleprompter.speed"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertTrue(app.staticTexts["Speed 300"].exists)
+        capture("z-teleprompter-direct-settings-landscape")
+        app.buttons["teleprompter.read"].tap()
+        let reader = app.descendants(matching: .any)["teleprompter.reader"].firstMatch
+        XCTAssertEqual(reader.frame.width, app.frame.width, accuracy: 1)
+        XCTAssertEqual(reader.frame.height, app.frame.height, accuracy: 1)
+        XCTAssertEqual(try scriptTop(), pausedPosition, accuracy: 1.5)
+        XCTAssertEqual(play.label, "Play")
+        play.tap()
+        XCTAssertEqual(play.label, "Pause")
+        play.tap()
+        XCTAssertEqual(play.label, "Play")
+        app.buttons["teleprompter.reset"].tap()
+        capture("z-teleprompter-reading-landscape")
+        quickSettings.tap()
+        app.buttons["teleprompter.close"].tap()
+        openTeleprompterFromControls()
+        app.buttons["teleprompter.edit"].tap()
+        let editor = app.textViews["teleprompter.script.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            editor.value as? String, script)
+        editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Done"].isHittable)
+        XCTAssertTrue(editor.isHittable)
+        XCTAssertGreaterThanOrEqual(editor.frame.height, 44)
+        XCTAssertLessThanOrEqual(editor.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+        capture("z-teleprompter-editing-keyboard-landscape")
+    }
+
+    func testImportedTeleprompterReturnsToLiveAndLeavesCameraControlsReachable() {
+        // This fixture runs on the task simulator; reading another test process’s clipboard can prompt.
+        defer { UIPasteboard.general.items = [] }
+        UIPasteboard.general.string =
+            String(
+                repeating:
+                    "Read this script over the live picture.\n\nThe camera controls stay reachable.\n\n",
+                count: 6)
+        launch(ReviewLaunch(screen: .live))
+        rotate(.landscapeLeft)
+        let record = app.buttons["monitor.system.record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 10))
+        app.buttons["monitor.system.settings"].tap()
+        let controls = app.buttons["monitor.settings.tab.Controls"]
+        reveal(controls, in: app.scrollViews["monitor.settings.tabs"], portrait: false)
+        controls.tap()
+        openTeleprompterFromControls()
+        app.buttons["teleprompter.import.paste"].tap()
+        XCTAssertTrue(app.buttons["teleprompter.import.use"].waitForExistence(timeout: 5))
+        app.buttons["teleprompter.import.use"].tap()
+        let overlay = app.descendants(matching: .any)["teleprompter.overlay"].firstMatch
+        XCTAssertTrue(overlay.waitForExistence(timeout: 10))
+        XCTAssertTrue(record.isHittable)
+        let quickSettings = app.buttons["teleprompter.settings"]
+        XCTAssertTrue(quickSettings.isHittable)
+        let prompt = app.buttons["monitor.assist.PROMPT"]
+        XCTAssertTrue(prompt.isHittable)
+        capture("z-teleprompter-live-overlay-landscape")
+        let recordingLabel = record.label
+        for orientation in [UIDeviceOrientation.portrait, .landscapeRight, .landscapeLeft] {
+            rotate(orientation, settling: overlay)
+            let frame = overlay.frame
+            XCTAssertTrue(app.frame.insetBy(dx: -1, dy: -1).contains(frame))
+            if orientation == .portrait {
+                XCTAssertGreaterThan(frame.height, app.frame.width * 9 / 16 * 1.5)
+            } else {
+                XCTAssertGreaterThan(frame.height, app.frame.height * 0.4)
+            }
+            XCTAssertGreaterThan(
+                frame.width, app.frame.width * (orientation == .portrait ? 0.75 : 0.6))
+            for id in [
+                "monitor.system.record", "monitor.system.settings", "monitor.system.media",
+                "monitor.system.lock", "monitor.capture.iso", "monitor.capture.shutter",
+                "monitor.assist.PROMPT",
+            ] {
+                let control = app.buttons[id]
+                if control.exists {
+                    XCTAssertTrue(control.isHittable, "Reader leaves \(id) reachable")
+                    XCTAssertFalse(frame.intersects(control.frame), "Reader clears \(id)")
+                }
+            }
+            XCTAssertTrue(app.buttons["teleprompter.play"].isHittable)
+            XCTAssertTrue(app.buttons["teleprompter.reset"].isHittable)
+            XCTAssertTrue(app.buttons["teleprompter.settings"].isHittable)
+            XCTAssertEqual(record.label, recordingLabel)
+            capture("z-teleprompter-expanded-\(orientation.rawValue)")
+            if orientation == .portrait {
+                app.buttons["monitor.capture.iso"].tap()
+                let close = app.buttons["monitor.capture.close"]
+                XCTAssertTrue(close.waitForExistence(timeout: 5))
+                close.tap()
+                XCTAssertTrue(overlay.waitForExistence(timeout: 5))
+            }
+        }
+
+        let lock = app.buttons["monitor.system.lock"]
+        let play = app.buttons["teleprompter.play"]
+        let reset = app.buttons["teleprompter.reset"]
+        XCTAssertTrue(lock.isHittable && play.exists && reset.exists)
+        lock.tap()
+        XCTAssertFalse(play.isEnabled)
+        XCTAssertFalse(reset.isEnabled)
+        XCTAssertFalse(quickSettings.isEnabled)
+        lock.tap()
+        XCTAssertTrue(play.isEnabled && reset.isEnabled && quickSettings.isEnabled)
+        prompt.tap()
+        XCTAssertFalse(overlay.exists)
+        XCTAssertTrue(record.isHittable)
+        prompt.tap()
+        XCTAssertTrue(overlay.waitForExistence(timeout: 5))
+        app.buttons["monitor.assists.expand"].tap()
+        let chips = app.buttons.matching(
+            NSPredicate(format: "identifier MATCHES %@", "monitor\\.assist\\.[A-Z0-9_]+"))
+        let firstChip = chips.allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(firstChip)
+        if let firstChip {
+            let paletteScroll = app.scrollViews.containing(
+                .button, identifier: firstChip.identifier
+            ).firstMatch
+            XCTAssertTrue(paletteScroll.exists)
+            for _ in 0..<8 where !prompt.isHittable { paletteScroll.swipeLeft() }
+            XCTAssertTrue(prompt.isHittable)
+            for chip in chips.allElementsBoundByIndex
+            where chip.isHittable && chip.identifier != prompt.identifier {
+                XCTAssertTrue(chip.frame.minX < prompt.frame.minX + 1)
+                if abs(chip.frame.minX - prompt.frame.minX) < 1 {
+                    XCTAssertLessThan(chip.frame.minY, prompt.frame.minY)
+                }
+            }
+        }
+        capture("z-teleprompter-last-expanded-tool-landscape")
+        app.buttons["monitor.assists.collapse"].tap()
+        let restored = NSPredicate { _, _ in prompt.isHittable }
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: restored, object: nil)], timeout: 5),
+            .completed)
+        capture("z-teleprompter-reserved-collapsed-tool-landscape")
+        quickSettings.tap()
+        let opacity = app.sliders["teleprompter.opacity"]
+        XCTAssertTrue(opacity.waitForExistence(timeout: 5))
+        let options = app.scrollViews.containing(
+            .button, identifier: "teleprompter.manage"
+        ).firstMatch
+        for _ in 0..<6 where !options.frame.contains(opacity.frame) { options.swipeUp() }
+        XCTAssertTrue(opacity.isHittable && options.frame.contains(opacity.frame))
+        let wasOpaque = app.staticTexts["Background 100%"].exists
+        opacity.adjust(toNormalizedSliderPosition: wasOpaque ? 0 : 1)
+        XCTAssertTrue(app.staticTexts[wasOpaque ? "Background 0%" : "Background 100%"].exists)
+        capture("z-teleprompter-quick-controls-landscape")
+    }
+
+    func testTeleprompterExtremeSettingsAndCancelledImportsInLandscape() {
+        defer { UIPasteboard.general.items = [] }
+        let script = String(
+            repeating:
+                "Keep the live picture visible.\n\nRead comfortably between camera checks.\n\n",
+            count: 6)
+        UIPasteboard.general.string = script
+        launch(ReviewLaunch(screen: .live))
+        rotate(.landscapeLeft)
+        let record = app.buttons["monitor.system.record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 10))
+        app.buttons["monitor.system.settings"].tap()
+        let controls = app.buttons["monitor.settings.tab.Controls"]
+        reveal(controls, in: app.scrollViews["monitor.settings.tabs"], portrait: false)
+        controls.tap()
+        openTeleprompterFromControls()
+        app.buttons["teleprompter.import.paste"].tap()
+        XCTAssertTrue(app.buttons["teleprompter.import.use"].waitForExistence(timeout: 5))
+        app.buttons["teleprompter.import.use"].tap()
+        let overlay = app.descendants(matching: .any)["teleprompter.overlay"].firstMatch
+        let prompt = app.buttons["monitor.assist.PROMPT"]
+        XCTAssertTrue(overlay.waitForExistence(timeout: 10))
+
+        func revealOption(_ option: XCUIElement, in scroll: XCUIElement) {
+            for _ in 0..<6 where !option.isHittable {
+                if option.frame.midY < scroll.frame.minY {
+                    scroll.swipeDown()
+                } else {
+                    scroll.swipeUp()
+                }
+            }
+            XCTAssertTrue(option.isHittable)
+        }
+
+        for value in [CGFloat(0), CGFloat(1)] {
+            prompt.press(forDuration: 0.6)
+            let options = app.scrollViews.containing(
+                .button, identifier: "teleprompter.manage"
+            ).firstMatch
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            let font = app.sliders["Text size"]
+            revealOption(font, in: options)
+            font.adjust(toNormalizedSliderPosition: 1)
+            XCTAssertTrue(app.staticTexts["Text 72"].exists)
+            let opacity = app.sliders["teleprompter.opacity"]
+            revealOption(opacity, in: options)
+            opacity.adjust(toNormalizedSliderPosition: value)
+            let percent = Int(value * 100)
+            XCTAssertTrue(app.staticTexts["Background \(percent)%"].exists)
+            app.buttons["monitor.assist.close"].tap()
+            XCTAssertTrue(overlay.waitForExistence(timeout: 5))
+            XCTAssertTrue(record.isHittable)
+            let window = app.frame.insetBy(dx: -0.5, dy: -0.5)
+            XCTAssertTrue(window.contains(overlay.frame))
+            for identifier in ["teleprompter.play", "teleprompter.reset"] {
+                let button = app.buttons[identifier]
+                XCTAssertTrue(button.isHittable && window.contains(button.frame))
+            }
+            capture("z-teleprompter-72pt-opacity-\(percent)-landscape")
+        }
+        prompt.press(forDuration: 0.6)
+        let options = app.scrollViews.containing(
+            .button, identifier: "teleprompter.manage"
+        ).firstMatch
+        let manage = app.buttons["teleprompter.manage"]
+        revealOption(manage, in: options)
+        manage.tap()
+        XCTAssertTrue(app.buttons["teleprompter.close"].waitForExistence(timeout: 5))
+        app.buttons["teleprompter.import.link"].tap()
+        let url = app.textFields["teleprompter.import.url"]
+        XCTAssertTrue(url.waitForExistence(timeout: 5))
+        url.tap()
+        url.typeText("https://example.com/script.txt")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        capture("z-teleprompter-link-keyboard-landscape")
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(url.waitForNonExistence(timeout: 5))
+        app.buttons["teleprompter.import.file"].tap()
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        capture("z-teleprompter-native-file-picker-landscape")
+        cancel.tap()
+        let edit = app.buttons["teleprompter.edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        edit.tap()
+        let editor = app.textViews["teleprompter.script.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            editor.value as? String, script)
+    }
+
+    func testTeleprompterImportsDirectMarkdownAndRefreshRequiresAcceptance() throws {
+        guard let source = ProcessInfo.processInfo.environment["TELEPROMPTER_SMOKE_URL"] else {
+            throw XCTSkip(
+                "Supply a public direct Markdown URL for the optional network smoke check.")
+        }
+        launch(ReviewLaunch(screen: .cameras), environment: ["ZC_DEMO_CAMERA_LIST": "1"])
+        rotate(.landscapeLeft)
+        let settings = app.buttons["cameras.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        let controls = app.buttons["monitor.settings.tab.Controls"]
+        reveal(controls, in: app.scrollViews["monitor.settings.tabs"], portrait: false)
+        controls.tap()
+        openTeleprompterFromControls()
+        app.buttons["teleprompter.import.link"].tap()
+        let url = app.textFields["teleprompter.import.url"]
+        XCTAssertTrue(url.waitForExistence(timeout: 5))
+        url.tap()
+        url.typeText(source)
+        let load = app.buttons["teleprompter.import.load"]
+        if !load.isHittable { app.swipeUp() }
+        XCTAssertTrue(load.isHittable)
+        load.tap()
+        let use = app.buttons["teleprompter.import.use"]
+        XCTAssertTrue(use.waitForExistence(timeout: 30))
+        capture("z-teleprompter-remote-markdown-preview-landscape")
+        use.tap()
+        let refresh = app.buttons["teleprompter.import.refresh"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        refresh.tap()
+        XCTAssertTrue(use.waitForExistence(timeout: 30))
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        app.buttons["teleprompter.read"].tap()
+        XCTAssertTrue(app.buttons["teleprompter.play"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["teleprompter.play"].label, "Play")
+    }
+
+    private func openTeleprompterFromControls() {
+        let open = app.buttons["settings.controls.teleprompter"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        for _ in 0..<6 where !open.isHittable { app.swipeUp() }
+        XCTAssertTrue(open.isHittable)
+        open.tap()
+        XCTAssertTrue(app.buttons["teleprompter.close"].waitForExistence(timeout: 5))
+    }
+
     func testEveryTabInBothOrientationsWithHDRDisplayAndTheRootReport() {
         launch(ReviewLaunch(screen: .settings))
         let tabs = app.scrollViews["monitor.settings.tabs"]

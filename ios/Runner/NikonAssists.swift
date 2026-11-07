@@ -72,7 +72,7 @@ extension MonitorAssistTool {
 
     /// Tools DISP 2 can keep on screen. The camera EV meter belongs to DISP 1 only.
     static var nikonCleanPinCases: [MonitorAssistSelection] {
-        activeCases.filter { $0 != .evMeter }.map(\.selection)
+        activeCases.filter { $0 != .evMeter }.map(\.selection) + [.teleprompter]
     }
 }
 

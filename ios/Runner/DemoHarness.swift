@@ -101,6 +101,15 @@ enum DemoHarness {
     static let launchSplashHold = value("ZC_DEMO_SPLASH_HOLD_MS").flatMap(Int.init)
         .map { Duration.milliseconds($0) }
 
+    /// A test-owned script domain keeps repeated empty-state flows away from saved operator text.
+    static var teleprompterDefaults: UserDefaults {
+        guard let suite = value("ZC_DEMO_TELEPROMPTER_SUITE"),
+            suite.hasPrefix("teleprompter-ui-test."),
+            let defaults = UserDefaults(suiteName: suite)
+        else { return .standard }
+        return defaults
+    }
+
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
     #if DEBUG
