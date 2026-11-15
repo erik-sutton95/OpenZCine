@@ -61,8 +61,13 @@ final class ZCineMultiview {
     private(set) var editor: (slot: Int, editor: MulticamCameraEditor)?
     /// The tile lent to the single-camera Live View.
     private(set) var lentSlot: Int?
-    /// When each tile's camera began its current take (Nikon reports no take length).
-    private var recordingSince: [Int: Date] = [:]
+    /// The box the lent tile handed to Live View: the same session comes back as the same box.
+    @ObservationIgnored private var lentTransport: ZCineMemberTransport?
+    /// Each tile's camera model as GetDeviceInfo reported it on its current link (kept while it
+    /// reconnects).
+    private var models: [Int: String] = [:]
+    /// The open editor's last command note (a refusal or error), as Pocket's popup shows it.
+    private(set) var editorNote: String?
     @ObservationIgnored private var liveExit: (() -> Void)?
     @ObservationIgnored private let clock: HostClock
 
@@ -145,10 +150,8 @@ final class ZCineMultiview {
     private func show(_ frame: PTPLiveViewFrame, slot: Int) {
         applyLUT(slot)
         pictures[slot].accept(UIImage(data: frame.jpeg))
-        if frame.isRecording {
-            if recordingSince[slot] == nil { recordingSince[slot] = clock.date() }
-        } else if recordingSince[slot] != nil {
-            recordingSince[slot] = nil
+        if let model = links[slot].transport?.model, !model.isEmpty, models[slot] != model {
+            models[slot] = model
         }
     }
 
@@ -167,16 +170,26 @@ final class ZCineMultiview {
     func returnFromLiveView(_ transport: ZCineMemberTransport?) {
         guard let slot = lentSlot else { return }
         lentSlot = nil
+        lentTransport = nil
         links[slot].reclaim(transport)
         let exit = liveExit
         liveExit = nil
         exit?()
     }
 
+    /// The monitor stood down holding `session`: the lent session itself comes back in the box it
+    /// left in (the tile's link takes it back as is), a recovery's replacement in a new one.
+    func returnFromLiveView(session: (any NikonMultiviewTransport)?) {
+        guard let session else { return returnFromLiveView(nil) }
+        if let lent = lentTransport, lent.base === session { return returnFromLiveView(lent) }
+        returnFromLiveView(ZCineMemberTransport(session))
+    }
+
     // MARK: Settings editor
 
     private func retireEditor() {
         guard let open = editor else { return }
+        editorNote = nil
         open.editor.retire()
         coordinator.editorLeases.close(coordinator.members[open.slot].entryID)
         editor = nil
@@ -193,6 +206,15 @@ final class ZCineMultiview {
         return result
     }
 
+    /// The Add camera list's setup steps: Z bodies join the network from their own menus.
+    /// Android twin: `PICKER_GUIDANCE`.
+    static let pickerGuidance =
+        "On each camera: Network menu \u{2192} Connect to computer, on this phone\u{2019}s Wi-Fi or Personal Hotspot. "
+        + "A camera not yet paired with this phone: pair it in Your cameras first."
+
+    /// Under the Format tab's values. Android twin: `FORMAT_NOTE`.
+    static let formatNote = "Change the recording format on the camera."
+
     /// The common setting a category's drum edits.
     static func key(_ category: MultiviewSettingsCategory) -> SettingKey? {
         switch category {
@@ -202,8 +224,8 @@ final class ZCineMultiview {
         case .wb: .whiteBalance
         case .focus: .focusMode
         case .aperture: .aperture
-        case .resolution: .frameRate
-        case .mode, .color, .audio: nil
+        // Format: Nikon's common session writes no movie format; the tab reads it back.
+        case .resolution, .mode, .color, .audio: nil
         }
     }
 }
@@ -214,8 +236,10 @@ extension ZCineMultiview: MultiviewHost {
     func openLiveView(slot: Int) -> Bool {
         guard lentSlot == nil, let transport = links[slot].lend() else { return false }
         lentSlot = slot
+        lentTransport = transport
         guard lendToLiveView(slot, transport) else {
             lentSlot = nil
+            lentTransport = nil
             links[slot].reclaim(transport)
             return false
         }
@@ -233,7 +257,7 @@ extension ZCineMultiview: MultiviewHost {
         if editor?.slot == slot { retireEditor() }
         if change != .control {
             pictures[slot].reset()
-            recordingSince[slot] = nil
+            models[slot] = nil
         }
     }
 
@@ -259,12 +283,13 @@ extension ZCineMultiview: MultiviewHost {
             return MonitorTimecodeFormat.label(
                 hours: code.hour, minutes: code.minute, seconds: code.second)
         }
-        let seconds = recordingSince[slot].map { max(0, Int(clock.date().timeIntervalSince($0))) }
         let hasPicture = pictures[slot].image != nil
+        // The take length is the camera's own, as Pocket shows it: a Z body reports none, so the
+        // tally reads REC (never a phone-derived count).
         return MultiviewTileReadings(
-            name: name, model: coordinator.members[slot].address, format: format,
+            name: name, model: models[slot] ?? "", format: format,
             storage: snapshot.storage.storageReadout?.free ?? MultiviewTally.unavailable,
-            timecode: timecode, readouts: Self.readouts(properties), recordingSeconds: seconds,
+            timecode: timecode, readouts: Self.readouts(properties), recordingSeconds: nil,
             power: snapshot.power, hasPicture: hasPicture,
             accessibilityValue: hasPicture ? "Live" : "Waiting")
     }
@@ -300,29 +325,35 @@ extension ZCineMultiview: MultiviewHost {
             let lease = coordinator.openEditorLease(slot: slot)
         else { return }
         let source: NikonCameraSession = control.session
-        editor = (
-            slot,
-            MulticamCameraEditor(
-                member: coordinator.members[slot].entryID, lease: lease, source: source,
-                owner: owner
-            ) { [weak self, weak control] in
-                guard let self, let control, self.links[slot].control === control else {
-                    return false
-                }
-                return self.coordinator.editorAdmits(lease, slot: slot)
+        let opened = MulticamCameraEditor(
+            member: coordinator.members[slot].entryID, lease: lease, source: source,
+            owner: owner
+        ) { [weak self, weak control] in
+            guard let self, let control, self.links[slot].control === control else {
+                return false
             }
-        )
+            return self.coordinator.editorAdmits(lease, slot: slot)
+        }
+        // A refused or failed change says so in the popup, as Pocket's does.
+        opened.control.onNote = { [weak self, weak opened] note in
+            guard let self, let opened, self.editor?.editor === opened else { return }
+            self.editorNote = note
+        }
+        editor = (slot, opened)
     }
 
     func cameraSettings(slot: Int) -> MultiviewCameraSettingsState? {
         guard let open = editor, open.slot == slot, links[slot].control != nil else { return nil }
         return MultiviewCameraSettingsState(
-            categories: categories(slot), recording: links[slot].recordReport?.recording == true)
+            categories: categories(slot), recording: links[slot].recordReport?.recording == true,
+            note: editorNote)
     }
 
     func admitsControls(slot: Int) -> Bool {
         links[slot].transport != nil && !links[slot].lent && lentSlot != slot
     }
+
+    var pickerGuidance: String? { Self.pickerGuidance }
 }
 
 extension ZCineMultiview: MultiviewScreenHost {
@@ -352,7 +383,9 @@ extension ZCineMultiview: MultiviewScreenHost {
         slot: Int, category: MultiviewSettingsCategory, enabled: Bool,
         presented: @escaping () -> Bool, close: @escaping () -> Void
     ) -> some View {
-        if let open = editor, open.slot == slot, let key = Self.key(category),
+        if editor?.slot == slot, category == .resolution {
+            recordingFormat(slot)
+        } else if let open = editor, open.slot == slot, let key = Self.key(category),
             let field = open.editor.control.captureField(key)
         {
             MonitorCaptureDrum(control: open.editor.control, field: field)
@@ -363,6 +396,28 @@ extension ZCineMultiview: MultiviewScreenHost {
             Text("Not available on this camera").font(MonitorTheme.font(13, weight: .medium))
                 .foregroundStyle(MonitorTheme.muted)
         }
+    }
+
+    /// The Format tab: the recording format as the body reports it (it changes on the camera).
+    private func recordingFormat(_ slot: Int) -> some View {
+        let properties = links[slot].reported
+        let rows: [(String, String?)] = [
+            ("Resolution", properties.resolution), ("Frame rate", properties.fps.map { "\($0)p" }),
+            ("Codec", properties.fileType), ("Tone", links[slot].recordingTone?.label),
+        ]
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(rows, id: \.0) { row in
+                HStack {
+                    Text(row.0).foregroundStyle(MonitorTheme.muted)
+                    Spacer()
+                    Text(row.1 ?? MultiviewTally.unavailable).foregroundStyle(MonitorTheme.text)
+                }
+                .font(MonitorTheme.font(13, weight: .medium))
+            }
+            Text(Self.formatNote).font(MonitorTheme.font(12)).foregroundStyle(MonitorTheme.muted)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("multiview.settings.format")
     }
 
     func liveView(slot: Int, exit: @escaping () -> Void) -> some View {

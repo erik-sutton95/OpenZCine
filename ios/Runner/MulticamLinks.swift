@@ -14,6 +14,12 @@ final class ZCineMemberTransport: NikonMultiviewTransport, @unchecked Sendable {
     /// The real session behind the box, for the single-camera Live View the member is lent to.
     var session: NativeCameraSession? { base as? NativeCameraSession }
 
+    /// The camera model GetDeviceInfo reported (the tile's subtitle, as Pocket shows it).
+    var model: String {
+        if let session { return session.identity.model }
+        return (base as? DemoMulticamLink)?.model ?? ""
+    }
+
     var serialNumber: String { base.serialNumber }
     var commandOwner: NikonCommandOwner? { base.commandOwner }
     func configureMemberLiveView() async { await base.configureMemberLiveView() }
@@ -51,6 +57,7 @@ final class DemoMulticamLink: NikonMultiviewTransport, @unchecked Sendable {
     struct Refusal: Error {}
 
     let serialNumber: String
+    let model: String
     let commandOwner: NikonCommandOwner? = NikonCommandOwner()
     private let lock = NSLock()
     private var properties: [PTPPropertyCode: Data]
@@ -60,14 +67,16 @@ final class DemoMulticamLink: NikonMultiviewTransport, @unchecked Sendable {
     private let jpeg: Data
     /// Scripting for tests: the body refuses record, or stops answering frames.
     var refusesRecord = false
+    var refusesWrites = false
     var dropsFrames = false
     var frameInterval: Duration = .milliseconds(40)
 
     init(
-        serialNumber: String, iso: UInt32 = 800, battery: UInt8 = 80, recording: Bool = false,
-        nLog: Bool = false
+        serialNumber: String, model: String = "ZR", iso: UInt32 = 800, battery: UInt8 = 80,
+        recording: Bool = false, nLog: Bool = false
     ) {
         self.serialNumber = serialNumber
+        self.model = model
         self.recording = recording
         jpeg = UIImage(named: "MockFeed")?.jpegData(compressionQuality: 0.6) ?? Data()
         let colorTemp = PTPCameraPropertyDecoders.wbModeCode(for: "Color temp") ?? 0
@@ -94,8 +103,9 @@ final class DemoMulticamLink: NikonMultiviewTransport, @unchecked Sendable {
     var frameCount: Int { lock.withLock { frames } }
 
     func writeCameraProperty(_ write: PTPCameraPropertyWrite) async throws {
-        lock.withLock {
+        try lock.withLock {
             log.append("write \(write.property)")
+            if refusesWrites { throw Refusal() }
             properties[write.property] = write.data
             // The movie ISO write moves the effective ISO the poll reads.
             if write.property == .movieExposureIndex {
