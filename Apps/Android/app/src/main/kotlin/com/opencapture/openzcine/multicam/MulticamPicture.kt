@@ -166,6 +166,13 @@ class MulticamPicture internal constructor(
         bake = null
     }
 
+    /** Another camera takes the tile: the last frame is dropped, so no look re-bakes it. */
+    internal fun clear() {
+        invalidate()
+        raw = null
+        publish(null)
+    }
+
     /** The member left or was replaced: late work is discarded and only its own pixels clear. */
     internal fun retire() {
         if (retired) return

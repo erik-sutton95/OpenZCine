@@ -49,6 +49,11 @@ internal class AppNikonConnectPort(
     /** Root-owned adapter, shared by pairing, cameras and the monitor. */
     private val commonServices: (com.opencapture.opencine.nikon.CameraSession, NikonOpenCineSession) -> com.opencapture.opencine.core.CameraServices = { _, _ -> com.opencapture.opencine.core.CameraServices() },
     private val commonSession: (com.opencapture.opencine.nikon.CameraSession) -> NikonOpenCineSession = { NikonOpenCineSession(it, scope) },
+    /**
+     * Runs before every connect dials: the app waits until a closed Multiview's members finished
+     * their CloseSession and the settle after it, so a single-camera Init never lands inside it.
+     */
+    private val beforeConnect: suspend () -> Unit = {},
 ) : NikonConnectPort {
     override val sightings = MutableStateFlow<List<NikonSighting>>(emptyList())
     override val phase = MutableStateFlow<Pair<NikonConnectionPhase, String?>?>(null)
@@ -75,6 +80,13 @@ internal class AppNikonConnectPort(
             updateDiscovery()
         }
 
+    /** Multiview is open: its members own their bodies, and the list neither listens nor dials. */
+    var multiviewOpen: Boolean = false
+        set(value) {
+            field = value
+            updateDiscovery()
+        }
+
     /** Both modes listen the same way here: pairing runs its own wizard search (not this port). */
     override fun startDiscovery(mode: DiscoveryMode) {
         requested = true
@@ -87,7 +99,7 @@ internal class AppNikonConnectPort(
     }
 
     private fun updateDiscovery() {
-        if (!(requested && pageVisible)) {
+        if (!(requested && pageVisible && !multiviewOpen)) {
             connector.stopDiscovery()
             sightingsJob?.cancel()
             sightingsJob = null
@@ -149,6 +161,7 @@ internal class AppNikonConnectPort(
     override suspend fun connect(request: NikonConnectRequest): NikonConnection = connect(request, takingOverConfirmed = false)
 
     override suspend fun connect(request: NikonConnectRequest, takingOverConfirmed: Boolean): NikonConnection {
+        beforeConnect()
         var apSsid: String? = null
         var apKey: String? = null
         val record: SavedCameraRecord =

@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -509,6 +510,7 @@ class MainActivity : ComponentActivity() {
                             offersDiagnostics = true,
                             commonSession = shellSessions::acquire,
                             commonServices = shellSessions::services,
+                            beforeConnect = { root.awaitMultiviewReleased() },
                         )
                     }
                 val camerasModel =
@@ -634,9 +636,10 @@ class MainActivity : ComponentActivity() {
                             ?.let { camera to it.id }
                     }
                 // Link settings leaves the monitor asking for a reconnect of the same setup.
-                LaunchedEffect(requestedReconnectID, camerasState.saved, camerasState.attempts.isEmpty()) {
+                // While Multiview is open its members own their bodies: no single-camera connect.
+                LaunchedEffect(requestedReconnectID, camerasState.saved, camerasState.attempts.isEmpty(), multiview == null) {
                     val requestedID = requestedReconnectID ?: return@LaunchedEffect
-                    if (camerasState.attempts.isNotEmpty() || monitorSession != null) return@LaunchedEffect
+                    if (camerasState.attempts.isNotEmpty() || monitorSession != null || multiview != null) return@LaunchedEffect
                     requestedReconnectID = null
                     savedRoute(requestedID)?.let { (camera, route) -> camerasModel.connect(camera, route) }
                 }
@@ -644,7 +647,8 @@ class MainActivity : ComponentActivity() {
                 // on detach, re-arming the next plug-in without retrying a refused body).
                 var attemptedUsbReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
                 val usbCameras by savedCameraConnector.usbCameras.collectAsState()
-                LaunchedEffect(usbCameras, savedCameras, camerasState.attempts.isEmpty(), suppressedUsbAutoReconnectHosts) {
+                LaunchedEffect(usbCameras, savedCameras, camerasState.attempts.isEmpty(), suppressedUsbAutoReconnectHosts, multiview == null) {
+                    if (multiview != null) return@LaunchedEffect
                     val attached =
                         usbCameras.filter { it.access == UsbPtpCameraAccess.READY }.mapNotNull { it.hostKey }.toSet()
                     attemptedUsbReconnectHosts = attemptedUsbReconnectHosts.intersect(attached)
@@ -963,6 +967,14 @@ class MainActivity : ComponentActivity() {
                         }
                     @Composable
                     fun CameraMonitor(active: CameraSession) {
+                        if (multiview?.lentSession(active) == true) {
+                            // A lent member that drops goes back to its tile as lost (the tile's
+                            // repair reopens it); nothing on this monitor dials it again.
+                            LaunchedEffect(active) {
+                                active.state.first { it is CameraSessionState.Disconnected }
+                                shell.close()
+                            }
+                        }
                         LaunchedEffect(active, pairingEnvironment) {
                             try {
                                 awaitCancellation()
@@ -1118,8 +1130,12 @@ class MainActivity : ComponentActivity() {
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == null && !gyroState.logsPresented &&
                                     gyroState.ring == null && gyroState.setupSteps.isEmpty(),
+                                // A Multiview member lent to Live View never recovers here: a
+                                // dropped loan goes back to its tile, whose repair reopens it
+                                // through the stage's opener (holder check, settle, serial).
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
+                                        multiview?.lentSession(active) != true &&
                                         frameioController.internetHopState
                                             .allowsMonitorSessionRecovery(),
                                 currentCameraHolder = {
@@ -1457,7 +1473,13 @@ class MainActivity : ComponentActivity() {
                                 reportProblem = { showProblemReport = true },
                                 watchFeed = openWatcherBrowse,
                                 multiview = if (ZCineMultiview.TILE_COUNT > 1) {
-                                    { camerasModel.consent.retire(); root.openMultiview() }
+                                    {
+                                        // The stage owns the bodies from here: no single-camera
+                                        // connect or reconnect runs beside it.
+                                        camerasModel.cancelAll()
+                                        requestedReconnectID = null
+                                        root.openMultiview()
+                                    }
                                 } else null,
                                 integrationAction = { cameraID, action ->
                                     when (action) {
@@ -1548,6 +1570,7 @@ class MainActivity : ComponentActivity() {
                             emptyMessage = "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked.",
                         )
                     }
+                    LaunchedEffect(nikonPort, multiview == null) { nikonPort.multiviewOpen = multiview != null }
                     multiview?.let { stage ->
                         // A monitor that is not this stage's loan covers it, as Media does.
                         com.opencapture.opencine.appkit.MultiviewStageVisibility(

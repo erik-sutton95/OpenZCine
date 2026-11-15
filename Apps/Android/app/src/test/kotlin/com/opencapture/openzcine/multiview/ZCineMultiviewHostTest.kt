@@ -6,6 +6,7 @@ import com.opencapture.opencine.appkit.MultiviewNetworkRestore
 import com.opencapture.opencine.appkit.MultiviewStageLayout
 import com.opencapture.opencine.appkit.MultiviewStagePreferences
 import com.opencapture.opencine.appkit.MultiviewStagePreferencesStore
+import com.opencapture.opencine.appkit.pickerFooter
 import com.opencapture.opencine.appkit.enqueueAdd
 import com.opencapture.opencine.appkit.networkRestore
 import com.opencapture.opencine.appkit.pickerRows
@@ -64,7 +65,7 @@ class ZCineMultiviewHostTest {
         private val pending = Channel<LiveFrame>(Channel.UNLIMITED)
         val properties = MutableStateFlow(CameraPropertySnapshot(iso = 800, movieTone = tone))
         override val state: StateFlow<CameraSessionState> =
-            MutableStateFlow(CameraSessionState.Connected(CameraIdentity("ZR", "ZR", serial)))
+            MutableStateFlow(CameraSessionState.Connected(CameraIdentity("ZR", "Nikon ZR", serial)))
         override val recordingState: StateFlow<CameraRecordingState> = MutableStateFlow(CameraRecordingState.STANDBY)
         override val cameraProperties: StateFlow<CameraPropertySnapshot> get() = properties
         var collections = 0
@@ -167,6 +168,7 @@ class ZCineMultiviewHostTest {
         stage.coordinator.start()
         until("the list fills") { stage.coordinator.pickerRows().size == 2 }
         assertEquals(listOf("ZR", "Z 8 router"), stage.coordinator.pickerRows().map { it.title }, "a body another device holds is not offered")
+        assertTrue(stage.coordinator.pickerFooter.endsWith(ZCineMultiview.PICKER_GUIDANCE), "the camera-menu steps follow the footer")
         assertTrue(network.dials.isEmpty(), "listing dials no body")
         val row = stage.coordinator.pickerRows().first()
         stage.coordinator.enqueueAdd(row.id, 0)
@@ -187,7 +189,7 @@ class ZCineMultiviewHostTest {
         assertEquals(FeedLut.NLOG_709.label, stage.links[0].autoLUT.conversion)
         val readings = assertNotNull(stage.readings(0))
         assertEquals("ZR", readings.name)
-        assertEquals("192.168.1.20", readings.model, "the address stands in for the model")
+        assertEquals("Nikon ZR", readings.model, "the model GetDeviceInfo reported, as Pocket shows it")
         assertEquals("14:32:08", readings.timecode, "HH:MM:SS like Pocket")
         assertEquals("800", readings.readouts.first().value)
         assertNull(readings.recordingSeconds)
@@ -197,7 +199,8 @@ class ZCineMultiviewHostTest {
         assertFalse(stage.lutShown(0), "the operator turns it off per camera")
         body.properties.value = body.properties.value.copy(movieTone = "SDR")
         body.frame(recording = true)
-        until("the take is timed") { stage.readings(0)?.recordingSeconds == 0 }
+        until("the take shows") { stage.links[0].recordReport?.recording == true }
+        assertNull(stage.readings(0)?.recordingSeconds, "a Z body reports no take length: the tally reads REC")
         assertNull(stage.autoLook(0), "SDR needs no look")
         stage.coordinator.stop()
     }

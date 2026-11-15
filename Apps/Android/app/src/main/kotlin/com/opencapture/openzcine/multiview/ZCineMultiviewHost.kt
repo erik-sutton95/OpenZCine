@@ -2,7 +2,11 @@ package com.opencapture.openzcine.multiview
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -153,13 +157,17 @@ class ZCineMultiview(
     private val decoding = BooleanArray(TILE_COUNT)
     private val attached = BooleanArray(TILE_COUNT)
 
-    /** When each tile's camera began its current take (Nikon reports no take length). */
-    private val recordingSince = arrayOfNulls<Long>(TILE_COUNT)
+    /** Each tile's camera model as GetDeviceInfo reported it on its current link (kept while it reconnects). */
+    private val models = mutableStateListOf<String>().apply { repeat(TILE_COUNT) { add("") } }
     private var listenedNow: List<NikonSighting> = emptyList()
     private val listening: Job
 
     /** The open settings editor and its tile. */
     var editor: Pair<Int, MulticamCameraEditor>? by mutableStateOf(null)
+        private set
+
+    /** The open editor's last command note (a refusal or error), as Pocket's popup shows it. */
+    var editorNote: String? by mutableStateOf(null)
         private set
 
     /** The tile lent to the single-camera Live View. */
@@ -260,11 +268,8 @@ class ZCineMultiview(
             pictures[slot].attach(scope, environment.lookRenderer, FeedLutSelection.BuiltIn(FeedLut.NLOG_709))
         }
         applyLUT(slot)
-        if (frame.isRecording) {
-            if (recordingSince[slot] == null) recordingSince[slot] = environment.clock()
-        } else {
-            recordingSince[slot] = null
-        }
+        val model = links[slot].transport?.let { it.session.state.value as? CameraSessionState.Connected }?.identity?.model
+        if (!model.isNullOrBlank() && models[slot] != model) models[slot] = model
         val stamp = environment.clock() / READINGS_REFRESH_MILLIS
         if (revisions[slot] != stamp) revisions[slot] = stamp
         if (frame.jpegData.isNotEmpty()) decode(slot, frame.jpegData)
@@ -336,6 +341,7 @@ class ZCineMultiview(
     private fun retireEditor() {
         val open = editor ?: return
         editor = null
+        editorNote = null
         open.second.retire()
         coordinator.editorLeases.close(coordinator.members[open.first].entryID)
     }
@@ -378,8 +384,11 @@ class ZCineMultiview(
     override fun memberChanged(slot: Int, change: MultiviewMemberChange) {
         if (editor?.first == slot) retireEditor()
         if (change != MultiviewMemberChange.CONTROL) {
+            // The previous camera's last frame never shows again (a LUT toggle re-bakes it).
+            pictures[slot].clear()
+            pending[slot] = null
             shown[slot] = null
-            recordingSince[slot] = null
+            models[slot] = ""
         }
     }
 
@@ -402,16 +411,17 @@ class ZCineMultiview(
         val format = listOfNotNull(properties.resolution, properties.frameRate?.let { "${it}p" }, properties.codec)
             .joinToString(" · ")
         val timecode = link.timecode?.takeIf { it.on }?.let { MonitorTimecodeFormat.label(it.hour, it.minute, it.second) }
-        val seconds = recordingSince[slot]?.let { ((environment.clock() - it) / 1_000).toInt().coerceAtLeast(0) }
         val hasPicture = shown[slot] != null
         return MultiviewTileReadings(
             name = name,
-            model = coordinator.members[slot].address,
+            model = models[slot],
             format = format,
             storage = snapshot.storage.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
             timecode = timecode,
             readouts = readouts(properties),
-            recordingSeconds = seconds,
+            // The camera's own take length, as Pocket shows it: a Z body reports none, so the tally
+            // reads REC (never a phone-derived count).
+            recordingSeconds = null,
             power = snapshot.power,
             hasPicture = hasPicture,
             accessibilityValue = if (hasPicture) "Live" else "Waiting",
@@ -441,11 +451,15 @@ class ZCineMultiview(
     override fun cameraSettings(slot: Int): MultiviewCameraSettingsState? {
         val open = editor ?: return null
         if (open.first != slot || links[slot].control == null) return null
-        return MultiviewCameraSettingsState(categories(slot), recording = links[slot].recordReport?.recording == true)
+        return MultiviewCameraSettingsState(
+            categories(slot), recording = links[slot].recordReport?.recording == true, note = editorNote,
+        )
     }
 
     override fun admitsControls(slot: Int): Boolean =
         links[slot].transport != null && !links[slot].lent && lentSlot != slot
+
+    override val pickerGuidance: String get() = PICKER_GUIDANCE
 
     // MultiviewScreenHost
 
@@ -477,6 +491,10 @@ class ZCineMultiview(
         close: () -> Unit,
     ) {
         val open = editor?.takeIf { it.first == slot }
+        if (open != null && category == MultiviewSettingsCategory.RESOLUTION) {
+            RecordingFormat(slot)
+            return
+        }
         val key = settingKey(category)
         if (open == null || key == null) {
             Unavailable()
@@ -485,6 +503,7 @@ class ZCineMultiview(
         val scope = rememberCoroutineScope()
         val control = remember(open.second) { MonitorControlModel(scope) }
         DisposableEffect(open.second, control) {
+            control.onNote = { note -> if (editor === open) editorNote = note }
             control.bind(open.second.session)
             onDispose { control.unbind() }
         }
@@ -497,6 +516,31 @@ class ZCineMultiview(
             control, field, enabled = !locked,
             modifier = Modifier.heightIn(max = maxHeight.dp).testTag("multiview.settings.${key.identifier}"),
         )
+    }
+
+    /**
+     * The Format tab: the recording format as the body reports it. Nikon's common session writes no
+     * movie format (resolution, frame rate and codec change on the camera), so the tab reads it back.
+     */
+    @Composable
+    private fun RecordingFormat(slot: Int) {
+        revisions[slot]
+        val properties = links[slot].reported
+        val rows = listOf(
+            "Resolution" to properties.resolution,
+            "Frame rate" to properties.frameRate?.let { "${it}p" },
+            "Codec" to properties.codec,
+            "Tone" to links[slot].recordingTone?.label,
+        )
+        Column(Modifier.fillMaxWidth().testTag("multiview.settings.format"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for ((title, value) in rows) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(title, style = MonitorTypography.text(13f, FontWeight.Medium), color = MonitorPalette.muted)
+                    Text(value ?: MultiviewTally.UNAVAILABLE, style = MonitorTypography.text(13f, FontWeight.Medium))
+                }
+            }
+            Text(FORMAT_NOTE, style = MonitorTypography.text(12f, FontWeight.Normal), color = MonitorPalette.muted)
+        }
     }
 
     @Composable
@@ -526,6 +570,14 @@ class ZCineMultiview(
 
         private const val READINGS_REFRESH_MILLIS = 500L
 
+        /** The Add camera list's setup steps: Z bodies join the network from their own menus. iOS twin: `pickerGuidance`. */
+        const val PICKER_GUIDANCE: String =
+            "On each camera: Network menu \u2192 Connect to computer, on this phone\u2019s Wi-Fi or hotspot. " +
+                "A camera not yet paired with this phone: pair it in Your cameras first."
+
+        /** Under the Format tab's values. iOS twin: `formatNote`. */
+        const val FORMAT_NOTE: String = "Change the recording format on the camera."
+
         /** The look for a recording tone: N-Log and Log3G10 need theirs, SDR and HLG none. */
         fun look(tone: NikonMovieTone): FeedLut? = when (tone) {
             NikonMovieTone.N_LOG -> FeedLut.NLOG_709
@@ -544,8 +596,9 @@ class ZCineMultiview(
             MultiviewSettingsCategory.WB -> SettingKey.WHITE_BALANCE
             MultiviewSettingsCategory.FOCUS -> SettingKey.FOCUS_MODE
             MultiviewSettingsCategory.APERTURE -> SettingKey.APERTURE
-            MultiviewSettingsCategory.RESOLUTION -> SettingKey.FRAME_RATE
-            MultiviewSettingsCategory.MODE, MultiviewSettingsCategory.COLOR, MultiviewSettingsCategory.AUDIO -> null
+            MultiviewSettingsCategory.RESOLUTION, MultiviewSettingsCategory.MODE, MultiviewSettingsCategory.COLOR,
+            MultiviewSettingsCategory.AUDIO,
+            -> null
         }
 
         /** ISO, shutter, white balance and focus as read back from the camera; unknown stays unknown. */
