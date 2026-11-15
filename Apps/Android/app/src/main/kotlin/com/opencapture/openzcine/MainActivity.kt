@@ -141,9 +141,8 @@ import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonIntegration
 import com.opencapture.opencine.nikon.NikonSavedRecordsV0
-import com.opencapture.openzcine.multicam.MulticamCoordinator
-import com.opencapture.openzcine.multicam.MulticamPickerRow
-import com.opencapture.openzcine.multicam.MulticamStage
+import com.opencapture.openzcine.multiview.ZCineMultiview
+import com.opencapture.openzcine.multiview.ZCineMultiviewScreen
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
@@ -407,7 +406,7 @@ class MainActivity : ComponentActivity() {
                     remember { mutableStateOf(emptyMap<String, MediaLibraryCameraBucket>()) }
                 var mediaCacheRevision by remember { mutableStateOf(0) }
                 val pairingEnvironment = root.pairingEnvironment
-                val multicam = root.multicam
+                val multiview = root.multiview
                 // Debug demo, scripted, settings deep-link and review launches skip the splash so
                 // screenshots stay deterministic.
                 val launchSplash =
@@ -594,8 +593,8 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(sceneState) { shell.setSceneActive(sceneState.isAtLeast(Lifecycle.State.RESUMED)) }
                 LaunchedEffect(monitorSession, activeSavedCamera) {
                     val native = monitorSession ?: return@LaunchedEffect
-                    val borrowed = multicam.lentMember(native)
-                    val common = borrowed?.control ?: shellSessions.acquire(native)
+                    val borrowed = multiview?.lentSession(native) == true
+                    val common = shellSessions.acquire(native)
                     if (shell.state.value.monitor?.session?.id == common.id) return@LaunchedEffect
                     camerasModel.reloadSaved()
                     val saved = camerasModel.state.value.saved.firstOrNull { camera ->
@@ -604,10 +603,12 @@ class MainActivity : ComponentActivity() {
                         id = "monitor:${common.id}", integration = IntegrationID("nikon"),
                         advertisedName = activeSavedCamera?.cameraName ?: "Monitor", model = "")
                     val connected = ConnectedCamera(saved, common, shellSessions.services(native, common))
-                    if (borrowed != null) {
+                    if (borrowed) {
                         shell.borrow(connected) {
                             monitorSession = null
-                            multicam.reclaim()
+                            // The monitor's own common session ends; the member keeps its link.
+                            shellSessions.retire(native)
+                            multiview?.returnLentSession()
                         }
                     } else {
                         shell.present(connected)
@@ -923,9 +924,9 @@ class MainActivity : ComponentActivity() {
                     }
                     fun disconnectToSavedCameraHome(active: CameraSession): (Boolean) -> Unit = disconnect@{ reconnect ->
                             val exitingSession = active
-                            // A multicam member lent to Live View goes back to its tile: the
+                            // A Multiview member lent to Live View goes back to its tile: the
                             // session stays open (no CloseSession) and the stage resumes it.
-                            if (multicam.lentMember(exitingSession) != null) {
+                            if (multiview?.lentSession(exitingSession) == true) {
                                 shell.close()
                                 return@disconnect
                             }
@@ -967,9 +968,9 @@ class MainActivity : ComponentActivity() {
                                 awaitCancellation()
                             } finally {
                                 withContext(NonCancellable) {
-                                    // A multicam member keeps its session for its tile, and a
+                                    // A Multiview member keeps its session for its tile, and a
                                     // recreated activity keeps the root's.
-                                    if (!multicam.owns(active) && !isChangingConfigurations) {
+                                    if (multiview?.owns(active) != true && !isChangingConfigurations) {
                                         disconnectAfterGyroPreparation(
                                             isArmed = gyroCapture.state.value.isArmed,
                                             prepare = gyroCapture::prepareForDisconnect,
@@ -1000,7 +1001,7 @@ class MainActivity : ComponentActivity() {
                         val native = active as? SwiftCoreCameraSession
                         val incidentOwner = native?.connectionOwner
                         val canonicalIncidentConnection = native != null && incidentOwner != null &&
-                            currentSessionState is CameraSessionState.Connected && !multicam.owns(active)
+                            currentSessionState is CameraSessionState.Connected && multiview?.owns(active) != true
                         val incidentProducer = remember(active, incidentOwner, canonicalIncidentConnection) {
                             if (!canonicalIncidentConnection) null else {
                                 val source = AppDiagnostics.incidents.beginBoundSession(
@@ -1076,7 +1077,7 @@ class MainActivity : ComponentActivity() {
                         }
                         val disconnectToSavedCameraHome = disconnectToSavedCameraHome(active)
                         val returnToMulticam: (() -> Unit)? =
-                            if (multicam.lentMember(active) != null) {
+                            if (multiview?.lentSession(active) == true) {
                                 { disconnectToSavedCameraHome(false) }
                             } else {
                                 null
@@ -1097,7 +1098,7 @@ class MainActivity : ComponentActivity() {
                         Box {
                             MonitorScreen(
                                 active,
-                                commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
+                                commonSession = shellSessions.acquire(active),
                                 commonControl = shell.control,
                                 operatorSession = operatorSession,
                                 frameSource = demo?.second ?: uvcSource,
@@ -1216,7 +1217,7 @@ class MainActivity : ComponentActivity() {
                                 ShellModel.Cover.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
-                                        controlSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
+                                        controlSession = shellSessions.acquire(active),
                                         gyro = gyroSource,
                                         assists = assist,
                                         operatorSession = operatorSession,
@@ -1257,9 +1258,7 @@ class MainActivity : ComponentActivity() {
                                                     relayBroadcastEnabled =
                                                         relayBroadcastController.start(
                                                             session = active,
-                                                            common =
-                                                                multicam.lentMember(active)?.control
-                                                                    ?: shellSessions.acquire(active),
+                                                            common = shellSessions.acquire(active),
                                                             frames = frames,
                                                             cameraName =
                                                                 activeSavedCamera
@@ -1292,7 +1291,7 @@ class MainActivity : ComponentActivity() {
                                         cacheStore = mediaCacheStore,
                                         catalogIndex = mediaLibraryIndex,
                                         cameraID = cameraID,
-                                        mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
+                                        mediaService = shellSessions.media(active, shellSessions.acquire(active)),
                                         cameraConnected =
                                             currentSessionState is CameraSessionState.Connected,
                                         connectionOwner =
@@ -1457,8 +1456,8 @@ class MainActivity : ComponentActivity() {
                                 diagnostics = { systemSettingsActions.shareDiagnostics() },
                                 reportProblem = { showProblemReport = true },
                                 watchFeed = openWatcherBrowse,
-                                multiview = if (MulticamCoordinator.TILES > 1) {
-                                    { camerasModel.consent.retire(); multicam.begin() }
+                                multiview = if (ZCineMultiview.TILE_COUNT > 1) {
+                                    { camerasModel.consent.retire(); root.openMultiview() }
                                 } else null,
                                 integrationAction = { cameraID, action ->
                                     when (action) {
@@ -1489,7 +1488,7 @@ class MainActivity : ComponentActivity() {
                         monitor = { live ->
                             // A session handed over but not yet presented, or one already gone: nothing until
                             // the app's session and the shell's monitor agree.
-                            val common = monitored?.let { multicam.lentMember(it)?.control ?: shellSessions.acquire(it) }
+                            val common = monitored?.let { shellSessions.acquire(it) }
                             if (monitored != null && common?.id == live.session.id) CameraMonitor(monitored)
                         },
                         page = { cover ->
@@ -1549,36 +1548,22 @@ class MainActivity : ComponentActivity() {
                             emptyMessage = "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked.",
                         )
                     }
-                    if (multicam.presented) {
-                        com.opencapture.opencine.appkit.MultiviewStageVisibility(monitored == null && !standaloneMedia) {
-                            MulticamStage(
-                                coordinator = multicam,
-                                confirmsRecord = operatorSettings.recordConfirmationEnabled.value,
-                                pickerRows = {
-                                    val usb = pairingEnvironment.usbCameraSource?.cameras?.value.orEmpty()
-                                    savedCameras.filter { record -> multicam.members.none { it.record.host == record.host } }
-                                        .map { record ->
-                                            // Network setups are dialled on Add (an operator action, not a
-                                            // discovery probe); USB-C needs the body attached and permitted.
-                                            val reachable =
-                                                record.transport != SavedCameraTransport.USB_C ||
-                                                    usb.any { it.hostKey == record.host && it.access == UsbPtpCameraAccess.READY }
-                                            MulticamPickerRow(record, multicam.refusal(record, reachable))
-                                        }
-                                },
-                                openLiveView = { id ->
-                                    multicam.lend(id)?.let { session ->
-                                        activeSavedCamera = multicam.member(id)?.record
-                                        monitorSession = session
-                                    }
-                                },
-                                close = multicam::end,
+                    multiview?.let { stage ->
+                        // A monitor that is not this stage's loan covers it, as Media does.
+                        com.opencapture.opencine.appkit.MultiviewStageVisibility(
+                            !standaloneMedia && (monitored == null || stage.lentSlot != null),
+                        ) {
+                            ZCineMultiviewScreen(
+                                stage,
+                                recordConfirmation = { operatorSettings.recordConfirmationEnabled.value },
+                                endLiveView = { shell.close() },
+                                onClose = root::closeMultiview,
                             )
                         }
                     }
                     if (monitored == null && !standaloneMedia) {
                         MonitorLaunchSplash(LAUNCH_BRAND, launchSplash)
-                        if (!launchSplash.visible && !multicam.presented && localReview == null) {
+                        if (!launchSplash.visible && multiview == null && localReview == null) {
                             MonitorAutomaticReportsOffer(
                                 MonitorReportsOffer(
                                     AppDiagnostics.consent, AppDiagnostics.reporting, AppDiagnostics.host.product,

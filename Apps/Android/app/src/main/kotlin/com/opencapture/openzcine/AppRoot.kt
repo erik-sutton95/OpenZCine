@@ -18,9 +18,19 @@ import com.opencapture.openzcine.media.NikonMediaDelivery
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.media.MediaLibraryIndex
 import com.opencapture.openzcine.media.SharedPreferencesMediaLibraryPreferences
-import com.opencapture.openzcine.multicam.MulticamCoordinator
-import com.opencapture.openzcine.multicam.multicamDecoder
-import com.opencapture.openzcine.multicam.multicamLink
+import com.opencapture.openzcine.multicam.multicamLookRendererFactory
+import com.opencapture.openzcine.multiview.ZCineMemberTransport
+import com.opencapture.openzcine.multiview.ZCineMultiview
+import com.opencapture.openzcine.multiview.ZCineMultiviewEnvironment
+import com.opencapture.openzcine.transport.CameraListDiscovery
+import com.opencapture.opencine.appkit.MultiviewStagePreferencesStore
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.NikonMultiview
+import com.opencapture.opencine.nikon.NikonMultiviewSavedSetup
+import com.opencapture.opencine.nikon.NikonSighting
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.platform.SharedWiFiPath
+import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.opencine.nikon.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
@@ -28,7 +38,10 @@ import com.opencapture.openzcine.pairing.realPairingEnvironment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 /**
@@ -105,28 +118,91 @@ internal class AppRoot(
             }
 
     /**
-     * Multicam (NIKON-01): up to four bodies on the shared OpenCineMulticam engine, each on its own
-     * saved-profile session beside the single-camera monitor.
+     * Multiview (Plan 6): OpenCine's shared Multiview over up to four Z bodies, each on its own
+     * saved-profile session beside the single-camera monitor. One per opened stage; null while
+     * Multiview is closed.
      */
-    val multicam =
-        MulticamCoordinator(
-            scope = scope,
-            connect = { record -> withContext(Dispatchers.IO) { multicamLink(record, pairingEnvironment) } },
-            decoder = ::multicamDecoder,
-            lookRenderer = com.opencapture.openzcine.multicam.multicamLookRendererFactory(lutLibrary),
-            operatorLook = { persistedMonitorLut(app, lutLibrary::contains) },
-            lutLibrary = lutLibrary,
-        ).also {
-            val store = com.opencapture.opencine.appkit.MultiviewStagePreferencesStore(
-                app.getSharedPreferences("multiview-presentation", Context.MODE_PRIVATE), "stage",
-            )
-            it.presentation.attachPersistence(store::load, store::save)
+    var multiview by mutableStateOf<ZCineMultiview?>(null)
+        private set
+    private val multiviewDiscovery by lazy { CameraListDiscovery() }
+    private val multiviewPath by lazy { SharedWiFiPath(app) }
+
+    /**
+     * Opens Multiview (the stage starts when its screen appears); an open stage stays as it is.
+     * [environment] replaces the platform's for an instrumented test's scripted bodies.
+     */
+    fun openMultiview(environment: ZCineMultiviewEnvironment? = null): ZCineMultiview {
+        multiview?.let { return it }
+        val stage = ZCineMultiview(environment ?: multiviewEnvironment(), scope)
+        stage.lendToLiveView = { slot, transport ->
+            val host = NikonMultiview.address(stage.links[slot].host)
+            activeSavedCamera = savedCameraStore.current.firstOrNull { NikonMultiview.address(it.host) == host }
+            monitorSession = transport.session
+            true
         }
+        multiview = stage
+        return stage
+    }
+
+    /** The stage closed: every member link is closed (never a record command). */
+    fun closeMultiview() {
+        val stage = multiview ?: return
+        multiview = null
+        stage.dispose()
+    }
+
+    private fun multiviewEnvironment() = ZCineMultiviewEnvironment(
+        connect = { host -> connectMultiviewMember(host) },
+        currentHolder = { host -> multiviewDiscovery.currentHolder(host) },
+        sightings = { listened, saved, excluded -> multiviewDiscovery.multiviewSightings(listened, saved, excluded) },
+        // The app's own NSD rows; the passive pass adds presence and saved-host liveness.
+        listened = pairingEnvironment.hotspotCameras.map { rows ->
+            rows.map { row ->
+                if (row.isHeldByAnotherDevice) {
+                    NikonSighting(row.host, row.name, NikonSighting.Source.HELD_BY_ANOTHER_DEVICE, row.heldByDeviceName)
+                } else {
+                    NikonSighting(row.host, row.name, NikonSighting.Source.NETWORK)
+                }
+            }
+        },
+        // Router and phone-hotspot setups only: USB-C and the camera's own Wi-Fi cannot share a network.
+        saved = {
+            savedCameraStore.current.filter { ZCineMultiview.joinsMultiview(it.transport) }.map {
+                NikonMultiviewSavedSetup(it.host, it.customName?.takeIf(String::isNotBlank) ?: it.cameraName)
+            }
+        },
+        hostPath = multiviewPath,
+        decoder = {
+            val decoder = MonitorJpegFrameDecoder(maxLongSide = TILE_LONG_SIDE)
+            ({ jpeg -> decoder.decode(jpeg) })
+        },
+        lookRenderer = multicamLookRendererFactory(lutLibrary),
+        presentationStore = MultiviewStagePreferencesStore(
+            app.getSharedPreferences(ZCineMultiview.PRESENTATION_PREFERENCES, Context.MODE_PRIVATE),
+            ZCineMultiview.PRESENTATION_KEY,
+        ),
+    )
+
+    /** A member's own strict saved-profile session at [host]; closed again when it does not connect. */
+    private suspend fun connectMultiviewMember(host: String): ZCineMemberTransport {
+        val session = withContext(Dispatchers.IO) { pairingEnvironment.createSavedProfileSession(host) }
+        try {
+            session.connect()
+            check(session.state.value is CameraSessionState.Connected) { "Could not connect" }
+        } catch (error: Throwable) {
+            withContext(NonCancellable) { session.disconnect() }
+            throw error
+        }
+        return ZCineMemberTransport(session, (session as? SwiftCoreCameraSession)?.liveFrames?.frames ?: emptyFlow())
+    }
 
     override fun close() {
+        closeMultiview()
         mediaDeliveryCoordinator.close()
         deliveryScope.cancel()
         pairingEnvironment.usbCameraSource?.close()
         scope.cancel()
     }
 }
+
+private const val TILE_LONG_SIDE = 960
