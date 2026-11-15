@@ -2,14 +2,52 @@ import Foundation
 import OpenZCineCore
 import UIKit
 
-/// A real member link: the same PTP session type the single-camera monitor runs.
-extension NativeCameraSession: MulticamMemberLink {
-    func configureMemberLiveView() async { await configureLiveView() }
+/// One member's PTP session as the shared Multiview's Nikon link runs it: the app's real
+/// `NativeCameraSession`, or a scripted body in the demo stage and the tests. One box per opened
+/// session, so the link can tell the session it lent to Live View from a replacement.
+final class ZCineMemberTransport: NikonMultiviewTransport, @unchecked Sendable {
+    // SAFETY: `@unchecked Sendable`: immutable; `base` is itself Sendable.
+    let base: any NikonMultiviewTransport
+
+    init(_ base: any NikonMultiviewTransport) { self.base = base }
+
+    /// The real session behind the box, for the single-camera Live View the member is lent to.
+    var session: NativeCameraSession? { base as? NativeCameraSession }
+
+    var serialNumber: String { base.serialNumber }
+    var commandOwner: NikonCommandOwner? { base.commandOwner }
+    func configureMemberLiveView() async { await base.configureMemberLiveView() }
+    func startLiveView() async throws { try await base.startLiveView() }
+    func stopLiveView() async { await base.stopLiveView() }
+    func liveViewFrame(deadline: Duration?) async throws -> PTPLiveViewFrame {
+        try await base.liveViewFrame(deadline: deadline)
+    }
+    func readStorageInfo() async throws -> PTPStorageInfo? { try await base.readStorageInfo() }
+    func shutdown() async { await base.shutdown() }
+    func readCameraProperty(_ property: PTPPropertyCode) async throws -> Data {
+        try await base.readCameraProperty(property)
+    }
+    func writeCameraProperty(_ write: PTPCameraPropertyWrite) async throws {
+        try await base.writeCameraProperty(write)
+    }
+    func writeCameraProperty(_ write: PTPCameraPropertyWrite, admission: NikonCommandAdmission)
+        async throws
+    {
+        try await base.writeCameraProperty(write, admission: admission)
+    }
+    func startRecording() async throws { try await base.startRecording() }
+    func startRecording(admission: NikonCommandAdmission) async throws {
+        try await base.startRecording(admission: admission)
+    }
+    func stopRecording() async throws { try await base.stopRecording() }
+    func stopRecording(admission: NikonCommandAdmission) async throws {
+        try await base.stopRecording(admission: admission)
+    }
 }
 
-/// A scripted Z body for the demo stage (`ZC_DEMO_MULTICAM`) and the coordinator tests. It answers
-/// like a body on its own link: writes land and read back, record flips the frame header.
-final class DemoMulticamLink: MulticamMemberLink, @unchecked Sendable {
+/// A scripted Z body for the demo stage (`ZC_DEMO_MULTICAM`) and the host tests. It answers like a
+/// body on its own link: writes land and read back, record flips the frame header.
+final class DemoMulticamLink: NikonMultiviewTransport, @unchecked Sendable {
     struct Refusal: Error {}
 
     let serialNumber: String
@@ -25,7 +63,10 @@ final class DemoMulticamLink: MulticamMemberLink, @unchecked Sendable {
     var dropsFrames = false
     var frameInterval: Duration = .milliseconds(40)
 
-    init(serialNumber: String, iso: UInt32 = 800, battery: UInt8 = 80, recording: Bool = false) {
+    init(
+        serialNumber: String, iso: UInt32 = 800, battery: UInt8 = 80, recording: Bool = false,
+        nLog: Bool = false
+    ) {
         self.serialNumber = serialNumber
         self.recording = recording
         jpeg = UIImage(named: "MockFeed")?.jpegData(compressionQuality: 0.6) ?? Data()
@@ -41,6 +82,9 @@ final class DemoMulticamLink: MulticamMemberLink, @unchecked Sendable {
             .movieWhiteBalance: Data(ByteCoding.uint16LE(colorTemp)),
             .movieWBColorTemp: Data(ByteCoding.uint16LE(5600)),
             .movieFocusMode: Data([1]),
+            // H.265 10-bit with its tone property: N-Log (1) or SDR (0).
+            .movieFileType: Data(ByteCoding.uint32LE(0x0001_0A00)),
+            .movieH265ToneMode: Data([nLog ? 1 : 0]),
         ]
     }
 

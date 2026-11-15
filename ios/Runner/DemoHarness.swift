@@ -1164,45 +1164,62 @@ enum DemoHarness {
             model.showSavedCameras()
         }
 
-        /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens the multicam stage with that
-        /// many scripted bodies (`DemoMulticamLink`) running the real pumps, plans and member
-        /// queues. `ZC_DEMO_MULTICAM_LAYOUT=grid` picks Grid; `ZC_DEMO_MULTICAM_REC=1` rolls A.
+        /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens Multiview with that many
+        /// scripted bodies (`DemoMulticamLink`) behind the real Nikon member links, coordinator
+        /// and plans. `ZC_DEMO_MULTICAM_LAYOUT=grid` picks Grid; `ZC_DEMO_MULTICAM_REC=1` rolls A.
         @MainActor private static func stageMulticam(
             count: Int, env: [String: String], model: NativeAppModel
         ) {
-            model.beginMulticam()
             let isos: [UInt32] = [800, 400, 1600, 6400]
             let batteries: [UInt8] = [87, 60, 35, 15]
-            model.multicam.connect = { record in
-                let index = Int(record.serialNumber?.suffix(1) ?? "") ?? 0
-                return DemoMulticamLink(
-                    serialNumber: record.serialNumber ?? "", iso: isos[index % 4],
-                    battery: batteries[index % 4])
+            let names = ["Wide", "Close", "High", "Roam"]
+            let bodies = (0..<min(4, max(0, count))).map { index in
+                (
+                    host: "10.0.0.\(20 + index)", name: names[index],
+                    body: DemoMulticamLink(
+                        serialNumber: "300012\(index)", iso: isos[index], battery: batteries[index],
+                        nLog: index % 2 == 0)
+                )
             }
-            if env["ZC_DEMO_MULTICAM_LAYOUT"] == "grid" { model.multicam.arrangement = .grid }
-            let paths: [CameraPath] = [
-                .usbC, .infrastructure(networkName: "Set"), .phoneHotspot,
-                .infrastructure(networkName: "Set"),
-            ]
-            for index in 0..<min(4, max(0, count)) {
-                let name = ["Wide", "Close", "High", "Roam"][index]
-                model.multicam.add(
-                    PTPIPSavedCameraRecord(
-                        host: index == 0 ? "usb:demo-zr" : "10.0.0.\(20 + index)",
-                        displayName: "ZR_300012\(index)",
-                        transport: paths[index].legacyTransportLabel, lastSeenAt: nil,
-                        presentation: PTPIPSavedCameraPresentation(customName: name),
-                        serialNumber: "300012\(index)", path: paths[index]),
-                    reachable: true)
+            let sightings = bodies.map {
+                DiscoveredCamera(ip: $0.host, name: $0.name, source: .bonjour)
+            }
+            model.beginMultiview(
+                environment: ZCineMultiviewEnvironment(
+                    connect: { host in
+                        guard let body = bodies.first(where: { $0.host == host })?.body else {
+                            throw DemoMulticamLink.Refusal()
+                        }
+                        return ZCineMemberTransport(body)
+                    },
+                    currentHolder: { _ in nil },
+                    sightings: { _, excluded in sightings.filter { !excluded.contains($0.ip) } },
+                    saved: { [] }, hostPath: DemoMultiviewPath(),
+                    isCameraRefusal: { _ in false }, presentationStore: nil))
+            guard let stage = model.multiview else { return }
+            if env["ZC_DEMO_MULTICAM_LAYOUT"] == "grid" {
+                stage.coordinator.presentation.layout = .grid
+            }
+            stage.coordinator.start()
+            for (index, demo) in bodies.enumerated() {
+                stage.coordinator.enqueueAdd(
+                    NikonMultiviewCamera(host: demo.host, name: demo.name), slot: index)
             }
             if env["ZC_DEMO_MULTICAM_REC"] == "1" {
                 Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    guard let first = model.multicam.member(atSlot: 0) else { return }
-                    await model.multicam.run(model.multicam.plan(for: first.id))
+                    try? await Task.sleep(for: .seconds(3))
+                    await stage.coordinator.record(
+                        stage.coordinator.recordPlan(slot: 0), together: false)
                 }
             }
         }
+    }
+
+    /// The demo stage's phone: on the scripted bodies' Wi-Fi (10.0.0.10/24) whatever the host has.
+    @MainActor final class DemoMultiviewPath: StationHostPath {
+        func address(hotspot: Bool) -> String? { hotspot ? nil : "10.0.0.10" }
+        func netmask(hotspot: Bool) -> String? { hotspot ? nil : "255.255.255.0" }
+        func join(_ network: StationNetwork) async throws -> String? { nil }
     }
 
     /// Resolves numbered demo stills from the configured local-only feed directory.
