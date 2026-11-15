@@ -39,11 +39,22 @@ other bodies, so they do not join Multiview.
 ## Add a camera
 
 Tap an empty tile's **Add camera**. The list shows bodies the phone sees on its
-network and the router and hotspot setups saved in **Your cameras**. Listing never
-connects to a camera: only the body you pick is opened, and its serial number is
-checked before its picture shows. A body already in Multiview, or in use on another
-phone or tablet, is not listed. Adding a camera never takes a body from another
-device.
+network and the router and hotspot setups saved in **Your cameras**, with the
+camera-menu steps under it. Listing never connects to a camera: only the body you
+pick is opened, and its serial number is checked before its picture shows. A body
+already in Multiview, or in use on another phone or tablet, is not listed; a body
+the other device releases appears on the next pass. Adding a camera never takes a
+body from another device.
+
+When a camera cannot be added the tile says why: **In use on** the other device,
+**not paired with this phone** (pair it in **Your cameras**), **Another camera
+answered at this address**, or that the camera could not be found on the network.
+**Reconnect** opens the same body again: a different body at that address is
+refused, never shown in the tile.
+
+While Multiview is open the app's own camera search and connects stop, so nothing
+else dials the bodies. After Multiview closes, the first single-camera connection
+waits until every body's session has closed and 1.2 seconds have passed.
 
 Bodies that another OpenZCine device holds are left alone: connecting to a Z body
 from a second device ends the first device's session.
@@ -52,15 +63,19 @@ from a second device ends the first device's session.
 
 Layout (**Grid** or **Center stage**), **FIT/FILL**, the collapsible toolbar,
 DISP and Record sit where they are in Live View, as in OpenPocketCine. Each tile
-shows the camera's name, its battery, its free card space, its timecode
-(**HH:MM:SS**, from the camera's live-view header) and its recording state. The
-selected camera's ISO, shutter, white balance and focus mode read along the
-bottom. Unknown values show a dash; nothing is guessed.
+shows the camera's name and model, its battery, its free card space, its timecode
+(**HH:MM:SS**, from the camera's live-view header) and its recording state. A Z
+body reports no take length, so a recording tile reads **REC** without a running
+time (OpenPocketCine shows the camera's own). The selected camera's ISO, shutter,
+white balance and focus mode read along the bottom. Unknown values show a dash;
+nothing is guessed.
 
 **Camera settings** opens the floating settings popup with one tab per camera:
 ISO, shutter, exposure compensation, white balance, focus mode, aperture (where
-the lens reports one) and frame rate, with the same drums as Live View. A change
-goes to that camera only and the camera's own read-back decides what is shown.
+the lens reports one) and Format, with the same drums as Live View. A change goes
+to that camera only and the camera's own read-back decides what is shown; a change
+the camera refuses is explained in the popup. **Format** shows the resolution,
+frame rate, codec and tone the camera records in; change them on the camera.
 Nikon has no mode, color or audio control in the popup.
 
 **Auto LUT starts on for each camera.** It follows the tone the camera records
@@ -90,9 +105,11 @@ session.
 ## Recovery
 
 When a tile's picture stops (three missed frames), Multiview first restarts live
-view on the same session, then reopens the same body at its address. Every
-reopen waits at least 1.2 seconds after the last connection to that body closed,
-and reopens are at least five seconds apart. Each automatic attempt counts
+view on the same session; the restart counts only when a new picture arrives,
+otherwise the same body is reopened at its address. A connection that dropped
+(the session closed) is reopened directly, without the restart. Every reopen
+waits at least 1.2 seconds after the last connection to that body closed, and
+reopens are at least five seconds apart. Each automatic attempt counts
 against the tile's small recovery budget; thirty seconds of healthy picture
 restore it. When the budget is spent the tile shows **Could not restore preview.
 Tap Reconnect to try again.** If another device took the body meanwhile, the tile
@@ -104,9 +121,10 @@ All of this is untested on Z bodies.
 
 ## Close
 
-Closing Multiview ends each camera's session. Cameras stay on their network and
-keep recording; nothing is sent to them on close, and they are not moved back
-anywhere. Use a tile's recording action first if you want to stop a take.
+Closing Multiview ends each camera's session: it stops live view and closes the
+session, and sends no record command. Cameras stay on their network and keep
+recording, and they are not moved back anywhere. Use a tile's recording action
+first if you want to stop a take.
 
 The stage's layout, selection and Fit/Fill are kept from the previous Multiview.
 Cameras are not reconnected when Multiview opens again.
@@ -120,4 +138,7 @@ Cameras are not reconnected when Multiview opens again.
 | Discovery probes the network for the picked camera. | Nothing is probed: a camera is opened only at the address it was seen or saved at. |
 | Closing returns cameras to their own Wi-Fi. | Closing returns nothing: the bodies stay on the network. |
 | Settings popup includes mode, color and audio. | Mode, color and audio are not in the popup. |
+| Format sets resolution, frame rate and codec. | Format shows them; they change on the camera. |
+| A recording tile shows the camera's take time. | A recording tile reads REC: a Z body reports no take length. |
+| The stage's video plays behind the glass controls, and the settings preview is live. | No video behind the controls and a still settings preview: a Z body's live view is a series of JPEG pictures, not a video stream. |
 | Hardware validated on Pocket 3, Pocket 4 Pro and Nano. | Untested on Z bodies. |
