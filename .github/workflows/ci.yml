@@ -468,7 +468,9 @@ jobs:
     needs: changes
     # Skip the Gradle build when nothing under Apps/Android changed.
     if: ${{ needs.changes.outputs.android == 'true' }}
-    runs-on: ubuntu-latest
+    # scripts/ci-install-swift-android.sh installs the Ubuntu 24.04 Swift toolchain, whose
+    # swift-sdk needs libxml2.so.2; ubuntu-latest (26.04) no longer ships it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Three Gradle invocations on parallel runners instead of one serial step. Together they
     # schedule exactly the task graph of `just android-check` plus the release closure (docs/ci.md);
