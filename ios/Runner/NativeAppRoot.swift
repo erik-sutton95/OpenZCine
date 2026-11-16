@@ -994,9 +994,15 @@ final class NativeAppModel {
     var connectedIdentity: NativeCameraIdentity?
     var discoveredCameras: [DiscoveredCamera] = []
     var savedCameras: [PTPIPSavedCameraRecord] = []
-    /// Multicam (NIKON-01): up to four bodies on the shared OpenCineMulticam engine, beside the
-    /// single-camera session. Opened from Your cameras; see `beginMulticam`.
-    let multicam = MulticamCoordinator(isCameraRefusal: NativeCameraSessionError.isCameraRefusal)
+    /// Multiview: up to four bodies on OpenCine's shared Multiview, beside the single-camera
+    /// session. Opened from Your cameras (`beginMultiview`); nil while it is closed.
+    private(set) var multiview: ZCineMultiview?
+    /// Runs from a stage's close until its members' CloseSessions finished and the settle after
+    /// them passed (the ZR releases its PTP slot about 1.2 s after a close): a single-camera
+    /// connect and the discovery loop wait for it, so neither Inits a body a member just left.
+    @ObservationIgnored private var multiviewRelease: Task<Void, Never>?
+    /// The Multiview tile lent to the single-camera monitor, if any.
+    var multiviewLentSlot: Int? { multiview?.lentSlot }
     var startupMode: StartupMode = .savedCameras
     var isIPhoneHotspotBridgeActive = false
     var selectedDiscoveredCameraID: String?
@@ -2607,13 +2613,6 @@ final class NativeAppModel {
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
-        let stageStore = MultiviewStagePreferencesStore(
-            storage: .standard, key: "multiview.presentation")
-        multicam.presentation.attachPersistence(load: stageStore.load, save: stageStore.save)
-        multicam.lutFileStore = lutFileStore
-        multicam.defaultLUT = { [weak self] in
-            self?.assistConfiguration.selectedLUT ?? .builtIn(.nLogRec709)
-        }
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -3956,7 +3955,18 @@ final class NativeAppModel {
     ) {
         // While the multicam stage is up its members own their links: no single-camera connect
         // starts underneath it (a lent member's Live View recovery still may).
-        if multicam.isPresented, multicam.lentMember == nil { return }
+        if multiview != nil, multiviewLentSlot == nil { return }
+        // A stage that just closed: its members' CloseSessions and the settle come first.
+        if multiview == nil, let release = multiviewRelease {
+            Task { [weak self] in
+                await release.value
+                self?.connectToCamera(
+                    discoveredCamera, preservingMonitorSurface: preservingMonitorSurface,
+                    viaCameraAccessPointJoin: viaCameraAccessPointJoin, setup: setup,
+                    takingOverConfirmed: takingOverConfirmed, operatorRequested: operatorRequested)
+            }
+            return
+        }
         // The gate lives at the funnel every path already goes through, not on the row that
         // happens to show the holder — a second entry point to connecting must not be a second
         // way to drop someone else's session without asking.
@@ -3975,7 +3985,7 @@ final class NativeAppModel {
                 source: "native-connect",
                 isCurrent: { [weak self] in
                     guard let self, self.connectionGeneration == generation,
-                        !self.multicam.isPresented || self.multicam.lentMember != nil
+                        self.multiview == nil || self.multiviewLentSlot != nil
                     else { return false }
                     return setup.map { saved in self.savedCameras.contains { $0.id == saved.id } }
                         ?? true
@@ -4286,7 +4296,7 @@ final class NativeAppModel {
                 // gaps — see `isCameraControlSession`.
                 isCameraControlSession = true
                 connectedIdentity = session.identity
-                if !isDemoSession, multicam.lentMember == nil {
+                if !isDemoSession, multiviewLentSlot == nil {
                     gyroCapture.attach(nikonGyro)
                     nikonGyro.connected(session.identity)
                     nikonGyro.receive(snapshot: reportedPropertySnapshot)
@@ -4646,9 +4656,9 @@ final class NativeAppModel {
     }
 
     func disconnect() {
-        // A multicam member lent to Live View goes back to its tile; never CloseSession here.
-        if multicam.lentMember != nil {
-            returnToMulticam()
+        // A Multiview member lent to Live View goes back to its tile; never CloseSession here.
+        if multiviewLentSlot != nil {
+            returnToMultiview()
             return
         }
         // A viewer has no camera session to tear down — it has a socket to a device that does.
@@ -4674,101 +4684,147 @@ final class NativeAppModel {
         startDiscoveryLoop(resetResults: false)
     }
 
-    // MARK: - Multicam (NIKON-01)
+    // MARK: - Multiview
 
-    func beginMulticam() {
-        guard !isStartupActionLocked, cameraSession == nil else { return }
+    /// Opens Multiview: OpenCine's shared stage over four Nikon member links. No commissioner: the
+    /// bodies are already on a router or this phone's hotspot; Add lists passive sightings and
+    /// the saved router and hotspot setups, and only the body picked is opened.
+    func beginMultiview(environment: ZCineMultiviewEnvironment? = nil) {
+        guard !isStartupActionLocked, cameraSession == nil, multiview == nil else { return }
         cameras.consent.retire()
-        multicam.connect = { [weak self] record in
-            guard
-                let requireCurrent = self?.nativeConnectAdmission(),
-                let establish = self?.sessionEstablishmentOperation(
-                    host: record.host, guid: NativeCameraConnectionStore.shared.guid(),
-                    requireCurrent: requireCurrent)
-            else { throw CancellationError() }
-            return try await establish(false, nil)
+        // The stage owns the bodies from here: the single-camera search stops, and a connect,
+        // paired-reconnect watch or setup watch still armed is dropped (none may Init beside it).
+        stopDiscoveryLoop()
+        pendingPairedReconnectHost = nil
+        pendingPairedReconnectSSID = nil
+        pairedReconnectFastPathTask?.cancel()
+        pairedReconnectFastPathTask = nil
+        pendingSetupIntent = nil
+        if isEstablishingConnection || establishmentTask != nil {
+            clearCameraSessionState(resetConnection: true)
         }
-        multicam.pollInterval = { [weak self] isProgram, base in
-            (self?.thermalTier ?? .nominal).multicamPollInterval(isProgram: isProgram, base: base)
+        let stage = ZCineMultiview(environment: environment ?? multiviewEnvironment())
+        stage.recordConfirmation = { [weak self] in
+            self?.preferences.recordConfirmationEnabled ?? true
         }
-        multicam.whiteBalancePresets =
-            CameraPicker.whiteBalance.modes.first { $0.title == "Preset" }?.options ?? []
-        multicam.begin()
+        stage.lendToLiveView = { [weak self] slot, transport in
+            self?.openMultiviewLiveView(slot: slot, transport: transport) ?? false
+        }
+        stage.endLiveView = { [weak self] in self?.returnToMultiview() }
+        stage.stopped = { [weak self] in self?.endMultiview() }
+        stage.liveViewContent = { [weak self] in
+            guard let self else { return AnyView(EmptyView()) }
+            return AnyView(LinkExperience().environment(self))
+        }
+        multiview = stage
         syncScreenWakePolicy()
     }
 
-    /// Closes every member link. Never stops a recording.
-    func endMulticam() {
-        if multicam.lentMember != nil { returnToMulticam() }
-        multicam.end()
-        syncScreenWakePolicy()
+    /// The real stage's platform values: the app's discovery, saved setups and session dial.
+    private func multiviewEnvironment() -> ZCineMultiviewEnvironment {
+        let guid = NativeCameraConnectionStore.shared.guid()
+        return ZCineMultiviewEnvironment(
+            connect: { @MainActor [weak self] host in
+                guard let self else { throw CancellationError() }
+                // No in-place retry: the stage's opener spaces every Init (holder check, settle).
+                let establish = self.sessionEstablishmentOperation(
+                    host: host, guid: guid, retriesInPlace: false,
+                    requireCurrent: self.nativeConnectAdmission())
+                return ZCineMemberTransport(try await establish(false, nil))
+            },
+            currentHolder: { await NativeNikonDiscovery.shared.currentHolder(of: $0) },
+            sightings: { saved, excluded in
+                await NativeNikonDiscovery.shared.multiviewSightings(
+                    savedHosts: saved, excludedHosts: excluded)
+            },
+            saved: { [weak self] in self?.multiviewSavedSetups() ?? [] },
+            hostPath: SharedWiFiPath(),
+            isCameraRefusal: NativeCameraSessionError.isCameraRefusal,
+            whiteBalancePresets: CameraPicker.whiteBalance.modes.first { $0.title == "Preset" }?
+                .options ?? [],
+            framePace: { [weak self] isProgram in
+                .milliseconds(
+                    Int(
+                        1_000
+                            * (self?.thermalTier ?? .nominal).multicamPollInterval(
+                                isProgram: isProgram, base: 1.0 / 24.0)))
+            },
+            lutFileStore: lutFileStore)
     }
 
-    /// One row per saved body; members are omitted, the rest say why they cannot join.
-    func multicamPickerRows() -> [MulticamPickerRow] {
-        let hotspots = NativeNetworkInterfaceSnapshot.hotspotSubnetBases()
-        let availability = { (record: PTPIPSavedCameraRecord) in
-            SavedCameraAvailabilityPolicy.resolve(
-                camera: record, discoveredCameras: self.discoveredCameras,
-                connectedHost: self.connectedIdentity?.host,
-                onCameraAccessPoint: self.isOnCameraAccessPointNetwork,
-                hotspotSubnetBases: hotspots)
-        }
-        let members = Set(multicam.members.compactMap(\.device))
-        return SavedCameraPathGroups.group(savedCameras).compactMap { group in
-            guard
-                let active = SavedCameraPathGroups.activePath(
-                    in: group, availability: availability)
-            else { return nil }
-            if let device = NikonMulticamPolicy.device(serialNumber: active.serialNumber),
-                members.contains(device)
-            {
-                return nil
+    /// The saved router and hotspot setups Multiview's Add list offers (USB-C and camera
+    /// access-point setups cannot share a network with other bodies).
+    func multiviewSavedSetups() -> [NikonMultiviewSavedSetup] {
+        savedCameras.compactMap { record in
+            switch record.path?.kind {
+            case .infrastructure?, .phoneHotspot?:
+                NikonMultiviewSavedSetup(host: record.host, name: record.displayTitle)
+            default: nil
             }
-            let reachable: Bool
-            if case .offline = availability(active) { reachable = false } else { reachable = true }
-            return MulticamPickerRow(
-                record: active, refusal: multicam.refusal(for: active, reachable: reachable))
         }
     }
 
-    /// Whether the single-camera monitor is showing a lent multicam member.
-    var isMulticamLiveView: Bool { multicam.lentMember != nil && isMonitorPresented }
+    /// The stage stopped (its close or the app's): Multiview goes away. Never stops a recording.
+    func endMultiview() {
+        if multiviewLentSlot != nil { returnToMultiview() }
+        guard let stage = multiview else { return }
+        multiview = nil
+        let previous = multiviewRelease
+        multiviewRelease = Task { [weak self] in
+            await previous?.value
+            for link in stage.links { await link.awaitClosed() }
+            try? await Task.sleep(for: NikonMemberTiming.reconnectSettle)
+            guard let self else { return }
+            self.multiviewRelease = nil
+            if self.multiview == nil { self.startDiscoveryLoop(resetResults: false) }
+        }
+        syncScreenWakePolicy()
+    }
 
-    /// Opens one member's full Live View on its own open link: the member's stage pump stands
-    /// down (the monitor pumps the link now) and the other members keep streaming.
-    func openMulticamLiveView(_ id: MonitorEntryID) {
-        guard cameraSession == nil, let member = multicam.member(id),
-            let link = multicam.lend(id)
-        else { return }
-        guard let session = link as? NativeCameraSession else {
-            multicam.reclaim(link)
-            return
+    /// Whether the single-camera monitor is showing a lent Multiview member.
+    var isMultiviewLiveView: Bool { multiviewLentSlot != nil && isMonitorPresented }
+
+    /// Opens one member's full Live View on its own open session: the member's tile pump stands
+    /// down (the monitor pumps the session now) and the other members keep streaming.
+    func openMultiviewLiveView(slot: Int, transport: ZCineMemberTransport) -> Bool {
+        guard cameraSession == nil, let stage = multiview, let session = transport.session else {
+            return false
         }
         cameraSession = session
         bindMonitorRuntime(session)
         isCameraControlSession = true
         connectedIdentity = session.identity
-        activeSessionPath = member.record.path
+        // The member's saved router or hotspot setup, so Live View keeps its stream preset.
+        let host = NikonMultiview.address(stage.links[slot].host)
+        activeSessionPath =
+            savedCameras.first { record in
+                switch record.path?.kind {
+                case .infrastructure?, .phoneHotspot?: NikonMultiview.address(record.host) == host
+                default: false
+                }
+            }?.path
         startKeepAlive(session: session)
         startEventDraining(session: session)
         startLinkHealthMonitoring()
-        cameraState = cameraState.updating(cameraName: member.displayName)
+        if let name = stage.coordinator.cameraName(slot: slot) {
+            cameraState = cameraState.updating(cameraName: name)
+        }
         connection = .connected
         connectionPhase = .connected
         isMonitorPresented = true
         Task {
             // The monitor starts live view as it does on a fresh session.
             await session.stopLiveView()
-            guard multicam.lentMember == id, cameraSession === session else { return }
+            guard multiviewLentSlot == slot, cameraSession === session else { return }
             enterLiveView()
         }
+        return true
     }
 
-    /// Return to Multicam: the monitor stands down without CloseSession and hands the link (or
+    /// Return to Multiview: the monitor stands down without CloseSession and hands the session (or
     /// the replacement a recovery opened) back to the member's tile.
-    func returnToMulticam() {
-        guard multicam.lentMember != nil else { return }
+    func returnToMultiview() {
+        guard let stage = multiview, stage.lentSlot != nil else { return }
         if shell.monitor?.isBorrowed == true {
             shell.close()
             return
@@ -4782,7 +4838,7 @@ final class NativeAppModel {
         connectionPhase = .idle
         Task {
             await retirement?.value
-            multicam.reclaim(lent)
+            stage.returnFromLiveView(session: lent)
         }
     }
 
@@ -5939,7 +5995,11 @@ final class NativeAppModel {
     }
 
     private func startDiscoveryLoop(resetResults: Bool) {
-        guard discoveryLoopTask == nil, !isConnected, !isDemoSession else { return }
+        // Multiview's members own their bodies while it is open (and until their closes settle):
+        // no single-camera search, active or passive, dials beside them.
+        guard discoveryLoopTask == nil, !isConnected, !isDemoSession, multiview == nil,
+            multiviewRelease == nil
+        else { return }
         // Cable events refresh the list the moment they happen — the loop's own cadence backs
         // off to 30 s once a camera is found, far too slow for "I just pulled the plug".
         USBCameraDeviceBrowser.shared.onDeviceListChanged = { [weak self] in
@@ -7021,6 +7081,7 @@ final class NativeAppModel {
         host: String,
         guid: Data,
         onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil,
+        retriesInPlace: Bool = true,
         requireCurrent: @escaping @MainActor @Sendable () throws -> Void
     ) -> @MainActor (Bool, NativePairingChallengeHandler?) async throws -> NativeCameraSession {
         let logger = connectionLogger
@@ -7054,7 +7115,8 @@ final class NativeAppModel {
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
-                    where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
+                    where retriesInPlace && NativeCameraSession.isBusyEstablishFailure(error)
+                    && !requestPairing
                 {
                     try requireCurrent()
                     // "Another initiator holds me." The one case this clears by itself is the
@@ -7079,7 +7141,8 @@ final class NativeAppModel {
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
-                    where NativeCameraSession.isRetryableEstablishFailure(
+                    where retriesInPlace
+                    && NativeCameraSession.isRetryableEstablishFailure(
                         error, requestPairing: requestPairing)
                 {
                     try requireCurrent()
@@ -7278,8 +7341,8 @@ final class NativeAppModel {
     ) {
         // A lent multicam member returns to its tile instead of closing; a recovery
         // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
-        if multicam.lentMember != nil, !preserveMonitorSurface {
-            returnToMulticam()
+        if multiviewLentSlot != nil, !preserveMonitorSurface {
+            returnToMultiview()
             return
         }
         if !preserveMonitorSurface, !gyroPreparationCompleted {
@@ -13854,7 +13917,7 @@ extension NativeAppModel {
         feedIncidentProducer?.end()
         feedIncidentProducer = nil
         // Lent multicam, demo and editor shells never retire a canonical incident source.
-        if multicam.lentMember == nil, !isDemoSession {
+        if multiviewLentSlot == nil, !isDemoSession {
             let source = ReliabilityDiagnostics.incidents.beginBoundSession(
                 ReliabilityDiagnostics.incidents.sessionContext(cameraFamily: "nikon"))
             feedIncidentProducer = NikonFeedIncidentProducer(source: source)
@@ -13862,7 +13925,7 @@ extension NativeAppModel {
         if let monitorRuntime {
             monitorRuntime.replaceLink(session)
         } else {
-            let runtime = NikonMonitorRuntime(link: session, ownsLink: multicam.lentMember == nil)
+            let runtime = NikonMonitorRuntime(link: session, ownsLink: multiviewLentSlot == nil)
             runtime.onReadback = { [weak self, weak runtime] write, readback in
                 guard let self, monitorRuntime === runtime else { return }
                 if let readback { applyCameraRead(write.property, readback) }
@@ -13917,8 +13980,8 @@ extension NativeAppModel {
             legacy: NikonSavedRecordsV0.cameras(from: savedCameras))
         let camera = ConnectedCamera(
             saved: saved, session: controlSession, services: currentMediaServices())
-        if multicam.lentMember != nil {
-            shell.borrow(camera) { [weak self] in self?.returnToMulticam() }
+        if multiviewLentSlot != nil {
+            shell.borrow(camera) { [weak self] in self?.returnToMultiview() }
         } else {
             shell.present(camera)
         }
@@ -14495,20 +14558,12 @@ struct NativeRootContent: View {
             review
         } else {
             ZStack {
-                if model.multicam.isPresented {
-                    MulticamStage(
-                        coordinator: model.multicam,
-                        confirmsRecord: model.preferences.recordConfirmationEnabled,
-                        pickerRows: model.multicamPickerRows,
-                        openLiveView: model.openMulticamLiveView,
-                        close: model.endMulticam
-                    )
-                    .multiviewStageVisible(model.shell.monitor == nil)
-                    .opacity(model.shell.monitor == nil ? 1 : 0)
-                    .allowsHitTesting(model.shell.monitor == nil)
-                    .accessibilityHidden(model.shell.monitor != nil)
-                }
-                if !model.multicam.isPresented || model.shell.monitor != nil {
+                // Multiview's Live View shows the shell inside the shared screen (its Live View
+                // cover), so the shell keeps one mount.
+                if let stage = model.multiview {
+                    MultiviewScreen(coordinator: stage.coordinator, host: stage)
+                        .preferredColorScheme(.dark)
+                } else {
                     LinkExperience()
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
@@ -15466,7 +15521,7 @@ extension NativeAppModel {
             isConnected && (cameraSession != nil || isDemoSession) && isMonitorPresented
                 && UIApplication.shared.applicationState == .active
                 && (isDemoSession || videoSource != .relay)
-                && !multicam.isPresented && multicam.lentMember == nil)
+                && multiview == nil)
     }
 }
 

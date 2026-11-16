@@ -109,4 +109,15 @@ internal class CameraListDiscovery(
 
     /** The device holding [host] now, from a fresh presence sweep outside the list's window. */
     suspend fun currentHolder(host: String): String? = discovery.currentHolder(host)
+
+    /**
+     * One passive pass of Multiview's Add list: the app's [listened] rows, the presence sweep and
+     * liveness dials of [savedHosts], never a control-port dial; [excludedHosts] are neither dialled
+     * nor listed.
+     */
+    suspend fun multiviewSightings(
+        listened: List<com.opencapture.opencine.nikon.NikonSighting>,
+        savedHosts: Collection<String>,
+        excludedHosts: Set<String>,
+    ): List<com.opencapture.opencine.nikon.NikonSighting> = discovery.multiviewSightings(listened, savedHosts, excludedHosts)
 }

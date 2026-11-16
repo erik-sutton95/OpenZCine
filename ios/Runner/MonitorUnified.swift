@@ -578,8 +578,9 @@ struct NikonMonitorShell: View {
                     ? model.observedLiveAudioLevels.map { .init(levels: $0, caption: nil) } : nil
             },
             readOnly: { model.relayControlSurrendered },
-            borrowed: { model.isMulticamLiveView },
-            returnToStage: model.isMulticamLiveView ? (model.returnToMulticam as () -> Void) : nil,
+            borrowed: { model.isMultiviewLiveView },
+            returnToStage: model.isMultiviewLiveView
+                ? (model.returnToMultiview as () -> Void) : nil,
             coverOpen: { model.activePanel?.coversFullScreen == true },
             note: Binding(get: { model.monitorNote }, set: { model.monitorNote = $0 }),
             settings: { model.activePanel = .settings }, media: model.openMediaBrowser)
