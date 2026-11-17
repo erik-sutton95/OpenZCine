@@ -131,6 +131,7 @@ object SwiftCore {
         stillsToneMode: String?,
         unitOrdinal: Int,
         monitorPercent: Float,
+        highlight: Boolean,
     ): Float
 
     /**
@@ -144,6 +145,7 @@ object SwiftCore {
         stillsToneMode: String?,
         unitOrdinal: Int,
         editorValue: Float,
+        highlight: Boolean,
     ): Float
 
     /**

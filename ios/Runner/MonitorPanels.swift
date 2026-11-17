@@ -619,10 +619,14 @@ struct DrumSideAdjustButton: View {
             highlight ? \.zebraHighlightIRE : \.zebraMidtoneIRE
         let threshold = Binding(
             get: {
-                unit.displayValue(for: assist[keyPath: level], mapping: mapping)
+                unit.displayValue(
+                    for: assist[keyPath: level], mapping: mapping, highlight: highlight)
             },
             set: {
-                let ire = unit.monitorPercent(fromDisplay: $0, mapping: mapping)
+                // A highlight typed above the camera's white (N-Log 245 over 234) keeps its
+                // code instead of snapping back to white (#393).
+                let ire = unit.monitorPercent(
+                    fromDisplay: $0, mapping: mapping, highlight: highlight)
                 // In place, so observers hear it even when the level is unchanged (a plain set
                 // skips equal values): a native code past the curve's clip then redraws as the
                 // threshold it maps to.
