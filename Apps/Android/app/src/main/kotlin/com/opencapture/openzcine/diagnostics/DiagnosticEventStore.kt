@@ -72,6 +72,13 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     USB_HANDSHAKE_READ("usb.handshake.read"),
     USB_HANDSHAKE_TIMEOUT("usb.handshake.timeout"),
     USB_HANDSHAKE_CLOSED("usb.handshake.closed"),
+    // A failed bulk-in read, split by how it ended. Android's bulkTransfer returns -1 both when
+    // the camera sent nothing for the whole wait and when the pipe failed early (issue #562), so
+    // `usb.handshake.read` alone could not say which.
+    USB_BULK_IN_TIMEOUT("usb.bulk-in.timeout"),
+    USB_BULK_IN_ERROR("usb.bulk-in.error"),
+    /** The early failure cleared after the pipe was reset and the read retried. */
+    USB_BULK_IN_RECOVERED("usb.bulk-in.recovered"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
     // Object star-rating writes. The vocabulary stays closed (no wire code leaks into the log);
@@ -158,6 +165,9 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "usb.handshake.read" -> USB_HANDSHAKE_READ
                 "usb.handshake.timeout" -> USB_HANDSHAKE_TIMEOUT
                 "usb.handshake.closed" -> USB_HANDSHAKE_CLOSED
+                "usb.bulkIn.timeout" -> USB_BULK_IN_TIMEOUT
+                "usb.bulkIn.error" -> USB_BULK_IN_ERROR
+                "usb.bulkIn.recovered" -> USB_BULK_IN_RECOVERED
                 "failed.scannerRecognizer" -> SCANNER_RECOGNIZER_UNAVAILABLE
                 "failed.scannerRecognizerUnsupported" -> SCANNER_RECOGNIZER_UNSUPPORTED
                 "liveViewFailed" -> LIVE_VIEW_FAILED
