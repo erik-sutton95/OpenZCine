@@ -312,4 +312,31 @@ class DiagnosticEventStoreTest {
             AndroidDiagnosticEvent.fromPhase("usb.handshake.write"),
         )
     }
+
+    @Test
+    fun `a failed bulk-in read says whether it timed out, errored or recovered`() {
+        // Issue #562: `usb.handshake.read` alone could not tell a camera that never answered
+        // from a pipe that failed early, because Android returns -1 for both.
+        assertEquals(
+            AndroidDiagnosticEvent.USB_BULK_IN_TIMEOUT,
+            AndroidDiagnosticEvent.fromPhase("usb.bulkIn.timeout"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.USB_BULK_IN_ERROR,
+            AndroidDiagnosticEvent.fromPhase("usb.bulkIn.error"),
+        )
+        assertEquals(
+            AndroidDiagnosticEvent.USB_BULK_IN_RECOVERED,
+            AndroidDiagnosticEvent.fromPhase("usb.bulkIn.recovered"),
+        )
+        assertEquals(
+            listOf("usb.bulk-in.timeout", "usb.bulk-in.error", "usb.bulk-in.recovered"),
+            listOf(
+                    AndroidDiagnosticEvent.USB_BULK_IN_TIMEOUT,
+                    AndroidDiagnosticEvent.USB_BULK_IN_ERROR,
+                    AndroidDiagnosticEvent.USB_BULK_IN_RECOVERED,
+                )
+                .map(AndroidDiagnosticEvent::wireValue),
+        )
+    }
 }
