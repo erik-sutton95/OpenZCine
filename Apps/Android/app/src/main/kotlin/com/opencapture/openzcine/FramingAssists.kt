@@ -25,6 +25,7 @@ import com.opencapture.monitorui.MonitorAspectGuideFrames
 import com.opencapture.monitorui.MonitorFeedCrosshair
 import com.opencapture.monitorui.MonitorFeedGrid
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorGuideSafeAreas
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
@@ -40,6 +41,8 @@ internal data class LocalFramingRenderPlan(
     val guides: Set<MonitorGuideAspect>,
     /** Dims the inverse union of [guides] inside [presentationRect]. */
     val drawsInverseGuideMask: Boolean,
+    /** Action safe and title safe inside each of [guides]; none while no guide is drawn. */
+    val guideSafeAreas: MonitorGuideSafeAreas,
     val drawsRuleOfThirds: Boolean,
     val drawsPhiGrid: Boolean,
     val drawsDiagonalGrid: Boolean,
@@ -73,6 +76,7 @@ internal fun localFramingRenderPlan(
         presentationRect = presentationRect,
         guides = guides,
         drawsInverseGuideMask = configuration.guideMaskEnabled && guides.isNotEmpty(),
+        guideSafeAreas = if (guides.isEmpty()) MonitorGuideSafeAreas.STANDARD else configuration.guideSafeAreas,
         drawsRuleOfThirds = drawsGrid && configuration.ruleOfThirdsEnabled,
         drawsPhiGrid = drawsGrid && configuration.phiGridEnabled,
         drawsDiagonalGrid = drawsGrid && configuration.diagonalGridEnabled,
@@ -191,7 +195,7 @@ internal fun LocalFramingAssistOverlay(
             }
         if (plan != null) {
             val feed = plan.presentationRect
-            MonitorAspectGuideFrames(plan.guides, feed, plan.drawsInverseGuideMask)
+            MonitorAspectGuideFrames(plan.guides, feed, plan.drawsInverseGuideMask, safeAreas = plan.guideSafeAreas)
             MonitorFeedGrid(feed, plan.drawsRuleOfThirds, plan.drawsPhiGrid, plan.drawsDiagonalGrid)
             if (plan.drawsCenterCrosshair) MonitorFeedCrosshair(feed)
             splitComparison?.let { split ->

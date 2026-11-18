@@ -607,20 +607,22 @@ final class RunnerTests: XCTestCase {
         }
         let clampedNative = try await enterAndFinish("999")
         XCTAssertEqual(clampedNative, "255")
-        // A native code is the shared zebra's code on this camera's transfer and clip.
+        // A native code is the shared zebra's code on this camera's transfer and clip. A
+        // highlight above the curve's clipping point keeps its code in the headroom up to 255
+        // (#393: N-Log 245 over a white of 234) instead of snapping back to the clip.
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,
-            OpenCineMedia.ScopeDisplayScale.monitorPercent(
+            OpenCineMedia.ScopeDisplayScale.zebraHighlightPercent(
                 1, transfer: model.exposureSignalMapping.curve.monitorTransfer,
                 clipByte: model.exposureSignalMapping.clipByte), accuracy: 0.0001)
-        // Codes above the tone curve's clipping point map to the existing normalized maximum.
         // After committing, the real binding displays that converted threshold again.
+        XCTAssertEqual(threshold.text, "255")
         XCTAssertEqual(
             threshold.text,
             String(
                 model.assistConfiguration.zebra.unit.displayValue(
                     for: model.assist.zebraHighlightIRE,
-                    mapping: model.exposureSignalMapping)))
+                    mapping: model.exposureSignalMapping, highlight: true)))
         _ = try await enterAndFinish("128")
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,

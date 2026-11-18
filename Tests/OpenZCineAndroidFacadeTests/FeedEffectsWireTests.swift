@@ -123,6 +123,41 @@ struct FeedEffectsWireTests {
         #expect(Array(render[9...11]) == [Float(blue.0), Float(blue.1), Float(blue.2)])
     }
 
+    /// Issue #393: in N-Log a typed highlight of 245 came back as 234 (N-Log white), and the
+    /// shader could not paint above it.
+    @Test("A native highlight zebra above N-Log white round-trips and paints from that code")
+    func highlightZebraAboveNLogWhite() throws {
+        let percent = try #require(
+            FeedEffectsWire.zebraMonitorPercent(
+                codec: "N-Log", iso: 800, baseISO: nil, unitOrdinal: 0, value: 245,
+                highlight: true))
+        #expect(percent > 100)
+        let shown = try #require(
+            FeedEffectsWire.zebraEditorValue(
+                codec: "N-Log", iso: 800, baseISO: nil, unitOrdinal: 0,
+                monitorPercent: Double(percent), highlight: true))
+        #expect(Int(shown.rounded()) == 245)
+        // IRE reads the black-to-white scale: above white is 100.
+        #expect(
+            FeedEffectsWire.zebraEditorValue(
+                codec: "N-Log", iso: 800, baseISO: nil, unitOrdinal: 1,
+                monitorPercent: Double(percent), highlight: true) == 100)
+        // Midtone keeps the 0 to 100 axis.
+        #expect(
+            FeedEffectsWire.zebraMonitorPercent(
+                codec: "N-Log", iso: 800, baseISO: nil, unitOrdinal: 0, value: 245) == 100)
+
+        let render = try #require(
+            FeedEffectsWire.renderConfiguration(
+                codec: "N-Log", iso: 800, baseISO: nil,
+                peakingSensitivityOrdinal: 1, peakingColorOrdinal: 0,
+                highlightEnabled: true, highlightIRE: Double(percent), highlightColorOrdinal: 0,
+                midtoneEnabled: true, midtoneIRE: 130, midtoneColorOrdinal: 0))
+        #expect(abs(render[13] * 255 - 245) < 0.01)
+        let mapping = ExposureSignalMapping.camera(codec: "N-Log", iso: 800, baseISO: nil)
+        #expect(render[18] == Float(mapping.signalNative(monitorPercent: 100) / 255))
+    }
+
     @Test("Photo selector swaps the movie log mapping for the display-referred stills one")
     func stillsToneModeOverridesTheMovieCodecMapping() throws {
         // The movie codec would resolve R3D NE → Log3G10; an active photo selector wins.

@@ -163,12 +163,12 @@ private fun zebraZone(state: MonitorAssistState, input: ExposureAssistCameraInpu
     highlight: Boolean, onInteraction: () -> Unit): MonitorZebraNumberZone {
     val unit = state.zebraUnit
     val percent = (if (highlight) state.zebraHighlightIRE else state.zebraMidtoneIRE).toFloat()
-    val editorValue = remember(input, unit, percent) { zebraEditorValue(input, unit, percent) }
+    val editorValue = remember(input, unit, percent, highlight) { zebraEditorValue(input, unit, percent, highlight) }
     val maximum = if (unit == MonitorZebraUnit.NATIVE) 255 else 100
     val entry = editorValue?.let {
         MonitorZebraNumberEntry(it.roundToInt().coerceIn(0, maximum), maximum, onChange = { value ->
             // A retired unit must not reinterpret an entry captured under another calibration.
-            if (state.zebraUnit == unit) zebraMonitorPercent(input, unit, value.toFloat())?.let { converted ->
+            if (state.zebraUnit == unit) zebraMonitorPercent(input, unit, value.toFloat(), highlight)?.let { converted ->
                 if (highlight) state.setZebraHighlight(ire = converted.toDouble())
                 else state.setZebraMidtone(ire = converted.toDouble())
                 onInteraction()

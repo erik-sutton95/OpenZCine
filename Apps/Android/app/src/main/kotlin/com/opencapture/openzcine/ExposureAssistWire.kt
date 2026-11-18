@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.media.ScopeDisplayScale
 import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.openzcine.bridge.SwiftCore
 import kotlin.math.roundToInt
@@ -285,11 +286,15 @@ fun resolveFalseColorReference(
     }.getOrNull()
 }
 
-/** Returns a camera-aware editor value; `null` preserves a valid saved setting on bridge failure. */
+/**
+ * Returns a camera-aware editor value; `null` preserves a valid saved setting on bridge failure.
+ * [highlight] lets a native code above the camera's assumed white (N-Log 234) be shown (#393).
+ */
 fun zebraEditorValue(
     input: ExposureAssistCameraInput,
     unit: MonitorZebraUnit,
     monitorPercent: Float,
+    highlight: Boolean = false,
 ): Float? {
     if (!SwiftCore.isAvailable) return null
     val value = SwiftCore.zebraEditorValue(
@@ -299,16 +304,21 @@ fun zebraEditorValue(
         input.stillsToneMode,
         unit.ordinal,
         monitorPercent,
+        highlight,
     )
     val maximum = if (unit == MonitorZebraUnit.NATIVE) 255f else 100f
     return value.takeIf { it.isFinite() && it in 0f..maximum }
 }
 
-/** Converts a user editor value through Swift without locally duplicating its mapping policy. */
+/**
+ * Converts a user editor value through Swift without locally duplicating its mapping policy.
+ * A [highlight] native code above the camera's white maps above 100 instead of snapping to it.
+ */
 fun zebraMonitorPercent(
     input: ExposureAssistCameraInput,
     unit: MonitorZebraUnit,
     editorValue: Float,
+    highlight: Boolean = false,
 ): Float? {
     if (!SwiftCore.isAvailable) return null
     return SwiftCore.zebraMonitorPercent(
@@ -318,5 +328,10 @@ fun zebraMonitorPercent(
         input.stillsToneMode,
         unit.ordinal,
         editorValue,
-    ).takeIf { it.isFinite() && it in 0f..100f }
+        highlight,
+    ).takeIf { it.isFinite() && it in 0f..zebraPercentCeiling(highlight) }
 }
+
+/** Highest canonical zebra percent: code 255 for the highlight, the 0 to 100 axis otherwise. */
+internal fun zebraPercentCeiling(highlight: Boolean): Float =
+    if (highlight) ScopeDisplayScale.ZEBRA_HIGHLIGHT_CEILING_PERCENT.toFloat() else 100f
