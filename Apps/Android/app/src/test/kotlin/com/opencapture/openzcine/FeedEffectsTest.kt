@@ -255,4 +255,19 @@ class FeedEffectsTest {
         assertEquals(1 - 16.0 / 264, fractions.last(), absoluteTolerance = 1e-9)
         assertEquals(listOf(0.3, 0.5, 0.6, 0.75), fractions.subList(1, 5).map { Math.round(it * 100) / 100.0 })
     }
+
+    /** Issue #393: a highlight zebra above N-Log white (code 245 over 234) is not cut back to 100. */
+    @Test
+    fun `a highlight zebra above the camera white survives normalization up to code 255`() {
+        val ceiling = zebraPercentCeiling(highlight = true)
+        assertEquals((100.0 + 100.0 * 0.05 / 0.9).toFloat(), ceiling)
+        assertEquals(100f, zebraPercentCeiling(highlight = false))
+
+        val above = FeedEffectsConfiguration(zebraHighlightIre = 103f, zebraMidtoneIre = 103f).normalized()
+        assertEquals(103f, above.zebraHighlightIre)
+        assertEquals(100f, above.zebraMidtoneIre, "midtone keeps the 0 to 100 axis")
+        assertEquals(ceiling, FeedEffectsConfiguration(zebraHighlightIre = 400f).normalized().zebraHighlightIre)
+        assertEquals(0f, FeedEffectsConfiguration(zebraHighlightIre = -3f).normalized().zebraHighlightIre)
+        assertEquals(99f, FeedEffectsConfiguration(zebraHighlightIre = Float.NaN).normalized().zebraHighlightIre)
+    }
 }
