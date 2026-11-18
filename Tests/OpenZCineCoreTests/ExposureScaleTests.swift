@@ -336,4 +336,54 @@ struct ExposureScaleTests {
         }
         #expect(unit.monitorPercent(fromDisplay: 255, mapping: mapping) == 100)
     }
+
+    /// Issue #393: N-Log white is assumed to be code 234, so a highlight zebra typed as 245 to
+    /// match the camera snapped back to 234. The highlight threshold now reaches code 255.
+    @Test("A native highlight zebra above N-Log white keeps the typed code")
+    func nativeHighlightZebraReachesAboveNLogWhite() {
+        let mapping = ExposureSignalMapping.camera(codec: "N-Log", iso: 800, baseISO: nil)
+        #expect(mapping.clipByte == 234)
+        let unit = AssistConfiguration.Zebra.Unit.native
+        for code in [235, 240, 245, 250, 255] {
+            let percent = unit.monitorPercent(fromDisplay: code, mapping: mapping, highlight: true)
+            #expect(percent > 100, "\(code) is above N-Log white")
+            #expect(unit.displayValue(for: percent, mapping: mapping, highlight: true) == code)
+        }
+        for code in [40, 120, 200, 234] {
+            let percent = unit.monitorPercent(fromDisplay: code, mapping: mapping, highlight: true)
+            #expect(percent == unit.monitorPercent(fromDisplay: code, mapping: mapping))
+            #expect(unit.displayValue(for: percent, mapping: mapping, highlight: true) == code)
+        }
+        // Midtone keeps the 0 to 100 axis: a code above white still reads as white.
+        #expect(unit.monitorPercent(fromDisplay: 245, mapping: mapping) == 100)
+        // IRE stays the 0 to 100 black-to-white scale; a threshold above white reads as 100.
+        let above = unit.monitorPercent(fromDisplay: 245, mapping: mapping, highlight: true)
+        let ire = AssistConfiguration.Zebra.Unit.ire
+        #expect(ire.displayValue(for: above, mapping: mapping, highlight: true) == 100)
+    }
+
+    @Test("The highlight mapping reaches code 255 through the headroom above the clip")
+    func highlightMappingReachesTheFullCodeRange() {
+        let mapping = ExposureSignalMapping.camera(codec: "N-Log", iso: 800, baseISO: nil)
+        let top = 100 + 100 * 0.05 / 0.9  // code 255: the shared zebraHighlightCeilingPercent
+        #expect(abs(mapping.highlightSignalNative(monitorPercent: top) - 255) < 1e-9)
+        #expect(mapping.highlightSignalNative(monitorPercent: 400) == 255)
+        for percent in [0.0, 42, 96, 100] {
+            #expect(
+                mapping.highlightSignalNative(monitorPercent: percent)
+                    == mapping.signalNative(monitorPercent: percent))
+        }
+        for code in [236.0, 245, 255] {
+            let percent = mapping.highlightMonitorPercent(signalNative: code)
+            #expect(percent > 100)
+            #expect(abs(mapping.highlightSignalNative(monitorPercent: percent) - code) < 1e-6)
+        }
+        #expect(
+            mapping.highlightMonitorPercent(signalNative: 200)
+                == mapping.monitorPercent(signalNative: 200))
+        // A display-referred source already clips at 255: there is no headroom.
+        let srgb = ExposureSignalMapping.stills(toneMode: nil)
+        #expect(srgb.highlightSignalNative(monitorPercent: top) == 255)
+        #expect(srgb.highlightMonitorPercent(signalNative: 255) == 100)
+    }
 }
