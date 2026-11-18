@@ -123,12 +123,14 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraEditorValue")
     public func swiftCoreZebraEditorValue(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, monitorPercent: jfloat
+        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, monitorPercent: jfloat,
+        highlight: jboolean
     ) -> jfloat {
         FeedEffectsWire.zebraEditorValue(
             codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
             stillsToneMode: swiftString(env, stillsToneMode),
-            unitOrdinal: Int(unitOrdinal), monitorPercent: Double(monitorPercent)) ?? .nan
+            unitOrdinal: Int(unitOrdinal), monitorPercent: Double(monitorPercent),
+            highlight: highlight != 0) ?? .nan
     }
 
     /// `SwiftCore.zebraMonitorPercent(...)` — converts an editor threshold to
@@ -136,12 +138,14 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraMonitorPercent")
     public func swiftCoreZebraMonitorPercent(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, codec: jstring?, iso: jlong,
-        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, editorValue: jfloat
+        baseISO: jstring?, stillsToneMode: jstring?, unitOrdinal: jint, editorValue: jfloat,
+        highlight: jboolean
     ) -> jfloat {
         FeedEffectsWire.zebraMonitorPercent(
             codec: swiftString(env, codec), iso: Int64(iso), baseISO: swiftString(env, baseISO),
             stillsToneMode: swiftString(env, stillsToneMode),
-            unitOrdinal: Int(unitOrdinal), value: Double(editorValue)) ?? .nan
+            unitOrdinal: Int(unitOrdinal), value: Double(editorValue),
+            highlight: highlight != 0) ?? .nan
     }
 
     /// `SwiftCore.feedEffectsConfiguration(...)` — full source-measurement

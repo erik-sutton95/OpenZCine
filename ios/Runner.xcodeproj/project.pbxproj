@@ -116,10 +116,9 @@
 		N01000000000000000000002 /* MonitorPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000001 /* MonitorPresentation */; };
 		N01000000000000000000004 /* MonitorUI in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000003 /* MonitorUI */; };
 		N01000000000000000000006 /* OpenCineMulticam in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000005 /* OpenCineMulticam */; };
-		N01000000000000000000008 /* MulticamCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000007 /* MulticamCoordinator.swift */; };
-		N0100000000000000000000A /* MulticamStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* MulticamStage.swift */; };
+		N0100000000000000000000A /* ZCineMultiviewHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* ZCineMultiviewHost.swift */; };
 		N0100000000000000000000C /* MulticamLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000B /* MulticamLinks.swift */; };
-		N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* MulticamCoordinatorTests.swift */; };
+		N0100000000000000000000E /* ZCineMultiviewHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* ZCineMultiviewHostTests.swift */; };
 		C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B5 /* MulticamPictureTests.swift */; };
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
@@ -313,10 +312,9 @@
 		WTCH00000000000000000041 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		WTCH00000000000000000051 /* OpenZCineWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenZCineWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		WTCH000000000000000000A4 /* Watch.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Watch.xcconfig; sourceTree = "<group>"; };
-		N01000000000000000000007 /* MulticamCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinator.swift; sourceTree = "<group>"; };
-		N01000000000000000000009 /* MulticamStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamStage.swift; sourceTree = "<group>"; };
+		N01000000000000000000009 /* ZCineMultiviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCineMultiviewHost.swift; sourceTree = "<group>"; };
 		N0100000000000000000000B /* MulticamLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamLinks.swift; sourceTree = "<group>"; };
-		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
+		N0100000000000000000000D /* ZCineMultiviewHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCineMultiviewHostTests.swift; sourceTree = "<group>"; };
 		C0DE000000000000000006B5 /* MulticamPictureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamPictureTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
@@ -410,7 +408,7 @@
 				F13D00000000000000000002 /* NikonDeliveryExportTests.swift */,
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
-				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
+				N0100000000000000000000D /* ZCineMultiviewHostTests.swift */,
 				C0DE000000000000000006B5 /* MulticamPictureTests.swift */,
 				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
@@ -479,8 +477,7 @@
 				3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */,
 				87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */,
 				N0100000000000000000000B /* MulticamLinks.swift */,
-				N01000000000000000000009 /* MulticamStage.swift */,
-				N01000000000000000000007 /* MulticamCoordinator.swift */,
+				N01000000000000000000009 /* ZCineMultiviewHost.swift */,
 				C0DE000000000000000006B1 /* MulticamCameraSettings.swift */,
 				C0DE000000000000000006B3 /* MulticamPicture.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
@@ -807,7 +804,7 @@
 				F13D00000000000000000001 /* NikonDeliveryExportTests.swift in Sources */,
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
-				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
+				N0100000000000000000000E /* ZCineMultiviewHostTests.swift in Sources */,
 				C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */,
 				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
@@ -854,8 +851,7 @@
 				1E7BB623225B594944ABE027 /* NikonFrameioDeliveryPorts.swift in Sources */,
 				E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */,
 				N0100000000000000000000C /* MulticamLinks.swift in Sources */,
-				N0100000000000000000000A /* MulticamStage.swift in Sources */,
-				N01000000000000000000008 /* MulticamCoordinator.swift in Sources */,
+				N0100000000000000000000A /* ZCineMultiviewHost.swift in Sources */,
 				C0DE000000000000000006B2 /* MulticamCameraSettings.swift in Sources */,
 				C0DE000000000000000006B4 /* MulticamPicture.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,

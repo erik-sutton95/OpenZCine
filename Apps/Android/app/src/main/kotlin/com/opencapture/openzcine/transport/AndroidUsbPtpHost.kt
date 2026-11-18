@@ -271,6 +271,7 @@ public class AndroidUsbPtpCameraSource(
                 bulkOut = bulkOut,
                 eventIn = eventIn,
                 eventRequest = eventRequest,
+                onDiagnosticPhase = onDiagnosticPhase,
             )
         transport.setOnClosed {
             synchronized(lifecycleLock) {
@@ -574,6 +575,107 @@ internal fun recoverDeadBulkOutWrite(
     )
 }
 
+/**
+ * How one failed bulk-in read ended. Android's `bulkTransfer` returns -1 for
+ * both, so the time the call took is the only way to tell them apart.
+ */
+internal enum class UsbBulkInFailure(val diagnosticPhase: String) {
+    /** The read waited out its whole timeout: the camera sent nothing. */
+    TIMEOUT("usb.bulkIn.timeout"),
+
+    /** The read failed before its timeout: a halted pipe or a transfer error. */
+    ERROR("usb.bulkIn.error"),
+}
+
+/** Closed diagnostic phase for a bulk-in read that succeeded after the pipe was cleared. */
+internal const val USB_BULK_IN_RECOVERED_PHASE: String = "usb.bulkIn.recovered"
+
+/**
+ * A read counts as a timeout when it used (nearly) its whole wait. The slack
+ * covers the kernel's timer granularity; anything shorter failed on its own.
+ */
+internal fun classifyBulkInFailure(elapsedMillis: Long, timeoutMillis: Int): UsbBulkInFailure =
+    if (elapsedMillis >= timeoutMillis - BULK_IN_TIMEOUT_SLACK_MILLIS) {
+        UsbBulkInFailure.TIMEOUT
+    } else {
+        UsbBulkInFailure.ERROR
+    }
+
+/** Outcome of one bulk-in read, including a one-shot pipe clear and retry after an early failure. */
+internal data class UsbPtpBulkInReadOutcome(
+    val byteCount: Int,
+    /** How the first attempt failed, or null when it succeeded or never ran. */
+    val firstFailure: UsbBulkInFailure? = null,
+    /** How the retry failed, or null when there was no retry or it succeeded. */
+    val retryFailure: UsbBulkInFailure? = null,
+    val recoveryAttempted: Boolean = false,
+    val retried: Boolean = false,
+)
+
+/**
+ * The bulk-in twin of [recoverDeadBulkOutWrite] (issue #562: a Z 6III failed
+ * every USB-C attempt at the first read, about 2.2 s into a 5 s deadline).
+ *
+ * A read that fails before its timeout is an error, typically a halted pipe
+ * left by an earlier holder or an unanswered transaction. Clear the halt on
+ * bulk-in only (no Device Reset: that would abort the transaction whose
+ * response we are waiting for) and read once more. Everything stays inside the
+ * caller's [timeoutMillis]: the clear gets a share of what is left and the
+ * retry the rest, and with too little left nothing is retried. A read that used
+ * its whole timeout is a timeout; there is no time left to retry it.
+ *
+ * [verify-on-HW] Z 6III USB-C on Android: the export should show
+ * `usb.bulk-in.error` then `usb.bulk-in.recovered` and a connected session, or
+ * say which way the read failed if it still does.
+ */
+internal fun recoverDeadBulkInRead(
+    isClosed: () -> Boolean,
+    canRecover: Boolean,
+    timeoutMillis: Int,
+    nowMillis: () -> Long,
+    read: (timeoutMillis: Int) -> Int,
+    clearHalt: (budgetMillis: Int) -> Unit,
+): UsbPtpBulkInReadOutcome {
+    if (isClosed()) return UsbPtpBulkInReadOutcome(byteCount = -1)
+    val start = nowMillis()
+    val first = read(timeoutMillis)
+    if (first >= 0) return UsbPtpBulkInReadOutcome(byteCount = first)
+    val failure = classifyBulkInFailure(nowMillis() - start, timeoutMillis)
+    fun remaining(): Int = (timeoutMillis - (nowMillis() - start)).toInt()
+    if (
+        failure == UsbBulkInFailure.TIMEOUT ||
+            !canRecover ||
+            isClosed() ||
+            remaining() < BULK_IN_MIN_RETRY_MILLIS
+    ) {
+        return UsbPtpBulkInReadOutcome(byteCount = -1, firstFailure = failure)
+    }
+    clearHalt((remaining() / 3).coerceIn(1, BULK_IN_CLEAR_MAX_MILLIS))
+    val retryBudget = remaining()
+    if (isClosed() || retryBudget < BULK_IN_MIN_RETRY_MILLIS) {
+        return UsbPtpBulkInReadOutcome(byteCount = -1, firstFailure = failure, recoveryAttempted = true)
+    }
+    val retryStart = nowMillis()
+    val retried = read(retryBudget)
+    return UsbPtpBulkInReadOutcome(
+        byteCount = retried,
+        firstFailure = failure,
+        retryFailure =
+            if (retried < 0) classifyBulkInFailure(nowMillis() - retryStart, retryBudget) else null,
+        recoveryAttempted = true,
+        retried = true,
+    )
+}
+
+/** Kernel timer slack: a read this close to its timeout timed out. */
+private const val BULK_IN_TIMEOUT_SLACK_MILLIS: Int = 50
+
+/** Shortest retry worth issuing; with less left the caller's deadline wins. */
+private const val BULK_IN_MIN_RETRY_MILLIS: Int = 100
+
+/** Upper bound for the status read and the halt clear together. */
+private const val BULK_IN_CLEAR_MAX_MILLIS: Int = 500
+
 /** PTP class GET_DEVICE_STATUS; returns the status code or 0 on failure. */
 private fun ptpDeviceStatus(
     connection: UsbDeviceConnection,
@@ -822,6 +924,8 @@ private class AndroidUsbPtpTransport(
     private val bulkOut: UsbEndpoint,
     private val eventIn: UsbEndpoint,
     eventRequest: UsbRequest,
+    /** Closed bulk-in phases for the exported report; see [UsbBulkInFailure]. */
+    private val onDiagnosticPhase: (String) -> Unit = {},
 ) : UsbPtpTransport {
     private val closeLock = Any()
     private val commandLock = Any()
@@ -830,6 +934,14 @@ private class AndroidUsbPtpTransport(
     private val eventPacketBytes: Int = interruptUrbSize(eventIn.maxPacketSize, INITIAL_EVENT_BYTES)
     @Volatile private var closed: Boolean = false
     private var deadWriteRecoveryDone: Boolean = false
+    /**
+     * Bulk-in pipe clears left for this claim. Two, not one: every connect attempt
+     * first drains stale input with short reads, and a halted pipe fails there
+     * before the first transaction; the first real read still gets its own clear.
+     */
+    private var bulkInRecoveriesLeft: Int = 2
+    /** Last bulk-in phase reported, so a pipe failing on every read logs one breadcrumb. */
+    private var lastBulkInPhase: String? = null
     private var onClosed: (() -> Unit)? = null
 
     init {
@@ -878,7 +990,77 @@ private class AndroidUsbPtpTransport(
         }
 
     override fun readBulk(maxBytes: Int, timeoutMillis: Int): ByteArray? =
-        read(endpoint = bulkIn, maxBytes = maxBytes, timeoutMillis = timeoutMillis, lock = commandLock)
+        synchronized(commandLock) {
+            if (closed || maxBytes !in 1..MAX_READ_BYTES) return@synchronized null
+            val buffer = ByteArray(maxBytes)
+            val outcome =
+                recoverDeadBulkInRead(
+                    isClosed = { closed },
+                    canRecover = bulkInRecoveriesLeft > 0,
+                    timeoutMillis = timeoutMillis,
+                    nowMillis = { android.os.SystemClock.elapsedRealtime() },
+                    read = { budget -> connection.bulkTransfer(bulkIn, buffer, buffer.size, budget) },
+                    clearHalt = { budget -> clearBulkInHalt(budget) },
+                )
+            if (outcome.recoveryAttempted) bulkInRecoveriesLeft -= 1
+            reportBulkIn(outcome, timeoutMillis)
+            // Swift reads null as a failed link and empty as a timeout. Both failures keep
+            // returning null: a timeout here must not turn into the Wi-Fi timeout copy.
+            when {
+                outcome.byteCount > 0 -> buffer.copyOf(outcome.byteCount)
+                outcome.byteCount == 0 -> ByteArray(0)
+                else -> null
+            }
+        }
+
+    /**
+     * Logs how a failed read ended and records one breadcrumb per change, so an
+     * export says whether the camera never answered or the pipe failed early.
+     */
+    private fun reportBulkIn(outcome: UsbPtpBulkInReadOutcome, timeoutMillis: Int) {
+        val first = outcome.firstFailure ?: return
+        android.util.Log.i(
+            USB_DIAG_TAG,
+            "USB bulk-in read failed: ${first.name.lowercase()} (timeout ${timeoutMillis} ms)" +
+                when {
+                    !outcome.retried -> ""
+                    outcome.byteCount >= 0 -> "; recovered after clearing the pipe"
+                    else -> "; retry ${outcome.retryFailure?.name?.lowercase() ?: "failed"}"
+                },
+        )
+        // A short read timing out is the normal answer of an empty pipe (the stale-input
+        // drain before each attempt), not a camera that stopped answering.
+        if (first == UsbBulkInFailure.TIMEOUT && timeoutMillis < BULK_IN_TIMEOUT_REPORT_FLOOR_MILLIS) return
+        val phase =
+            if (outcome.retried && outcome.byteCount >= 0) USB_BULK_IN_RECOVERED_PHASE else first.diagnosticPhase
+        if (outcome.retried && outcome.byteCount >= 0) recordBulkInPhase(first.diagnosticPhase)
+        recordBulkInPhase(phase)
+    }
+
+    private fun recordBulkInPhase(phase: String) {
+        if (lastBulkInPhase == phase) return
+        lastBulkInPhase = phase
+        onDiagnosticPhase(phase)
+    }
+
+    /**
+     * PTP USB recovery for a halted bulk-in: read the class status (logged, it
+     * names what the camera thinks happened), then CLEAR_FEATURE(ENDPOINT_HALT)
+     * on bulk-in only. Bounded by [budgetMillis] in total.
+     */
+    private fun clearBulkInHalt(budgetMillis: Int) {
+        val each = (budgetMillis / 2).coerceAtLeast(1)
+        val status = ptpDeviceStatus(connection, usbInterface.id, each)
+        val cleared =
+            runCatching {
+                connection.controlTransfer(0x02, 0x01, 0, bulkIn.address, null, 0, each)
+            }.getOrDefault(-1)
+        android.util.Log.i(
+            USB_DIAG_TAG,
+            "USB bulk-in failed early; device status 0x${Integer.toHexString(status)}, " +
+                "halt clear ${if (cleared >= 0) "sent" else "failed"}",
+        )
+    }
 
     override fun readEvent(maxBytes: Int, timeoutMillis: Int): ByteArray? {
         if (closed || maxBytes !in 1..MAX_READ_BYTES) return null
@@ -912,26 +1094,11 @@ private class AndroidUsbPtpTransport(
         callback?.invoke()
     }
 
-    private fun read(
-        endpoint: UsbEndpoint,
-        maxBytes: Int,
-        timeoutMillis: Int,
-        lock: Any,
-    ): ByteArray? =
-        synchronized(lock) {
-            if (closed || maxBytes !in 1..MAX_READ_BYTES) return@synchronized null
-            val buffer = ByteArray(maxBytes)
-            val count = connection.bulkTransfer(endpoint, buffer, buffer.size, timeoutMillis)
-            when {
-                count > 0 -> buffer.copyOf(count)
-                count == 0 -> ByteArray(0)
-                else -> null
-            }
-        }
-
     private companion object {
         const val MAX_READ_BYTES: Int = 1024 * 1024
         const val INITIAL_EVENT_BYTES: Int = 512
         const val USB_DIAG_TAG: String = "UsbPtpDiag"
+        /** Reads shorter than this time out on a healthy, empty pipe; not worth a breadcrumb. */
+        const val BULK_IN_TIMEOUT_REPORT_FLOOR_MILLIS: Int = 1_000
     }
 }

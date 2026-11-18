@@ -3,46 +3,16 @@ package com.opencapture.openzcine.multicam
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import com.opencapture.monitorui.MonitorImagePreview
-import com.opencapture.monitorui.MonitorInspector
-import com.opencapture.monitorui.MonitorPalette
-import com.opencapture.monitorui.MonitorTypography
-import com.opencapture.monitorui.monitorChromeClickable
-import com.opencapture.opencine.appkit.MultiviewStageViewport
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedEffects
 import com.opencapture.openzcine.FeedEffectsConfiguration
 import com.opencapture.openzcine.FeedEffectsRenderPlans
 import com.opencapture.openzcine.FeedEffectsRenderer
-import com.opencapture.openzcine.FeedLut
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
@@ -196,6 +166,13 @@ class MulticamPicture internal constructor(
         bake = null
     }
 
+    /** Another camera takes the tile: the last frame is dropped, so no look re-bakes it. */
+    internal fun clear() {
+        invalidate()
+        raw = null
+        publish(null)
+    }
+
     /** The member left or was replaced: late work is discarded and only its own pixels clear. */
     internal fun retire() {
         if (retired) return
@@ -213,76 +190,6 @@ class MulticamPicture internal constructor(
             executor.value.shutdown()
         } else {
             renderer?.close()
-        }
-    }
-}
-
-/** A look the options list offers: a built-in procedural look or a stored cube. */
-internal data class MulticamLookChoice(val selection: FeedLutSelection, val title: String)
-
-internal fun multicamLookChoices(library: AndroidLutLibrary?): List<MulticamLookChoice> =
-    FeedLut.entries.map { MulticamLookChoice(FeedLutSelection.BuiltIn(it), it.label) } +
-        library?.entries?.value.orEmpty().map { MulticamLookChoice(FeedLutSelection.Stored(it.selection), it.displayName) }
-
-/** Per-member look options: member tabs, that member's picture, its on/off and its look. */
-@Composable
-internal fun MulticamLookSettings(
-    coordinator: MulticamCoordinator,
-    slot: Int,
-    viewport: MultiviewStageViewport,
-    close: () -> Unit,
-    select: (Int) -> Unit,
-) {
-    val member = coordinator.memberAt(slot)
-    val picture = member?.picture
-    coordinator.lutLibrary?.entries?.collectAsState()
-    MonitorInspector(
-        title = "LUT",
-        viewportWidth = viewport.width,
-        viewportHeight = viewport.height,
-        onDismiss = close,
-        modifier = Modifier.testTag("multiview.lut.panel"),
-        trailing = true,
-        hasNavigation = false,
-        safeLeading = viewport.safeArea.leading,
-        safeTrailing = viewport.safeArea.trailing,
-        safeTop = viewport.safeArea.top,
-        safeBottom = viewport.safeArea.bottom,
-        close = { MulticamPanelClose("Close LUT", close) },
-        compactHeader = true,
-    ) {
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            MulticamMemberTabs(
-                slots = coordinator.pictureLUTSlots.sorted(), selected = slot,
-                title = { coordinator.memberAt(it)?.letter.orEmpty() },
-                identifier = { "multiview.lut.camera.$it" }, select = select,
-            )
-            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MonitorImagePreview(member?.frame, "${member?.displayName.orEmpty()} picture",
-                    Modifier.testTag("multiview.lut.preview"))
-                if (member != null && picture != null) {
-                    val on = picture.lutEnabled
-                    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("multiview.lut.enabled")
-                        .monitorChromeClickable { coordinator.setLUTEnabled(member.id, !on) }
-                        .semantics { role = Role.Switch; stateDescription = if (on) "On" else "Off"; contentDescription = "LUT" }
-                        .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("LUT", Modifier.weight(1f), style = MonitorTypography.text(13f, FontWeight.SemiBold), color = MonitorPalette.text)
-                        Text(if (on) "On" else "Off", style = MonitorTypography.text(13f, FontWeight.Medium), color = MonitorPalette.muted)
-                    }
-                    multicamLookChoices(coordinator.lutLibrary).forEachIndexed { index, choice ->
-                        val chosen = choice.selection == picture.selection
-                        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("multiview.lut.choice.$index")
-                            .monitorChromeClickable { coordinator.setLUTSelection(member.id, choice.selection) }
-                            .semantics { role = Role.RadioButton; selected = chosen; contentDescription = choice.title }
-                            .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(choice.title, Modifier.weight(1f), style = MonitorTypography.text(13f, FontWeight.Medium),
-                                color = if (chosen) MonitorPalette.text else MonitorPalette.muted)
-                            if (chosen) Text("Selected", style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.muted)
-                        }
-                    }
-                }
-            }
         }
     }
 }

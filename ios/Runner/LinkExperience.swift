@@ -159,7 +159,7 @@ struct LinkExperience: View {
             diagnostics: { model.shareDiagnostics() },
             reportProblem: { model.isBugReportPresented = true },
             watchFeed: { model.openWatcherBrowse() },
-            multiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
+            multiview: { model.beginMultiview() },
             integrationAction: { cameraID, action in
                 if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
             },
