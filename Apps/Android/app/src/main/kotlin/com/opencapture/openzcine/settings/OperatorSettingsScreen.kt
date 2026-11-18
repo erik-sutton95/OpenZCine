@@ -15,6 +15,7 @@ import com.opencapture.opencine.appkit.diagnostics.settingsStatus
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.cameracontrols.*
+import com.opencapture.opencine.appkit.CameraSettingsPresetsModel
 import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
 import com.opencapture.opencine.appkit.MonitorSettingsCacheIdentity
 import com.opencapture.opencine.appkit.MonitorSettingsCacheSource
@@ -172,6 +173,8 @@ internal fun OperatorSettingsScreen(
     /** The saved setups, for the Link tab's Your cameras card. */
     savedCameras: List<SavedCamera> = emptyList(),
     gyro: MonitorSettingsGyroSource? = null,
+    /** The Controls tab's camera presets card; `null` leaves it out. */
+    cameraPresets: CameraSettingsPresetsModel? = null,
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
@@ -345,6 +348,7 @@ internal fun OperatorSettingsScreen(
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
         gyro = gyro,
+        cameraPresets = cameraPresets,
     )
     // Seeds the session once per requested landing tab, before the first frame draws.
     remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }

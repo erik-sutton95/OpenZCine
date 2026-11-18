@@ -119,6 +119,7 @@ import com.opencapture.openzcine.pairing.nikonIntegrationSlots
 import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.AppIntegration
+import com.opencapture.opencine.appkit.CameraSettingsPresetsModel
 import com.opencapture.opencine.appkit.AppShell
 import com.opencapture.opencine.appkit.CamerasModel
 import com.opencapture.opencine.appkit.ShellActions
@@ -544,6 +545,11 @@ class MainActivity : ComponentActivity() {
                         if (pairingScript != null) it.beginPairing()
                         if (debugInitialSettingsTab != null) it.open(ShellModel.Cover.SETTINGS)
                     }
+                }
+                // Exposure and white balance presets of the shell's camera, beside the operator
+                // settings. Local writes take no dispatch admission, so neither does a recall.
+                val cameraPresets = remember(shell) {
+                    CameraSettingsPresetsModel(operatorSettings.cameraPresetStore, shell)
                 }
                 val shellState by shell.state.collectAsState()
                 var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
@@ -1235,6 +1241,13 @@ class MainActivity : ComponentActivity() {
                                         session = active,
                                         controlSession = shellSessions.acquire(active),
                                         gyro = gyroSource,
+                                        // Left out where common writes are refused: the demo, a
+                                        // picture-only (HDMI) monitor, a watcher holding control.
+                                        cameraPresets = cameraPresets.takeUnless {
+                                            pairingScript != null || demo?.second != null ||
+                                                active is CaptureOnlyCameraSession ||
+                                                relayBroadcastUi.controlHolderName != null
+                                        },
                                         assists = assist,
                                         operatorSession = operatorSession,
                                         editsLiveView = true,
@@ -1388,6 +1401,7 @@ class MainActivity : ComponentActivity() {
                             session = null,
                             controlSession = null,
                             gyro = gyroSource,
+                            cameraPresets = cameraPresets,
                             assists = standaloneAssist,
                             operatorSession = standaloneSession,
                             settings = operatorSettings,

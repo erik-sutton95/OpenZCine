@@ -924,6 +924,16 @@ final class NativeAppModel {
     /// The root (`AppShell`): the camera monitor, the shared pair page (a NEARBY camera's Pair)
     /// and the standalone Media and Settings covers.
     @ObservationIgnored lazy var shell = makeShellModel()
+    /// Exposure and white balance presets of the shell's camera, saved beside the operator
+    /// preferences. Local writes take no dispatch admission, so neither does a recall.
+    @ObservationIgnored lazy var cameraPresets = CameraSettingsPresetsModel(
+        store: CameraSettingsPresetStore(storage: .standard), shell: shell)
+    /// The presets card, or `nil` while this app refuses common setting writes: a relay watcher,
+    /// a watcher holding this broadcast's control, the demo or a picture-only monitor.
+    var cameraPresetsCard: CameraSettingsPresetsModel? {
+        videoSource == .relay || relayControlSurrendered || isDemoSession || pictureOnlyMonitor
+            ? nil : cameraPresets
+    }
     /// Retires a released native capture gesture when its source or monitor presentation changes.
     private(set) var operatorQuickPresentationRevision = UUID()
 

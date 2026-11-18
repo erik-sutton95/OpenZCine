@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.monitorui.MonitorGuideSafeAreas
 import com.opencapture.monitorui.MonitorLevelStyle
+import com.opencapture.opencine.appkit.CameraSettingsPresetStore
 import com.opencapture.opencine.appkit.MonitorDisplayChrome
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplayPreferences
@@ -120,6 +121,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public constructor(
         context: Context
     ) : this(context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE))
+
+    /** The connected camera model's exposure and white balance presets, stored beside these settings. */
+    public val cameraPresetStore: CameraSettingsPresetStore by lazy { CameraSettingsPresetStore(preferences) }
 
     /** One persisted switch: Compose-observable value, write-through on set. */
     public inner class Toggle internal constructor(
