@@ -1,3 +1,4 @@
+import OpenCineAppKit
 import SwiftUI
 import UIKit
 
@@ -8,6 +9,7 @@ struct OpenZCineApp: App {
     var body: some Scene {
         WindowGroup {
             NativeAppRoot()
+                .monitorRotationLock(appDelegate.monitorRotation)
         }
     }
 }
