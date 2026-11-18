@@ -6,9 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added
+### Safe-area guides
 
-- Safe-area guides: GUIDES options add Action safe and Title safe, each with its own size
+- GUIDES options add Action safe and Title safe, each with its own size
   (default 90% and 80%), drawn inside every frame line on live view and playback.
 
 ## [0.2.8] - 2026-10-30
