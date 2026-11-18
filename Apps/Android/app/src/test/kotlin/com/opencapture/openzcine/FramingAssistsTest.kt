@@ -2,6 +2,9 @@ package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorGuideSafeAreas
+import com.opencapture.monitorui.MonitorGuideSafeAreaKind
+import com.opencapture.monitorui.MonitorGuideSafeArea
 import com.opencapture.monitorui.MonitorGuideGeometry
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.appkit.MonitorAssistState
@@ -131,6 +134,26 @@ class FramingAssistsTest {
         assertFalse(clean.drawsDiagonalGrid)
         assertFalse(clean.drawsCenterCrosshair)
         assertEquals(live.presentationRect, clean.presentationRect)
+    }
+
+    @Test
+    fun `safe areas from the shared options ride the visible guide frames only`() {
+        val state = MonitorAssistState(pinnedNames = emptySet())
+        state.syncVisible(setOf(MonitorAssistTool.GUIDES))
+        state.selectedGuides = setOf(MonitorGuideAspect.CINEMA)
+        state.updateGuideSafeAreas(
+            MonitorGuideSafeAreas.STANDARD.withOn(MonitorGuideSafeAreaKind.ACTION, true)
+                .withPercent(MonitorGuideSafeAreaKind.ACTION, 85),
+        )
+        val shown =
+            localFramingRenderPlan(1_920f, 1_080f, state.framing(state::isOn, MonitorLevelStyle.HORIZON))
+        assertEquals(listOf(MonitorGuideSafeArea(MonitorGuideSafeAreaKind.ACTION, 85)), shown.guideSafeAreas.drawn)
+
+        state.toggle(MonitorAssistTool.GUIDES)
+        val hidden =
+            localFramingRenderPlan(1_920f, 1_080f, state.framing(state::isOn, MonitorLevelStyle.HORIZON))
+        assertTrue(hidden.guides.isEmpty())
+        assertTrue(hidden.guideSafeAreas.drawn.isEmpty())
     }
 
     @Test

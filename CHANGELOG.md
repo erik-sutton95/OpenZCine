@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Safe-area guides
+
+- GUIDES options add Action safe and Title safe, each with its own size
+  (default 90% and 80%), drawn inside every frame line on live view and playback.
+
 ## [0.2.8] - 2026-10-30
 
 Public beta, cumulative since the 2026-10-18 open beta (0.2.5). The operator-facing iOS and
