@@ -1181,7 +1181,7 @@ struct OperatorSettingsPanel: View {
                 openLogs: { model.gyroCapture.logsPresented = true },
                 calibrate: model.gyroCapture.canCalibrate
                     ? { model.gyroCapture.beginCalibration() } : nil)
-        )
+        ).withCameraPresets(model.cameraPresetsCard)
     }
 
     private func settingsFeedback() {

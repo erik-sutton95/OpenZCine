@@ -209,6 +209,9 @@ extension SettingsSharedOwnerTests {
         #expect(
             ["Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter"]
                 .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
+        // The shared exposure and white balance presets card leads the Controls tab.
+        #expect(
+            rows[.controls]?.first == CameraSettingsPresetCopy.title, "\(rows[.controls] ?? [])")
         #expect(rows[.display]?.contains("HDR display") == true, "\(rows[.display] ?? [])")
         // A2-78: one Processing card, after the connection and before Your cameras, as in
         // Pocket and Insta, with the shared Feed Upscaler first.
@@ -224,6 +227,18 @@ extension SettingsSharedOwnerTests {
         #expect(rows[.storage]?.contains("Clear Cache") == true, "\(rows[.storage] ?? [])")
         #expect(
             rows[.system]?.contains("Automatic error reports") == true, "\(rows[.system] ?? [])")
+    }
+}
+
+/// The presets card stays out wherever the app refuses common setting writes: the demo here,
+/// a relay watcher, a watcher holding control and a picture-only monitor by the same gate.
+extension SettingsSharedOwnerTests {
+    @Test func cameraPresetsCardLeavesTheDemoOut() {
+        let model = NativeAppModel()
+        #expect(model.cameraPresetsCard === model.cameraPresets)
+        model.isDemoSession = true
+        defer { model.isDemoSession = false }
+        #expect(model.cameraPresetsCard == nil)
     }
 }
 
