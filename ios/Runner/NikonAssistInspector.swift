@@ -55,7 +55,8 @@ struct NikonAssistOptions: View {
             MonitorGuidesMenu(
                 family: model.assist.binding(\.guideFamily),
                 selected: model.assist.selectedGuides,
-                mask: model.assist.binding(\.guideMask), feedback: selectionFeedback,
+                mask: model.assist.binding(\.guideMask),
+                safeAreas: model.assist.binding(\.guideSafeAreas), feedback: selectionFeedback,
                 onToggle: { model.assist.toggleGuide($0) })
         case .grid:
             MonitorGridMenu(

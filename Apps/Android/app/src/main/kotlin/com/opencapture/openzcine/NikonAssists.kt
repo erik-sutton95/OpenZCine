@@ -211,6 +211,7 @@ internal fun MonitorAssistState.framing(
         guidesVisible = visible(MonitorAssistTool.GUIDES),
         selectedGuideRatios = selectedGuides,
         guideMaskEnabled = guideMask,
+        guideSafeAreas = guideSafeAreas,
         gridVisible = visible(MonitorAssistTool.GRID),
         ruleOfThirdsEnabled = gridThirds,
         phiGridEnabled = gridPhi,
