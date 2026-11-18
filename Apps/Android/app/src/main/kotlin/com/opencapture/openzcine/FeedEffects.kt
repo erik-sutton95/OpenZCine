@@ -146,8 +146,10 @@ data class FeedEffectsConfiguration(
     /** Keeps corruption or a stale preference from producing an invalid core request. */
     fun normalized(): FeedEffectsConfiguration =
         copy(
+            // A highlight may sit above the camera's white, up to code 255 (#393).
             zebraHighlightIre =
-                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 99f,
+                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, zebraPercentCeiling(highlight = true))
+                    ?: 99f,
             zebraMidtoneIre =
                 zebraMidtoneIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 55f,
         )

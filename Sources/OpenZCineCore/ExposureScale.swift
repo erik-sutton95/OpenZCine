@@ -249,6 +249,32 @@ public struct ExposureSignalMapping: Equatable, Sendable {
         return blackNative + (percent / 100) * (clipNative - blackNative)
     }
 
+    /// Highlight zebra threshold in native code. Up to 100 this is
+    /// ``signalNative(monitorPercent:)``; above 100 it reaches through the headroom between the
+    /// clip and code 255 (the shared `OpenCineMedia.ScopeDisplayScale.zebraHighlightSignal` iOS
+    /// draws with), so a threshold above the assumed white (N-Log code 234) can match the
+    /// camera's own zebra.
+    public func highlightSignalNative(monitorPercent: Double) -> Double {
+        guard monitorPercent > 100, clipByte < 255 else {
+            return signalNative(monitorPercent: monitorPercent)
+        }
+        return OpenCineMedia.ScopeDisplayScale.zebraHighlightSignal(
+            monitorPercent: monitorPercent, transfer: curve.monitorTransfer, clipByte: clipByte)
+            * 255
+    }
+
+    /// Inverse of ``highlightSignalNative(monitorPercent:)``: a code above the clip stays above
+    /// 100, up to `OpenCineMedia.ScopeDisplayScale.zebraHighlightCeilingPercent` at code 255.
+    public func highlightMonitorPercent(signalNative: Double) -> Double {
+        guard signalNative > clipNative, clipByte < 255 else {
+            return monitorPercent(signalNative: signalNative)
+        }
+        return max(
+            100,
+            OpenCineMedia.ScopeDisplayScale.zebraHighlightPercent(
+                min(255, signalNative) / 255, transfer: curve.monitorTransfer, clipByte: clipByte))
+    }
+
     /// Places a scene stop relative to 18% grey on the normalized monitoring axis.
     public func monitorPercent(zStop: Double) -> Double {
         monitorPercent(signalNative: ExposureScale.signalNative(zStop: zStop, curve: curve))

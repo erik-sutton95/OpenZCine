@@ -109,30 +109,39 @@ public enum FeedEffectsWire {
 
     /// Converts a canonical monitor-percent zebra threshold into the current
     /// editor unit (`0 = native code`, `1 = monitor IRE`).
+    ///
+    /// `highlight` lets the threshold sit above 100, in the headroom between the
+    /// camera's clip and code 255 (#393: N-Log white is code 234, the camera's
+    /// own zebra can be 245). IRE stays the 0…100 black-to-white scale.
     public static func zebraEditorValue(
         codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
-        unitOrdinal: Int, monitorPercent: Double
+        unitOrdinal: Int, monitorPercent: Double, highlight: Bool = false
     ) -> Float? {
         let mapping = cameraMapping(
             codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         let clamped = min(max(monitorPercent, 0), 100)
         switch unitOrdinal {
+        case 0 where highlight:
+            // The mapping bounds the extended axis itself: 0 up to code 255.
+            return Float(mapping.highlightSignalNative(monitorPercent: monitorPercent))
         case 0: return Float(mapping.signalNative(monitorPercent: clamped))
         case 1: return Float(clamped)
         default: return nil
         }
     }
 
-    /// Converts a zebra editor value into the canonical 0…100 monitor axis.
+    /// Converts a zebra editor value into the canonical monitor axis: 0…100,
+    /// or for `highlight` up to the percentage of code 255.
     /// This keeps unit conversion at the Swift mapping seam rather than in the
     /// Android preference or Compose layers.
     public static func zebraMonitorPercent(
         codec: String?, iso: Int64, baseISO: String?, stillsToneMode: String? = nil,
-        unitOrdinal: Int, value: Double
+        unitOrdinal: Int, value: Double, highlight: Bool = false
     ) -> Float? {
         let mapping = cameraMapping(
             codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         switch unitOrdinal {
+        case 0 where highlight: return Float(mapping.highlightMonitorPercent(signalNative: value))
         case 0: return Float(mapping.monitorPercent(signalNative: value))
         case 1: return Float(min(max(value, 0), 100))
         default: return nil
@@ -396,7 +405,7 @@ public enum FeedEffectsWire {
         let mapping = cameraMapping(
             codec: codec, iso: iso, baseISO: baseISO, stillsToneMode: stillsToneMode)
         let highlightCode =
-            mapping.signalNative(monitorPercent: min(max(highlightIRE, 0), 100)) / 255
+            mapping.highlightSignalNative(monitorPercent: highlightIRE) / 255
         let midtoneCode = mapping.signalNative(monitorPercent: min(max(midtoneIRE, 0), 100)) / 255
         let peak = peakingColor.rgb
         let highlight = highlightColor.rgb

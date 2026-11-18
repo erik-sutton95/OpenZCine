@@ -806,27 +806,42 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
 
             /// Operator-facing value of a normalized threshold. A native code is the one the
             /// shared zebra compares on this camera's transfer and ceiling.
-            public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
+            ///
+            /// `highlight` lets a native code above the camera's assumed white (N-Log 234) be
+            /// named, up to 255, so the highlight zebra can match the camera's own (#393). IRE
+            /// stays the 0 to 100 black-to-white scale, where anything above white reads 100.
+            public func displayValue(
+                for ire: Double, mapping: ExposureSignalMapping, highlight: Bool = false
+            ) -> Int {
+                let transfer = mapping.curve.monitorTransfer
                 switch self {
-                case .ire: Int(ire.rounded())
+                case .ire: return Int(min(100, ire).rounded())
                 case .native:
-                    Int(
-                        (OpenCineMedia.ScopeDisplayScale.signalNative(
-                            monitorPercent: ire, transfer: mapping.curve.monitorTransfer,
-                            clipByte: mapping.clipByte) * 255).rounded())
+                    let code =
+                        highlight
+                        ? OpenCineMedia.ScopeDisplayScale.zebraHighlightSignal(
+                            monitorPercent: ire, transfer: transfer, clipByte: mapping.clipByte)
+                        : OpenCineMedia.ScopeDisplayScale.signalNative(
+                            monitorPercent: ire, transfer: transfer, clipByte: mapping.clipByte)
+                    return Int((code * 255).rounded())
                 }
             }
 
-            /// The normalized threshold an operator-typed value stands for.
-            public func monitorPercent(fromDisplay value: Int, mapping: ExposureSignalMapping)
-                -> Double
-            {
+            /// The normalized threshold an operator-typed value stands for. With `highlight`, a
+            /// native code above the camera's white maps above 100 instead of snapping to it.
+            public func monitorPercent(
+                fromDisplay value: Int, mapping: ExposureSignalMapping, highlight: Bool = false
+            ) -> Double {
+                let transfer = mapping.curve.monitorTransfer
                 switch self {
-                case .ire: Double(value)
+                case .ire: return Double(value)
                 case .native:
-                    OpenCineMedia.ScopeDisplayScale.monitorPercent(
-                        Double(min(255, max(0, value))) / 255,
-                        transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte)
+                    let code = Double(min(255, max(0, value))) / 255
+                    return highlight
+                        ? OpenCineMedia.ScopeDisplayScale.zebraHighlightPercent(
+                            code, transfer: transfer, clipByte: mapping.clipByte)
+                        : OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                            code, transfer: transfer, clipByte: mapping.clipByte)
                 }
             }
         }

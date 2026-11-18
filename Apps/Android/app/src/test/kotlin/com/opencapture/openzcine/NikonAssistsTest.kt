@@ -19,6 +19,7 @@ import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
+import com.opencapture.opencine.media.ScopeDisplayScale
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.openzcine.lut.StoredLutCategory
@@ -526,7 +527,8 @@ class NikonAssistsTest {
             setFalseColor(reference = false)
             setPeaking(MonitorPeakingColor.BLUE, MonitorPeakingSense.HIGH)
             updateZebraUnit(MonitorZebraUnit.NATIVE)
-            setZebraHighlight(false, 101.0, MonitorZebraPaint.CYAN)
+            // Above code 255's percentage: a highlight may pass 100 (#393) but not the headroom.
+            setZebraHighlight(false, 120.0, MonitorZebraPaint.CYAN)
             setZebraMidtone(false, -5.0, MonitorZebraPaint.GREEN)
             setWaveform(MonitorWaveformMode.LUMA, 250, MonitorScopeGuides(clip = false, crush = true, middle = false), 2.0)
             setParade(MonitorParadeMode.YRGB, -1, MonitorScopeGuides(clip = true, crush = false, middle = false), 0.0)
@@ -541,7 +543,7 @@ class NikonAssistsTest {
         assertEquals(MonitorPeakingColor.BLUE, restored.peakingColor)
         assertEquals(MonitorZebraUnit.NATIVE, restored.zebraUnit)
         assertFalse(restored.zebraHighlight)
-        assertEquals(100.0, restored.zebraHighlightIRE)
+        assertEquals(ScopeDisplayScale.ZEBRA_HIGHLIGHT_CEILING_PERCENT, restored.zebraHighlightIRE)
         assertEquals(MonitorZebraPaint.CYAN, restored.zebraHighlightColor)
         assertFalse(restored.zebraMidtone)
         assertEquals(0.0, restored.zebraMidtoneIRE)

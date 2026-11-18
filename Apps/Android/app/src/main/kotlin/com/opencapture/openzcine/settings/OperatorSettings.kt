@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorGuideSafeAreas
 import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.CameraSettingsPresetStore
 import com.opencapture.opencine.appkit.MonitorDisplayChrome
@@ -27,6 +28,8 @@ public data class LocalFramingAssistConfiguration(
     public val selectedGuideRatios: Set<MonitorGuideAspect> = emptySet(),
     /** Whether the inverse union of selected guide frames is dimmed. */
     public val guideMaskEnabled: Boolean = false,
+    /** Action safe and title safe lines drawn inside each guide frame. */
+    public val guideSafeAreas: MonitorGuideSafeAreas = MonitorGuideSafeAreas.STANDARD,
     /** Whether the locally configured grid is drawn. */
     public val gridVisible: Boolean = false,
     public val ruleOfThirdsEnabled: Boolean = true,
