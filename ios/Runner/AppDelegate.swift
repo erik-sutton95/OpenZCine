@@ -1,8 +1,18 @@
 import MonitorUI
+import OpenCineAppKit
 import OpenZCineCore
 import UIKit
 
 final class AppDelegate: UIResponder, UIApplicationDelegate {
+    /// The monitor's rotation hold: the lock button also keeps the screen from turning.
+    let monitorRotation = MonitorRotationLock()
+
+    func application(
+        _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        monitorRotation.supportedOrientations
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
