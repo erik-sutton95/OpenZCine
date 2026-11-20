@@ -6,13 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Live streaming on Android
+### Live streaming
 
-- Stream the monitored camera's clean picture (with the monitor LUT, without assists) and the
-  phone's microphone to Twitch, YouTube, Facebook, Instagram or a custom RTMPS server. Set it up
-  on the Sharing tab of Settings, then use Go live at the top of the picture. Available over USB-C,
-  an HDMI capture card, a shared Wi-Fi network or the phone's hotspot, not over the camera's own
-  Wi-Fi.
+- iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom
+  server (plain `rtmp://` allowed there with a warning, for TikTok LIVE): Settings, Sharing, Live
+  stream, then Go live over the picture. The camera's own Wi-Fi blocks it; USB-C, HDMI capture, a
+  shared Wi-Fi network or the phone's hotspot allows it. While the monitor is closed, a Live pill at
+  the top shows the stream with Stop. Untested on hardware.
+- Android: the same, streaming the monitored camera's clean picture (with the monitor LUT, without
+  assists) and the phone's microphone, with the same Live pill. Untested on hardware.
 
 ### Monitor rotation hold
 

@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
@@ -697,6 +698,14 @@ struct NikonMonitorShell: View {
                     model.gyroCapture.logsPresented = true
                 }
                 .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
+            }
+        }
+        .overlay {
+            // The shared Go live control, status and notices, top center over the picture.
+            if let stream = model.liveStream {
+                LiveStreamMonitorOverlay(coordinator: stream)
+                    .disabled(model.interfaceLocked)
+                    .liveModuleFrame(live.picture, alignment: .top)
             }
         }
         .overlay { MonitorRecoveryOverlay() }
