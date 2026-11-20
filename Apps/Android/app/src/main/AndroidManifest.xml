@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- PTP-IP camera sockets stay local. Public requests are Frame.io delivery, a problem
-      report the operator sends, and automatic error reports after consent (both to Sentry). -->
+    <!-- PTP-IP camera sockets stay local. Public requests are Frame.io delivery, a live stream
+      the operator starts (to the RTMPS service they chose), a problem report the operator sends,
+      and automatic error reports after consent (both to Sentry). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Camera-AP join: WifiNetworkSpecifier requestNetwork + bindProcessToNetwork. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
@@ -35,6 +36,9 @@
     <!-- Rear camera, used only while the operator explicitly opens the local
       Connection-wizard scanner. OCR stays on device and no frame is stored. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Live streaming carries the phone's microphone with the camera picture. Asked only when
+      the operator confirms Go live; the stream runs in the foreground only (no service). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- The scanner is optional: pairing and all other app surfaces remain
       usable on devices without a camera. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />

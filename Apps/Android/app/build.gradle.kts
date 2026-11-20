@@ -227,6 +227,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
         // (the Frame.io wire and FrameioNative's JNI exports),
         // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
         // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
+        // OpenCineStreaming and OpenCineStreamingAndroid (the RTMPS run controller and
+        // StreamingNative's JNI exports)
         // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
         fileTree(repositoryRoot.resolve("../OpenCine")) {
             include(
@@ -240,6 +242,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineGyroAndroid/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
+                "Sources/OpenCineStreaming/**",
+                "Sources/OpenCineStreamingAndroid/**",
                 "Sources/OpenCineJNISupport/**",
                 "Sources/OpenCineJNI/**",
                 "scripts/android-stage-swift-core.sh",
@@ -355,6 +359,9 @@ dependencies {
     // The one Frame.io owner (sign-in, upload, history, hop lease) over FrameioNative (A4-09).
     implementation("com.opencapture.opencine:frameio:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:gyro:0.1.0-SNAPSHOT")
+    // Live streaming to an RTMPS service (StreamingNative in libOpenZCineAndroid.so); composed
+    // through appkit-native's LiveStreamComposition.
+    implementation("com.opencapture.opencine:streaming:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

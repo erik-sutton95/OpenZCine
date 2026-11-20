@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format is based on
   stream, then Go live over the picture. The camera's own Wi-Fi blocks it; USB-C, HDMI capture, a
   shared Wi-Fi network or the phone's hotspot allows it. While the monitor is closed, a Live pill at
   the top shows the stream with Stop. Untested on hardware.
+- Android: the same, streaming the monitored camera's clean picture (with the monitor LUT, without
+  assists) and the phone's microphone, with the same Live pill. Untested on hardware.
 
 ### Monitor rotation hold
 

@@ -12,8 +12,8 @@ let package = Package(
         .library(name: "OpenZCineCore", targets: ["OpenZCineCore"]),
         // JNI facade consumed by the Android app (`just android-core`): the app's own exports
         // (Kotlin `SwiftCore`) plus OpenCineNikonAndroid's (Kotlin `NikonNative`),
-        // OpenCineFrameIOAndroid's (Kotlin `FrameioNative`) and OpenCineGyroAndroid's
-        // (Kotlin `GyroNative`). The JNI
+        // OpenCineFrameIOAndroid's (Kotlin `FrameioNative`), OpenCineGyroAndroid's
+        // (Kotlin `GyroNative`) and OpenCineStreamingAndroid's (Kotlin `StreamingNative`). The JNI
         // shims are `#if os(Android)`-gated; on Darwin only the platform-neutral
         // wire helpers compile, so iOS/macOS behavior is unchanged.
         .library(
@@ -65,6 +65,8 @@ let package = Package(
                 .product(name: "OpenCineNikonAndroid", package: "OpenCine"),
                 .product(name: "OpenCineFrameIOAndroid", package: "OpenCine"),
                 .product(name: "OpenCineGyroAndroid", package: "OpenCine"),
+                // The RTMPS run controller's JNI exports (Kotlin `StreamingNative`).
+                .product(name: "OpenCineStreamingAndroid", package: "OpenCine"),
             ]
         ),
         // Runs on Darwin (and on Android via the cross-compile test path): the app's

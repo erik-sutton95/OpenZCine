@@ -3,6 +3,7 @@ package com.opencapture.openzcine.bridge
 import android.system.Os
 import com.opencapture.opencine.gyro.GyroNative
 import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.streaming.StreamingNative
 import java.util.TimeZone
 
 /**
@@ -26,6 +27,8 @@ object SwiftCore {
         // touches this first thing in onCreate, before any camera session exists.
         if (!NikonNative.load("OpenZCineAndroid")) return@lazy false
         if (!GyroNative.load("OpenZCineAndroid")) return@lazy false
+        // The live streaming engine (OpenCine's StreamingNative) is in the same library too.
+        if (!StreamingNative.load("OpenZCineAndroid")) return@lazy false
         // Swift Foundation on Android resolves `TimeZone.current` from the libc zone
         // ABBREVIATION ("KST", "CEST"), which ICU rarely recognises, and falls back to
         // GMT, so every Calendar.current wall clock in the core was UTC. The camera

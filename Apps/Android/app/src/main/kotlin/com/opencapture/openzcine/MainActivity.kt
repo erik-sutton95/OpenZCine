@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,6 +67,9 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.gyro.GyroCaptureCoordinator
 import com.opencapture.opencine.gyro.GyroNative
+import com.opencapture.opencine.appkitnative.LiveStreamHostEffects
+import com.opencapture.opencine.appkitnative.LiveStreamRootIndicator
+import com.opencapture.opencine.appkitnative.liveStreamSettingsSource
 import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
 import com.opencapture.opencine.cameracontrols.gyro.GyroCopy
 import com.opencapture.opencine.cameracontrols.gyro.GyroFeatureHost
@@ -268,6 +272,11 @@ class MainActivity : ComponentActivity() {
                     openLogs = gyroCapture::presentLogs,
                     calibrate = if (gyroState.canCalibrate) gyroCapture::beginCalibration else null,
                 )
+                // Live streaming (null without the streaming engine): the card on the Sharing tab, the
+                // Go live control on the monitor picture, and the screen and background rules here.
+                val liveStream = root.liveStream
+                val liveStreamSource = liveStreamSettingsSource(liveStream?.coordinator)
+                liveStream?.let { LiveStreamHostEffects(it.coordinator) }
                 // The row the running pairing CREATED, so walking away from it takes the row back
                 // out — the wizard saves before the body confirmation. Null once anything
                 // connected through it, or when the pairing refreshed a setup that already
@@ -1133,6 +1142,7 @@ class MainActivity : ComponentActivity() {
                                 liveViewEnabled = gyroState.ring != null || gyroState.setupSteps.isNotEmpty() ||
                                     overlay == null && !gyroState.logsPresented,
                                 liveBackdrop = liveBackdrop,
+                                liveStream = liveStream,
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == null && !gyroState.logsPresented &&
                                     gyroState.ring == null && gyroState.setupSteps.isEmpty(),
@@ -1241,6 +1251,7 @@ class MainActivity : ComponentActivity() {
                                         session = active,
                                         controlSession = shellSessions.acquire(active),
                                         gyro = gyroSource,
+                                        liveStream = liveStreamSource,
                                         // Left out where common writes are refused: the demo, a
                                         // picture-only (HDMI) monitor, a watcher holding control.
                                         cameraPresets = cameraPresets.takeUnless {
@@ -1401,6 +1412,7 @@ class MainActivity : ComponentActivity() {
                             session = null,
                             controlSession = null,
                             gyro = gyroSource,
+                            liveStream = liveStreamSource,
                             cameraPresets = cameraPresets,
                             assists = standaloneAssist,
                             operatorSession = standaloneSession,
@@ -1644,6 +1656,12 @@ class MainActivity : ComponentActivity() {
                     ) {
                         MonitorLegalDocumentScreen(ZLegalDocuments, page) { legalPage = null }
                     }
+                }
+                // A stream that outlives the monitor (camera lost, Multiview or Media covering it)
+                // stays visible and stoppable here; hidden while the monitor shows its control.
+                liveStream?.let {
+                    LiveStreamRootIndicator(it.coordinator,
+                        Modifier.align(Alignment.TopCenter).safeDrawingPadding().padding(top = 8.dp))
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics

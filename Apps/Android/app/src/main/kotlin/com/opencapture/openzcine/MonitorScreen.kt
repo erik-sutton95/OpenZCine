@@ -275,6 +275,11 @@ internal fun MonitorScreen(
     frameioController: com.opencapture.opencine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     liveBackdrop: NikonLiveBackdrop? = null,
+    /**
+     * The app's live streaming: this monitor feeds its clean picture and size and shows the Go live
+     * control on the picture. Null on a watcher or without the streaming engine.
+     */
+    liveStream: LiveStreamAdoption? = null,
     mediaRemoteShutter: MonitorRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
@@ -1308,6 +1313,10 @@ internal fun MonitorScreen(
                 !isVerticalFeed && !isCommand, liveBackdrop::setActive)
             DisposableEffect(liveBackdrop, pictureFrameSource) { onDispose { liveBackdrop.sourceChanged() } }
         }
+        // A changed or retired picture source leaves the stream without a source size until its next picture.
+        if (liveStream != null) {
+            DisposableEffect(liveStream, pictureFrameSource) { onDispose { liveStream.pictureEnded() } }
+        }
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
@@ -2276,6 +2285,9 @@ internal fun MonitorScreen(
                                 inspectorPreview.accept(pictureFrameSource, bitmap)
                                 wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
                                 liveBackdrop?.accept(pictureFrameSource, bitmap, look)
+                                liveStream?.accept(frame, bitmap, look,
+                                    liveStreamPictureAspect(bitmap.width, bitmap.height,
+                                        localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale))
                             },
                             presentationState = liveFeedPresentation,
                             collectFrames = monitorFrameSource != null,
@@ -2326,6 +2338,10 @@ internal fun MonitorScreen(
                             Modifier.align(Alignment.TopCenter)
                                 .padding(top = liveFeedColorNoticeTopInset.dp),
                     )
+                    // The Go live control, status and notices: top center, inside the picture (shared contract).
+                    liveStream?.let {
+                        com.opencapture.opencine.appkitnative.LiveStreamOverlay(it.coordinator, Modifier.align(Alignment.TopCenter))
+                    }
                 }
                 },
                 cameraPanel = { key, _, isTopDropDown, _ ->

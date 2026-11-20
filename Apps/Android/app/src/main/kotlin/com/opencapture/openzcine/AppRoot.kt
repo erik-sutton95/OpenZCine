@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
@@ -83,6 +84,20 @@ internal class AppRoot(
     var activeSavedCamera by mutableStateOf<SavedCameraRecord?>(null)
 
     val shellSessions = NikonShellSessions(scope)
+
+    /**
+     * Live streaming of the camera on the monitor (null in a build without the streaming engine).
+     * Its route reads the monitor's connection mode only; it refreshes whenever that changes.
+     */
+    val liveStream: LiveStreamAdoption? =
+        LiveStreamAdoption.create(app, scope) {
+            liveStreamRoute(monitorSession != null, uvcSource != null, activeSavedCamera?.transport)
+        }?.also { stream ->
+            scope.launch {
+                snapshotFlow { Triple(monitorSession, uvcSource, activeSavedCamera?.transport) }
+                    .collect { stream.coordinator.refresh() }
+            }
+        }
     val savedCameraStore = SharedPreferencesSavedCameraStore(app)
 
     /**
@@ -238,6 +253,7 @@ internal class AppRoot(
     }
 
     override fun close() {
+        liveStream?.close()
         closeMultiview()
         mediaDeliveryCoordinator.close()
         deliveryScope.cancel()
