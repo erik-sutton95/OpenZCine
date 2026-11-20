@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Live streaming
+
+- iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom
+  server (plain `rtmp://` allowed there with a warning, for TikTok LIVE): Settings, Sharing, Live
+  stream, then Go live over the picture. The camera's own Wi-Fi blocks it; USB-C, HDMI capture, a
+  shared Wi-Fi network or the phone's hotspot allows it. While the monitor is closed, a Live pill at
+  the top shows the stream with Stop. Untested on hardware.
+
 ### Monitor rotation hold
 
 - The monitor's lock button also holds the screen rotation, upside-down landscape

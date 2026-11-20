@@ -13,6 +13,7 @@ import OpenCineGyroApple
 import OpenCineMedia
 import OpenCineRelay
 import OpenCineRelayApple
+import OpenCineStreaming
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -2388,6 +2389,10 @@ final class NativeAppModel {
         if liveFrameSource !== nativePictureSource { liveFrameSource = nativePictureSource }
         if liveFrameImage !== image { liveFrameImage = image }
         nativeInspectorImage = clean
+        // A running stream takes the clean picture (the LUT, never assists) of every new frame.
+        if let tap = liveStreamTap, let picture = clean.cgImage {
+            tap.submit(picture, effects: liveStreamEffects, timeNs: nil)
+        }
     }
     /// AF / face-detection boxes from the latest live-view frame's header, drawn over the feed.
     var liveViewFocus: PTPLiveViewFocusInfo? {
@@ -2607,6 +2612,9 @@ final class NativeAppModel {
     /// level overlay. Nil until the body reports a level — the overlay falls back to CoreMotion then.
     var cameraLevelRoll: Double?
     var cameraLevelPitch: Double?
+    /// Live streaming (the shared OpenCine coordinator) and, while a stream runs, its clean picture tap.
+    private(set) var liveStream: LiveStreamCoordinator?
+    @ObservationIgnored var liveStreamTap: MonitorCleanPictureTap?
 
     init(
         lutFileStore: CustomLUTStore = CustomLUTStore(),
@@ -2623,6 +2631,7 @@ final class NativeAppModel {
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
+        liveStream = makeLiveStream()
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -3935,6 +3944,23 @@ final class NativeAppModel {
     /// The a0864f1 latch, now derived: "did this session establish over the camera's AP".
     private var establishedSessionUsedCameraAP: Bool {
         activeSessionPath?.kind == .cameraAccessPoint
+    }
+
+    /// Live streaming's route: HDMI capture while it shows the picture, else the established
+    /// session's path while a camera is connected. A watched feed or no camera is `nil`. Only the
+    /// camera's own access point blocks streaming.
+    var liveStreamRoute: StreamConnectionRoute? {
+        if videoSource == .hdmiCapture { return hasLiveFrameImage ? .captureCard : nil }
+        guard videoSource == .cameraLiveView, isConnected, cameraSession != nil,
+            let kind = activeSessionPath?.kind
+        else { return nil }
+        switch kind {
+        case .cameraAccessPoint: return .cameraWiFi
+        case .infrastructure: return .sharedWiFi
+        case .phoneHotspot: return .deviceHotspot
+        case .usbC: return .usbCable
+        case .hdmiCapture: return .captureCard
+        }
     }
 
     /// Compatibility entry for the currently displayed consent, consumed by the shared owner.
@@ -8159,7 +8185,7 @@ final class NativeAppModel {
 
     func syncScreenWakePolicy() {
         screenWakeOwner.update(
-            enabled: preferences.keepScreenAwake,
+            enabled: preferences.keepScreenAwake || liveStream?.isRunning == true,
             sceneActive: !screenWakeSuppressedForBackground)
     }
 
@@ -14652,6 +14678,10 @@ struct NativeAppRoot: View {
         .onChange(of: model.shell.cover) { old, new in
             model.noteShellCoverChange(from: old, to: new)
         }
+        // A running stream keeps the screen awake through the one wake owner; leaving the app
+        // ends it, and heat or a low battery warn without stopping it.
+        .onChange(of: model.liveStream?.isRunning == true) { _, _ in model.syncScreenWakePolicy() }
+        .liveStreamLifecycle(model.liveStream)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MonitorTheme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
