@@ -2340,7 +2340,7 @@ internal fun MonitorScreen(
                     )
                     // The Go live control, status and notices: top center, inside the picture (shared contract).
                     liveStream?.let {
-                        LiveStreamMonitorOverlay(it.coordinator, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
+                        com.opencapture.opencine.appkitnative.LiveStreamOverlay(it.coordinator, Modifier.align(Alignment.TopCenter))
                     }
                 }
                 },

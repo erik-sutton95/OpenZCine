@@ -1,37 +1,17 @@
 package com.opencapture.openzcine
 
-import android.Manifest
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
 import android.util.Log
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.core.graphics.createBitmap
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.monitorui.livestream.LiveStreamMonitorControls
 import com.opencapture.opencine.appkitnative.LiveStreamComposition
 import com.opencapture.opencine.appkitnative.LiveStreamCoordinator
 import com.opencapture.opencine.appkitnative.LiveStreamSource
 import com.opencapture.opencine.media.FeedEffectsRenderPlan
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.SavedCameraTransport
-import com.opencapture.opencine.runtime.MonitorCleanPictureFrame
 import com.opencapture.opencine.runtime.MonitorCleanPictureTap
 import com.opencapture.opencine.streaming.StreamConnectionRoute
 import com.opencapture.opencine.streaming.StreamingNative
-import com.opencapture.openzcine.pairing.rememberPermissionGate
-import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineScope
 
 private const val TAG = "ZCLiveStream"
@@ -72,9 +52,9 @@ internal fun liveStreamPictureAspect(width: Int, height: Int, scaleX: Float, sca
  *
  * The Z monitor presents decoded bitmaps through its own renderer, not OpenCine's native live feed
  * sessions, so nothing in the runtime feeds the tap. [accept] is the producer: the monitor hands it
- * every presented picture and it submits a raw copy (with the live look; the tap drops assists) at
- * the tap's own cadence, only while a stream is attached. It also records the picture's real size
- * as the stream source.
+ * every presented picture and the tap's `submitBitmap` copies it (with the live look; the tap drops
+ * assists) at the tap's own cadence, only while a stream is attached. It also records the picture's
+ * real size as the stream source.
  */
 internal class LiveStreamAdoption private constructor(
     private val cleanPicture: MonitorCleanPictureTap,
@@ -83,8 +63,6 @@ internal class LiveStreamAdoption private constructor(
     context: Context,
 ) : AutoCloseable {
     @Volatile private var picture: LiveStreamSource? = null
-    private var scaled: Bitmap? = null
-    private val scalePaint by lazy { Paint(Paint.FILTER_BITMAP_FLAG) }
 
     val coordinator: LiveStreamCoordinator = LiveStreamComposition.coordinator(
         context,
@@ -107,15 +85,9 @@ internal class LiveStreamAdoption private constructor(
             coordinator.refresh()
         }
         cleanPicture.setPictureAspect(aspect)
-        if (!cleanPicture.frameDue(System.nanoTime())) return
-        if (bitmap.config != Bitmap.Config.ARGB_8888 || decodedLiveFeedColorMode(bitmap) != LiveFeedColorMode.SDR) return
-        val raw = try {
-            rawFrame(bitmap)
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "clean picture copy failed; the stream keeps its last picture", error)
-            return
-        }
-        cleanPicture.submit(raw, frame.timestampNanos, plan ?: FeedEffectsRenderPlan.IDENTITY)
+        // An HDR picture is not the identity SDR the tap expects; the stream keeps its last frame.
+        if (!cleanPicture.wantsFrames || decodedLiveFeedColorMode(bitmap) != LiveFeedColorMode.SDR) return
+        cleanPicture.submitBitmap(bitmap, frame.timestampNanos, plan ?: FeedEffectsRenderPlan.IDENTITY)
     }
 
     /** The monitor's picture source went away: no source until the next picture. */
@@ -125,36 +97,9 @@ internal class LiveStreamAdoption private constructor(
         coordinator.refresh()
     }
 
-    /** RGBA rows of [bitmap], scaled down first when wider than the tap reads back. */
-    private fun rawFrame(bitmap: Bitmap): MonitorCleanPictureFrame {
-        val source = if (bitmap.width <= cleanPicture.maxWidth && bitmap.rowBytes == bitmap.width * 4) {
-            bitmap
-        } else {
-            scaledCopy(bitmap)
-        }
-        val rgba = cleanPicture.frameBuffer(source.width * source.height * 4)
-        // ARGB_8888 is RGBA in memory, the order the tap uploads.
-        source.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
-        return MonitorCleanPictureFrame(source.width, source.height, rgba)
-    }
-
-    private fun scaledCopy(bitmap: Bitmap): Bitmap {
-        val width = minOf(bitmap.width, cleanPicture.maxWidth)
-        val height = (bitmap.height.toLong() * width / bitmap.width).toInt().coerceAtLeast(1)
-        val target = scaled?.takeIf { it.width == width && it.height == height }
-            ?: createBitmap(width, height).also {
-                scaled?.recycle()
-                scaled = it
-            }
-        Canvas(target).drawBitmap(bitmap, null, Rect(0, 0, width, height), scalePaint)
-        return target
-    }
-
     override fun close() {
         coordinator.stop()
         cleanPicture.close()
-        scaled?.recycle()
-        scaled = null
     }
 
     companion object {
@@ -174,44 +119,6 @@ internal class LiveStreamAdoption private constructor(
                 tap.close()
                 null
             }
-        }
-    }
-}
-
-/**
- * The Go live control, status, notice and warnings for the top center of the monitor picture. The
- * microphone is asked through the app's permission gate before a confirmed start; the start runs
- * when it is granted (from the dialog or from Settings on return). A refusal still goes through the
- * coordinator, which ends with the microphone notice.
- */
-@Composable
-internal fun LiveStreamMonitorOverlay(coordinator: LiveStreamCoordinator, modifier: Modifier = Modifier) {
-    val state by coordinator.state.collectAsState()
-    var startWhenGranted by remember { mutableStateOf(false) }
-    val microphone = rememberPermissionGate("livestream.microphone", listOf(Manifest.permission.RECORD_AUDIO)) {
-        if (startWhenGranted) {
-            startWhenGranted = false
-            coordinator.goLive()
-        }
-    }
-    // The ask returns on resume (after the gate's own observer, registered first). A start still
-    // waiting then was refused: the coordinator shows the microphone notice.
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle, coordinator) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_RESUME || !startWhenGranted) return@LifecycleEventObserver
-            startWhenGranted = false
-            coordinator.goLive()
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    LiveStreamMonitorControls(state, coordinator, modifier) {
-        if (microphone.granted) {
-            coordinator.goLive()
-        } else {
-            startWhenGranted = true
-            microphone.request()
         }
     }
 }

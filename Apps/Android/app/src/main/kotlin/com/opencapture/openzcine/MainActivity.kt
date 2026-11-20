@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,7 +68,8 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.gyro.GyroCaptureCoordinator
 import com.opencapture.opencine.gyro.GyroNative
 import com.opencapture.opencine.appkitnative.LiveStreamHostEffects
-import com.opencapture.opencine.cameracontrols.MonitorSettingsLiveStreamSource
+import com.opencapture.opencine.appkitnative.LiveStreamRootIndicator
+import com.opencapture.opencine.appkitnative.liveStreamSettingsSource
 import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
 import com.opencapture.opencine.cameracontrols.gyro.GyroCopy
 import com.opencapture.opencine.cameracontrols.gyro.GyroFeatureHost
@@ -273,10 +275,7 @@ class MainActivity : ComponentActivity() {
                 // Live streaming (null without the streaming engine): the card on the Sharing tab, the
                 // Go live control on the monitor picture, and the screen and background rules here.
                 val liveStream = root.liveStream
-                val liveStreamSource = liveStream?.coordinator?.let { coordinator ->
-                    val state by coordinator.state.collectAsState()
-                    MonitorSettingsLiveStreamSource(state, coordinator)
-                }
+                val liveStreamSource = liveStreamSettingsSource(liveStream?.coordinator)
                 liveStream?.let { LiveStreamHostEffects(it.coordinator) }
                 // The row the running pairing CREATED, so walking away from it takes the row back
                 // out — the wizard saves before the body confirmation. Null once anything
@@ -1657,6 +1656,12 @@ class MainActivity : ComponentActivity() {
                     ) {
                         MonitorLegalDocumentScreen(ZLegalDocuments, page) { legalPage = null }
                     }
+                }
+                // A stream that outlives the monitor (camera lost, Multiview or Media covering it)
+                // stays visible and stoppable here; hidden while the monitor shows its control.
+                liveStream?.let {
+                    LiveStreamRootIndicator(it.coordinator,
+                        Modifier.align(Alignment.TopCenter).safeDrawingPadding().padding(top = 8.dp))
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics
