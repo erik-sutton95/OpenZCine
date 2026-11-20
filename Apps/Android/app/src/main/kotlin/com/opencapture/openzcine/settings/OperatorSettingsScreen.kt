@@ -173,6 +173,8 @@ internal fun OperatorSettingsScreen(
     /** The saved setups, for the Link tab's Your cameras card. */
     savedCameras: List<SavedCamera> = emptyList(),
     gyro: MonitorSettingsGyroSource? = null,
+    /** The Live stream card on the Sharing tab; null where the app does not compose streaming. */
+    liveStream: com.opencapture.opencine.cameracontrols.MonitorSettingsLiveStreamSource? = null,
     /** The Controls tab's camera presets card; `null` leaves it out. */
     cameraPresets: CameraSettingsPresetsModel? = null,
     onClose: () -> Unit,
@@ -349,6 +351,7 @@ internal fun OperatorSettingsScreen(
             "Current OpenZCine build from the native project metadata."),
         gyro = gyro,
         cameraPresets = cameraPresets,
+        liveStream = liveStream,
     )
     // Seeds the session once per requested landing tab, before the first frame draws.
     remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }

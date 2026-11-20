@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Live streaming on Android
+
+- Stream the monitored camera's clean picture (with the monitor LUT, without assists) and the
+  phone's microphone to Twitch, YouTube, Facebook, Instagram or a custom RTMPS server. Set it up
+  on the Sharing tab of Settings, then use Go live at the top of the picture. Available over USB-C,
+  an HDMI capture card, a shared Wi-Fi network or the phone's hotspot, not over the camera's own
+  Wi-Fi.
+
 ### Monitor rotation hold
 
 - The monitor's lock button also holds the screen rotation, upside-down landscape
