@@ -117,14 +117,17 @@
 		N01000000000000000000004 /* MonitorUI in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000003 /* MonitorUI */; };
 		N01000000000000000000006 /* OpenCineMulticam in Frameworks */ = {isa = PBXBuildFile; productRef = N01000000000000000000005 /* OpenCineMulticam */; };
 		N0100000000000000000000A /* ZCineMultiviewHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* ZCineMultiviewHost.swift */; };
+		STR000000000000000000003 /* LiveStreamHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = STR000000000000000000004 /* LiveStreamHost.swift */; };
 		N0100000000000000000000C /* MulticamLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000B /* MulticamLinks.swift */; };
 		N0100000000000000000000E /* ZCineMultiviewHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* ZCineMultiviewHostTests.swift */; };
+		STR000000000000000000005 /* LiveStreamHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STR000000000000000000006 /* LiveStreamHostTests.swift */; };
 		C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B5 /* MulticamPictureTests.swift */; };
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N02000000000000000000006 /* OpenCineCameraControls in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000005 /* OpenCineCameraControls */; };
 		GYR000000000000000000001 /* OpenCineGyro in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000002 /* OpenCineGyro */; };
 		GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */ = {isa = PBXBuildFile; productRef = GYR000000000000000000004 /* OpenCineGyroApple */; };
+		STR000000000000000000001 /* OpenCineStreaming in Frameworks */ = {isa = PBXBuildFile; productRef = STR000000000000000000002 /* OpenCineStreaming */; };
 		F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000022 /* OpenCineFrameIOApple */; };
 		F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000012 /* OpenCineAppKitApple */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
@@ -313,8 +316,10 @@
 		WTCH00000000000000000051 /* OpenZCineWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenZCineWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		WTCH000000000000000000A4 /* Watch.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Watch.xcconfig; sourceTree = "<group>"; };
 		N01000000000000000000009 /* ZCineMultiviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCineMultiviewHost.swift; sourceTree = "<group>"; };
+		STR000000000000000000004 /* LiveStreamHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStreamHost.swift; sourceTree = "<group>"; };
 		N0100000000000000000000B /* MulticamLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamLinks.swift; sourceTree = "<group>"; };
 		N0100000000000000000000D /* ZCineMultiviewHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCineMultiviewHostTests.swift; sourceTree = "<group>"; };
+		STR000000000000000000006 /* LiveStreamHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStreamHostTests.swift; sourceTree = "<group>"; };
 		C0DE000000000000000006B5 /* MulticamPictureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamPictureTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
@@ -361,6 +366,7 @@
 				N02000000000000000000006 /* OpenCineCameraControls in Frameworks */,
 				GYR000000000000000000001 /* OpenCineGyro in Frameworks */,
 				GYR000000000000000000003 /* OpenCineGyroApple in Frameworks */,
+				STR000000000000000000001 /* OpenCineStreaming in Frameworks */,
 				F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */,
 				F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */,
 				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
@@ -409,6 +415,7 @@
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* ZCineMultiviewHostTests.swift */,
+				STR000000000000000000006 /* LiveStreamHostTests.swift */,
 				C0DE000000000000000006B5 /* MulticamPictureTests.swift */,
 				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
@@ -478,6 +485,7 @@
 				87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */,
 				N0100000000000000000000B /* MulticamLinks.swift */,
 				N01000000000000000000009 /* ZCineMultiviewHost.swift */,
+				STR000000000000000000004 /* LiveStreamHost.swift */,
 				C0DE000000000000000006B1 /* MulticamCameraSettings.swift */,
 				C0DE000000000000000006B3 /* MulticamPicture.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
@@ -623,6 +631,7 @@
 				N02000000000000000000005 /* OpenCineCameraControls */,
 				GYR000000000000000000002 /* OpenCineGyro */,
 				GYR000000000000000000004 /* OpenCineGyroApple */,
+				STR000000000000000000002 /* OpenCineStreaming */,
 				F13D00000000000000000022 /* OpenCineFrameIOApple */,
 				F13D00000000000000000012 /* OpenCineAppKitApple */,
 				N01000000000000000000001 /* MonitorPresentation */,
@@ -805,6 +814,7 @@
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* ZCineMultiviewHostTests.swift in Sources */,
+				STR000000000000000000005 /* LiveStreamHostTests.swift in Sources */,
 				C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */,
 				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
@@ -852,6 +862,7 @@
 				E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */,
 				N0100000000000000000000C /* MulticamLinks.swift in Sources */,
 				N0100000000000000000000A /* ZCineMultiviewHost.swift in Sources */,
+				STR000000000000000000003 /* LiveStreamHost.swift in Sources */,
 				C0DE000000000000000006B2 /* MulticamCameraSettings.swift in Sources */,
 				C0DE000000000000000006B4 /* MulticamPicture.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
@@ -1522,6 +1533,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineGyroApple;
+		};
+		STR000000000000000000002 /* OpenCineStreaming */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineStreaming;
 		};
 		F13D00000000000000000022 /* OpenCineFrameIOApple */ = {
 			isa = XCSwiftPackageProductDependency;

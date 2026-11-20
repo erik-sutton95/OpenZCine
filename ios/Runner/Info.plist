@@ -73,6 +73,8 @@
 	</array>
 	<key>NSMotionUsageDescription</key>
 	<string>Record the mounted phone’s motion for Gyroflow stabilization.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OpenZCine uses the microphone for the sound of a live stream you start.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon camera's screen so it can connect to the camera, and on iPad to read the picture from a connected USB video capture device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
