@@ -55,6 +55,8 @@ includeBuild("../../../OpenCine/Android") {
         // The one Android Frame.io owner over the shared Swift wire (A4-09).
         substitute(module("com.opencapture.opencine:frameio")).using(project(":frameio"))
         substitute(module("com.opencapture.opencine:gyro")).using(project(":gyro"))
+        // Live streaming: socket, MediaCodec encoders, microphone and Keystore keys over StreamingNative.
+        substitute(module("com.opencapture.opencine:streaming")).using(project(":streaming"))
     }
 }
 
