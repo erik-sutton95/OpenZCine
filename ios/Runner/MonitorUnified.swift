@@ -654,6 +654,9 @@ struct NikonMonitorShell: View {
             set: { model.preferences.portraitFeedAspect = $0 })
     }
 
+    /// The Go live column's width; it hangs from the anchor's top trailing corner.
+    private static let liveStreamWidth: CGFloat = 260
+
     var body: some View {
         let live = self.live
         let layout =
@@ -700,12 +703,20 @@ struct NikonMonitorShell: View {
                 .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
             }
         }
-        .overlay {
-            // The shared Go live control, status and notices, top center over the picture.
+        .overlay(alignment: .topLeading) {
+            // The shared Go live control, status and notices, hanging under the timecode
+            // block (top right) from the shared anchor.
             if let stream = model.liveStream {
+                let anchor = LiveStreamOverlayPlacement.anchor(
+                    status: MonitorRect(
+                        x: live.topDeck.minX, y: live.topDeck.minY,
+                        width: live.topDeck.width, height: live.topDeck.height),
+                    viewportWidth: live.viewport.width, safeTop: live.safeArea.top,
+                    safeTrailing: live.safeArea.trailing)
                 LiveStreamMonitorOverlay(coordinator: stream)
                     .disabled(model.interfaceLocked)
-                    .liveModuleFrame(live.picture, alignment: .top)
+                    .frame(width: Self.liveStreamWidth, alignment: .topTrailing)
+                    .offset(x: anchor.x - Self.liveStreamWidth, y: anchor.y)
             }
         }
         .overlay { MonitorRecoveryOverlay() }
