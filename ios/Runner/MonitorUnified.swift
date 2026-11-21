@@ -704,11 +704,12 @@ struct NikonMonitorShell: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            // The shared Go live control, status and notices, hanging under the timecode block
-            // (top right) from the shared anchor.
+            // The shared Go live control, status and notices, hanging under the timecode
+            // block (top right) from the shared anchor.
             if let stream = model.liveStream {
                 let anchor = LiveStreamOverlayPlacement.anchor(
-                    status: MonitorRect(x: live.topDeck.minX, y: live.topDeck.minY,
+                    status: MonitorRect(
+                        x: live.topDeck.minX, y: live.topDeck.minY,
                         width: live.topDeck.width, height: live.topDeck.height),
                     viewportWidth: live.viewport.width, safeTop: live.safeArea.top,
                     safeTrailing: live.safeArea.trailing)
