@@ -2338,10 +2338,6 @@ internal fun MonitorScreen(
                             Modifier.align(Alignment.TopCenter)
                                 .padding(top = liveFeedColorNoticeTopInset.dp),
                     )
-                    // The Go live control, status and notices: top center, inside the picture (shared contract).
-                    liveStream?.let {
-                        com.opencapture.opencine.appkitnative.LiveStreamOverlay(it.coordinator, Modifier.align(Alignment.TopCenter))
-                    }
                 }
                 },
                 cameraPanel = { key, _, isTopDropDown, _ ->
@@ -2430,6 +2426,17 @@ internal fun MonitorScreen(
                     onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
             )
             }
+        }
+
+        // The shared Go live control, status and notices, hanging under the timecode block (top
+        // right) from the shared anchor, in screen coordinates.
+        liveStream?.let {
+            val layout = geometry.layout
+            val anchor = com.opencapture.monitorui.LiveStreamOverlayPlacement.anchor(
+                layout.topDeck, layout.viewportWidth, layout.safeTop, layout.safeTrailing)
+            com.opencapture.opencine.appkitnative.LiveStreamOverlay(it.coordinator,
+                Modifier.align(Alignment.TopStart).offset(0.dp, anchor.y.dp)
+                    .size(anchor.x.coerceAtLeast(0f).dp, (layout.viewportHeight - anchor.y).coerceAtLeast(0f).dp))
         }
 
         gyroState?.takeIf { state ->
