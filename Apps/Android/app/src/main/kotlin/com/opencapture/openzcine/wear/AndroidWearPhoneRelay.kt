@@ -166,7 +166,9 @@ internal class AndroidWearPhoneRelay(context: Context) {
                 liveFPS = frame.measuredFramesPerSecond?.takeIf { it.isFinite() && it > 0.0 }?.roundToInt()?.toString() ?: state.liveFPS))
         }
         owner.ingestPreview(PreviewSnapshot(preview, previewBaker,
-            frame.timecode?.toWatchTimecode() ?: WatchTimecode.unavailable(), frame.isRecording, profile), window)
+            frame.timecode?.toWatchTimecode() ?: WatchTimecode.unavailable(),
+            // A first-generation header carries no record state: the watch keeps the current one.
+            frame.isRecording ?: (owner.currentState?.isRecording ?: false), profile), window)
     }
     private fun operator(action: () -> Unit) {
         if (Looper.myLooper() == handler.looper) action() else handler.post { action() }

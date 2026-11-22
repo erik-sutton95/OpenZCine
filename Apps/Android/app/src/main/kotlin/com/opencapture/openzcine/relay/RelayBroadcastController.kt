@@ -52,6 +52,8 @@ class RelayBroadcastController(
         val frames: LiveFrameSource,
         val cameraName: String?,
     )
+    /** The broadcast camera, for frames whose header carries no record state. */
+    @Volatile private var broadcastSession: CameraSession? = null
     private val owner = RelayBroadcastOwner<Source, LiveFrame, MonitorRelayWire.State,
         MonitorRelayWire.FrameMetadata, MonitorRelayWire.Command, MonitorRelayWire.ControlToken,
         MonitorRelayWire.JoinDenied>(
@@ -122,14 +124,20 @@ class RelayBroadcastController(
         frames: LiveFrameSource,
         cameraName: String?,
         servedCameraHost: String?,
-    ) = owner.start(Source(session, common, frames, cameraName), cameraName, servedCameraHost)
+    ): Boolean {
+        broadcastSession = session
+        return owner.start(Source(session, common, frames, cameraName), cameraName, servedCameraHost)
+    }
     fun grantPendingControl() = owner.grantPendingControl()
     fun declinePendingControl() = owner.declinePendingControl()
     val pendingRequest: RelayHostControl.PendingRequest? get() = owner.pendingRequest
     fun grantPendingControl(request: RelayHostControl.PendingRequest) = owner.grantPendingControl(request)
     fun declinePendingControl(request: RelayHostControl.PendingRequest) = owner.declinePendingControl(request)
     fun reclaimControl() = owner.reclaimControl()
-    fun stop(notifyReason: String? = null) = owner.stop(notifyReason)
+    fun stop(notifyReason: String? = null) {
+        broadcastSession = null
+        owner.stop(notifyReason)
+    }
 
     companion object {
         /** Where earlier builds kept the broadcast passcode in plain text (OperatorSettings). */
@@ -160,7 +168,9 @@ class RelayBroadcastController(
                         it.on, it.hour, it.minute, it.second, it.frame
                     )
                 },
-            isRecording = frame.isRecording,
+            // A first-generation header carries no record state: the session's current state.
+            isRecording = frame.isRecording
+                ?: (broadcastSession?.recordingState?.value == CameraRecordingState.RECORDING),
             focus =
                 frame.focus?.let { focus ->
                     MonitorRelayWire.Focus(

@@ -60,15 +60,13 @@ private func liveViewObject(declaredLength: UInt32, jpeg: [UInt8]) -> Data {
 
     let timecode = PTPLiveViewObject.timecode(from: object)
 
-    #expect(timecode.on)
-    #expect(timecode.label == "01:23:45:12")
+    #expect(timecode?.on == true)
+    #expect(timecode?.label == "01:23:45:12")
 }
 
-@Test func liveViewObjectReturnsOffTimecodeWhenHeaderIsTooShort() {
-    let timecode = PTPLiveViewObject.timecode(from: Data(repeating: 0, count: 10))
-
-    #expect(!timecode.on)
-    #expect(timecode.label == "00:00:00:00")
+@Test func liveViewObjectReportsNoTimecodeWhenHeaderIsTooShort() {
+    // A header too short to carry it reports none, never a zero clock (OPENZCINE-IOS-1V).
+    #expect(PTPLiveViewObject.timecode(from: Data(repeating: 0, count: 10)) == nil)
 }
 
 @Test func liveViewObjectParsesSoundIndicator() throws {
