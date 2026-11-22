@@ -61,8 +61,10 @@ import OpenZCineCore
     /// The library owner's current source; a new camera service rebinds it, never replaces it.
     var service: NikonMediaService?
     private let downloaded: (MediaClip) -> Bool
-    // Immutable captured tombstones are checked against current bytes, never filename alone.
-    private var acceptedRemovals: [NikonMediaObjectRecord] = []
+    // Immutable captured tombstones are checked against current bytes, never filename alone. Keyed
+    // by the exact object identity (its location included): after a card swap this holds the whole
+    // previous card, and every indexed row is looked up in it (OPENZCINE-IOS-1S).
+    private var acceptedRemovals: Set<MediaClipObjectIdentity> = []
     /// The last record mapped per clip id. Listing re-captures every row on each 32-object page,
     /// and an unchanged clip maps to the same record, so only new or changed clips pay the path work.
     private var mapped: [String: (clip: MediaClip, record: MonitorMediaRecord<MediaClip>)] = [:]
@@ -135,10 +137,8 @@ import OpenZCineCore
         var changed = false
         for old in current where !acceptedRemovals.isEmpty && !candidateNames.contains(old.filename)
         {
-            let matched = NikonMediaCatalogAdapter.records([old]).contains { live in
-                acceptedRemovals.contains {
-                    $0.location == live.location && $0.identity == live.identity
-                }
+            let matched = NikonMediaCatalogAdapter.records([old]).contains {
+                acceptedRemovals.contains($0.identity)
             }
             if matched {
                 rows[old.filename] = nil
@@ -151,11 +151,8 @@ import OpenZCineCore
                 // Source-removal survivors carry their exact remaining locations, not the old union.
                 let liveObjects =
                     acceptedRemovals.isEmpty ? [] : NikonMediaCatalogAdapter.records([live])
-                let removed = acceptedRemovals.filter { tombstone in
-                    liveObjects.contains {
-                        $0.location == tombstone.location && $0.identity == tombstone.identity
-                    }
-                }.map(\.location)
+                let removed = Set(
+                    liveObjects.filter { acceptedRemovals.contains($0.identity) }.map(\.location))
                 let survivors = merged.allLocations.filter { !removed.contains($0) }
                 if !removed.isEmpty {
                     let primary = survivors.min {
@@ -260,13 +257,10 @@ import OpenZCineCore
             throw MediaServiceError.retired
         }
         let old = existing.map(\.payload)
-        // Tombstones arrive on few pages; build the indexed object list only for those.
-        let indexed = removals.isEmpty ? [] : NikonMediaCatalogAdapter.records(old)
-        let accepted = removals.filter { tombstone in
-            indexed.contains {
-                $0.location == tombstone.location && $0.identity == tombstone.identity
-            }
-        }
+        // Tombstones arrive on few pages; index the catalog's objects only for those.
+        let indexed: Set<MediaClipObjectIdentity> =
+            removals.isEmpty ? [] : Set(NikonMediaCatalogAdapter.records(old).map(\.identity))
+        let accepted = removals.filter { indexed.contains($0.identity) }
         let locations = Set(accepted.map(\.location))
         let remoteOnly = Set(
             old.filter { clip in
@@ -287,11 +281,8 @@ import OpenZCineCore
             next[index].linkedR3DFilename = update.masterFilename
         }
         guard service.isCurrent(binding) else { throw MediaServiceError.retired }
-        let incomingObjects = NikonMediaCatalogAdapter.records(additions)
-        acceptedRemovals.removeAll { old in
-            incomingObjects.contains { $0.location == old.location && $0.identity == old.identity }
-        }
-        acceptedRemovals.append(contentsOf: accepted)
+        acceptedRemovals.subtract(NikonMediaCatalogAdapter.records(additions).map(\.identity))
+        acceptedRemovals.formUnion(accepted.map(\.identity))
         // A 32-object page leaves almost every row as it was: only new or changed clips are mapped
         // and published. An unchanged row's amendment would replace it with itself.
         let existingByName = Dictionary(

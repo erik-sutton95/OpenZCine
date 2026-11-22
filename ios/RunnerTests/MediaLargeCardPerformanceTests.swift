@@ -22,9 +22,11 @@ import Testing
     static let storage: UInt32 = 65_537
 
     /// One realistic card, newest handle last, as a ZR lists it.
-    static func cardObjects() -> [NikonMediaObjectRecord] {
+    static func cardObjects(handleBase: UInt32 = 0x1000, stem: String = "DSC")
+        -> [NikonMediaObjectRecord]
+    {
         var objects: [NikonMediaObjectRecord] = []
-        var handle: UInt32 = 0x1000
+        var handle = handleBase
         func add(_ name: String, size: UInt64, index: Int, width: UInt32?, height: UInt32?) {
             handle += 1
             let second = index % 60
@@ -38,13 +40,14 @@ import Testing
                     sizeBytes: size, pixelWidth: width, pixelHeight: height))
         }
         for index in 1...pairs {
-            let stem = String(format: "DSC_%04d", index)
-            add(stem + ".NEF", size: 28_400_000, index: index, width: 6_048, height: 4_032)
-            add(stem + ".JPG", size: 9_800_000, index: index, width: 6_048, height: 4_032)
+            let name = stem + String(format: "_%04d", index)
+            add(name + ".NEF", size: 28_400_000, index: index, width: 6_048, height: 4_032)
+            add(name + ".JPG", size: 9_800_000, index: index, width: 6_048, height: 4_032)
         }
         for index in 1...movies {
             let number = pairs + index
-            let name = String(format: "DSC_%04d", number) + (index % 2 == 0 ? ".MOV" : ".MP4")
+            let name =
+                stem + String(format: "_%04d", number) + (index % 2 == 0 ? ".MOV" : ".MP4")
             add(name, size: 1_200_000_000, index: number, width: 3_840, height: 2_160)
         }
         return objects
@@ -163,6 +166,26 @@ import Testing
         #expect(decoded <= 8, "the index was decoded \(decoded) times in one listing")
         #expect(listed <= 8, "the bucket was listed \(listed) times in one listing")
         #expect(result.elapsed < .seconds(20), "relisting took \(result.elapsed)")
+    }
+
+    /// A card swap (OPENZCINE-IOS-1S, 7 s hang in `persistedBytes`): the index still holds the
+    /// previous card, so every one of its objects is a removal. Each checkpoint compared every
+    /// indexed row with every accepted removal on the main thread (rows x removals). The
+    /// previous card's remote-only rows must go, and the cost must stay per object.
+    @Test func listingASwappedCardCostsPerObjectNotPerRemoval() async throws {
+        let previous = Self.cardObjects(handleBase: 0x9000, stem: "PRV").map {
+            let clip = NikonMediaCatalogAdapter.clip($0, bucket: Self.bucket)
+            return MediaClipStore.mergeCameraDiscovery(existing: clip, incoming: clip)
+        }
+        let result = try await listCard(cached: previous)
+        print(
+            "PERF card-swap objects=\(Self.total) removals=\(previous.count) ms=\(milliseconds(result.elapsed)) captureMs=\(result.counts[.captureMicros] / 1_000) prepareMs=\(result.counts[.prepareMicros] / 1_000) persistMs=\(result.counts[.persistMicros] / 1_000)"
+        )
+        #expect(result.records == Self.total)
+        #expect(
+            result.counts[.persistMicros] < 3_000_000,
+            "persisting the swap took \(result.counts[.persistMicros] / 1_000) ms")
+        #expect(result.elapsed < .seconds(20), "listing the swapped card took \(result.elapsed)")
     }
 
     /// Select 500 stills and share them while the gallery stays open: the captured action reads
