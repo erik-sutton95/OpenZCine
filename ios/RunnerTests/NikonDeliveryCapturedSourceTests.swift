@@ -1,4 +1,5 @@
 import Foundation
+import MonitorPresentation
 import OpenZCineCore
 import XCTest
 
@@ -104,6 +105,65 @@ import XCTest
         let offsets = await camera.calls.filter { $0.operation == .getPartialObject }
             .map { $0.parameters[1] }
         XCTAssertEqual(offsets, [0, 2, 2], "Share resumes at the player's partial bytes")
+    }
+
+    /// OPENZCINE-IOS-1W: the gallery cell reads each clip's file once and keeps the answer, so
+    /// the answer must follow the bytes. A stream that finishes the clip shows it cached in its
+    /// cell, and deleting it, or clearing the cache, shows it on the camera again.
+    func testGalleryCellFollowsAFinishedStreamAndADeletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SIMULATED-gallery-cell-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let clip = MediaClip(
+            cameraID: "SIMULATED", filename: "CELL.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 4, captureDate: "20261122T120000")
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        let url = try store.localURL(cameraID: clip.cameraID, filename: clip.filename)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1, 2]).write(to: url)
+        let camera = LargeTransferTransport(
+            operations: [.getPartialObject], chunks: [Data([3, 4])])
+        let session = try await NativeCameraSession.establish(
+            transport: camera, host: "usb:SIMULATED-cell", cameraName: "SIMULATED",
+            requestPairing: false)
+        defer { session.close() }
+        let model = NativeAppModel(mediaClipStore: store)
+        model.debugAdoptEstablishedMediaSession(session)
+        model.connection = .connected
+        defer {
+            model.connection = .disconnected
+            model.debugAdoptEstablishedMediaSession(nil)
+        }
+        model.prepareMediaLibrary(rows: [clip], bucket: clip.cameraID, service: nil)
+        func cell() -> MonitorMediaItem {
+            model.mediaCellItem(
+                clip, list: false, selecting: false, duration: nil,
+                projection: model.mediaGalleryProjection)
+        }
+
+        XCTAssertEqual(cell().availability, .camera)
+        XCTAssertEqual(cell().progress, 0.5, "half the clip is cached")
+
+        let cached = await model.cacheClipFromCamera(clip)
+        XCTAssertTrue(cached)
+        XCTAssertEqual(try Data(contentsOf: url), Data([1, 2, 3, 4]))
+        XCTAssertEqual(cell().availability, .original, "a finished stream shows the clip cached")
+        XCTAssertNil(cell().progress)
+
+        try model.clearAllMediaCaches()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(cell().availability, .camera, "a cleared cache shows the clip on camera")
+
+        try Data([1, 2, 3, 4]).write(to: url)
+        model.refreshMediaClips()
+        XCTAssertEqual(cell().availability, .original, "a re-read library reads the file again")
+        let removed = await model.deleteMediaClips([clip], deleteLocation: { _ in true })
+        XCTAssertEqual(removed, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(cell().availability, .camera, "a deleted clip is no longer cached")
+        await model.mediaLibrary?.dispose()
     }
 
     /// Owner hardware report 2026-10-29: when the camera stops answering partway through the

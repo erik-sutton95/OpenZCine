@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### USB-C and Media gallery fixes
+
+- iOS: the Media gallery no longer hangs while a clip downloads on a large card. Each cell reads its
+  clip's file once instead of on every redraw, and a download's progress redraws only that clip's
+  cell (OPENZCINE-IOS-1W).
+
 ## [0.3.0] - 2026-11-22
 
 Public beta, cumulative since the 2026-10-30 public beta (0.2.8). The operator-facing iOS and

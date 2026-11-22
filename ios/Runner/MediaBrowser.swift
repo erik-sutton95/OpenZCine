@@ -149,16 +149,20 @@ struct MediaBrowserView: View {
                     managesVisibility: false,
                     deletionDetail: nikonDeletionDetail,
                     facts: { record in
-                        .init(
+                        // A cell reads its own clip's progress only, so one clip's transfer
+                        // ticks never re-render the other cells (OPENZCINE-IOS-1W).
+                        let progress = model.mediaDownloadProgress[record.payload.id]
+                        return .init(
                             resolution: record.payload.resolutionBucket?.rawValue,
                             byteCount: record.payload.sizeBytes > 0
                                 ? record.payload.sizeBytes : nil,
                             durationSeconds: nil, dateKey: nil, colorLabel: nil,
-                            progress: model.isClipStreaming(record.payload)
-                                ? model.mediaDownloadProgress[record.payload.id] : nil,
+                            progress: model.isClipStreaming(record.payload) ? progress : nil,
                             // Every running camera stream has a reading (the player's, the
-                            // gallery's Download, a Share), and none outlives its stream.
-                            transferRate: model.mediaDownloadRates.rate(record.payload.id))
+                            // gallery's Download, a Share), and none outlives its stream; a clip
+                            // without progress has no stream, so its cell skips the shared rates.
+                            transferRate: progress == nil
+                                ? nil : model.mediaDownloadRates.rate(record.payload.id))
                     },
                     cell: { record, context in
                         model.mediaCellItem(
@@ -186,7 +190,7 @@ struct MediaBrowserView: View {
                     let clip = request.record.payload
                     MediaClipThumbnail(
                         clip: clip, list: request.list,
-                        isDownloaded: model.isClipDownloaded(clip),
+                        isDownloaded: model.isGalleryClipDownloaded(clip),
                         localURL: model.clipLocalURL(clip),
                         thumbnailURL: model.clipThumbnailURL(clip),
                         needsDuration: request.resolvedDuration == nil,
@@ -320,7 +324,9 @@ extension NativeAppModel {
         _ clip: MediaClip, list: Bool, selecting: Bool, duration: String?,
         projection: NikonAppGalleryProjection
     ) -> MonitorMediaItem {
-        let downloaded = isClipDownloaded(clip)
+        // One file read per clip, kept until its bytes change (OPENZCINE-IOS-1W).
+        let onDisk = mediaClipDiskSizes.size(of: clip, in: mediaClipStore)
+        let downloaded = Self.isDownloaded(clip, onDisk: onDisk)
         let raw = projection.rawSibling(of: clip) != nil
         return MediaClipCellPresentation.item(
             clip: clip,
@@ -328,7 +334,8 @@ extension NativeAppModel {
                 ? MediaClipCellPresentation.metadataLine(
                     clip, hasRawSibling: raw, duration: duration, isDownloaded: downloaded) : "",
             isDownloaded: downloaded,
-            cacheProgress: mediaDownloadProgress[clip.id] ?? clipBufferedFraction(clip),
+            cacheProgress: mediaDownloadProgress[clip.id]
+                ?? Self.bufferedFraction(clip, onDisk: onDisk),
             isStreaming: isClipStreaming(clip), hasRawSibling: raw,
             burstCount: projection.series(for: clip)?.count,
             duration: duration, list: list, selecting: selecting)

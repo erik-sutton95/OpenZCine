@@ -2727,7 +2727,9 @@ final class NativeAppModel {
         mediaFetchInProgress ? mediaProducer?.service.listedCount ?? 0 : 0
     }
     /// Per-clip download progress (`clip.id` → 0…1) while a clip streams from the camera.
-    var mediaDownloadProgress: [String: Double] = [:]
+    let mediaDownloadProgress = MediaDownloadProgressBoard()
+    /// Gallery cells' on-disk byte counts, one file read per clip until its bytes change.
+    let mediaClipDiskSizes = MediaClipDiskSizes()
     /// Per-clip download speed while a clip streams from the camera (OpenCine's one rate source,
     /// the same the shared library feeds for its own transfers).
     @ObservationIgnored let mediaDownloadRates = MonitorTransferRates<String>()
@@ -11543,6 +11545,7 @@ final class NativeAppModel {
                     return false
                 }
                 self.mediaClipStore.purgeClip(cameraID: clip.cameraID, filename: clip.filename)
+                self.mediaClipDiskSizes.forget(clip.id)
                 return true
             },
             finish: { [weak self] in
@@ -14956,6 +14959,9 @@ extension NativeAppModel {
 
     /// Reloads the library list from the on-disk cache + index for the active browser bucket.
     func refreshMediaClips() {
+        // The library is read from disk again, and so is every cell's file (a cache clear, an
+        // import or a delete changed them).
+        mediaClipDiskSizes.forgetAll()
         let bucket = mediaBrowserSource == .camera ? mediaBucketID : MediaClipStore.localBucketID
         let rows: [MediaClip]
         if !isConnected, mediaBrowserSource == .camera {
@@ -15140,8 +15146,19 @@ extension NativeAppModel {
                 cameraID: clip.cameraID, filename: clip.filename)
         else { return false }
         // One stat(2): playback asks this on every body pass (see MediaFileFacts).
-        guard let facts = MediaFileFacts.read(url.path, followingLinks: true) else { return false }
-        let onDisk = facts.size
+        return Self.isDownloaded(
+            clip, onDisk: MediaFileFacts.read(url.path, followingLinks: true)?.size)
+    }
+
+    /// `isClipDownloaded` for gallery cells: the clip's file is read once and the answer kept
+    /// until its bytes change (OPENZCINE-IOS-1W).
+    func isGalleryClipDownloaded(_ clip: MediaClip) -> Bool {
+        Self.isDownloaded(clip, onDisk: mediaClipDiskSizes.size(of: clip, in: mediaClipStore))
+    }
+
+    /// Whether `onDisk` cached bytes (nil: no file) are the whole clip.
+    static func isDownloaded(_ clip: MediaClip, onDisk: UInt64?) -> Bool {
+        guard let onDisk else { return false }
         // A local-only legacy row can use the existing nonempty-file fact without claiming a
         // camera extent. Active unknown/sentinel objects cannot establish transfer completion.
         if clip.sizeBytes == 0 {
@@ -15211,19 +15228,15 @@ extension NativeAppModel {
         clipStreamClipID == clip.id && mediaDownloadProgress[clip.id] != nil
     }
 
-    /// Byte-fraction of this clip cached locally (0…1), or `nil` when fully cached or unknown.
-    /// During an active camera stream prefers the live `mediaDownloadProgress` value; otherwise
-    /// derives from on-disk size so partially cached clips show buffer state before resuming.
-    func clipBufferedFraction(_ clip: MediaClip) -> Double? {
+    /// Byte-fraction of this clip cached locally (0…1) from `onDisk` cached bytes, or `nil` when
+    /// fully cached, not cached or of unknown size, so a partly cached clip shows its buffer state
+    /// before its stream resumes.
+    static func bufferedFraction(_ clip: MediaClip, onDisk: UInt64?) -> Double? {
         let total = clip.sizeBytes
         guard total > 0 else { return nil }
-        let cached = mediaClipStore.cachedByteCount(
-            cameraID: clip.cameraID, filename: clip.filename)
+        let cached = onDisk ?? 0
         if cached >= total { return nil }
         let byteFraction = min(1.0, Double(cached) / Double(total))
-        if let live = mediaDownloadProgress[clip.id] {
-            return min(1.0, max(byteFraction, live))
-        }
         return byteFraction > 0 ? byteFraction : nil
     }
 
@@ -15362,19 +15375,19 @@ extension NativeAppModel {
                     mediaDownloadRates.record(clip.id, totalBytes: offset)
                 })
             if Task.isCancelled {
-                mediaDownloadProgress[clip.id] = nil
+                endClipProgress(clip.id)
                 return
             }
-            mediaDownloadProgress[clip.id] = nil
+            endClipProgress(clip.id)
             mediaLibraryLogger.info(
                 "streamed \(clip.filename, privacy: .private(mask: .hash)) (\(offset, privacy: .public) bytes)"
             )
         } catch {
             if Task.isCancelled {
-                mediaDownloadProgress[clip.id] = nil
+                endClipProgress(clip.id)
                 return
             }
-            mediaDownloadProgress[clip.id] = nil
+            endClipProgress(clip.id)
             if NativeCameraSessionError.isLinkFailure(error) {
                 mediaStreamsLostCamera.insert(clip.id)
             }
@@ -15383,6 +15396,13 @@ extension NativeAppModel {
             )
         }
         refreshMediaClips()
+    }
+
+    /// A clip's stream ended and its cached bytes changed: the next cell render reads its file
+    /// again, then the reading ends (which re-renders that clip's cell).
+    private func endClipProgress(_ clipID: String) {
+        mediaClipDiskSizes.forget(clipID)
+        mediaDownloadProgress[clipID] = nil
     }
 
     /// Downloads a clip into the local cache and reports whether it's fully on disk. Awaits the

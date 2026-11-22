@@ -1,5 +1,6 @@
 import Foundation
 import MonitorPresentation
+import Observation
 import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
@@ -24,6 +25,7 @@ enum MediaFileFacts {
 
     /// `followingLinks: false` describes a final symbolic link itself, as `attributesOfItem` does.
     static func read(_ path: String, followingLinks: Bool) -> Facts? {
+        MediaPerformanceProbe.count(.fileRead)
         var info = stat()
         let status = followingLinks ? stat(path, &info) : lstat(path, &info)
         guard status == 0 else { return nil }
@@ -36,12 +38,86 @@ enum MediaFileFacts {
     }
 }
 
+/// On-disk byte counts of the clips the gallery shows, one `stat(2)` per clip.
+///
+/// OPENZCINE-IOS-1W (build 338, a 71 s hang): every realized gallery cell asked the file system
+/// whether its clip was cached on every body pass. Cells read this instead; the model forgets a
+/// clip's count when its bytes change (its stream ends, it is deleted) and every count when the
+/// library is read from disk again (a cache clear, an import, a refresh).
+@MainActor final class MediaClipDiskSizes {
+    /// The inner `nil` is a clip with no file on disk.
+    private var sizes: [String: UInt64?] = [:]
+
+    /// The clip's cached byte count, `nil` when no file is there.
+    func size(of clip: MediaClip, in store: MediaClipStore) -> UInt64? {
+        if let known = sizes[clip.id] { return known }
+        let size = (try? store.localURL(cameraID: clip.cameraID, filename: clip.filename))
+            .flatMap { MediaFileFacts.read($0.path, followingLinks: true)?.size }
+        sizes[clip.id] = .some(size)
+        return size
+    }
+
+    /// The clip's bytes changed: the next read asks the file system again.
+    func forget(_ clipID: String) { sizes.removeValue(forKey: clipID) }
+
+    /// The library was read from disk again: every count is read again.
+    func forgetAll() { sizes.removeAll() }
+}
+
+/// One clip's transfer progress, observed on its own.
+@MainActor @Observable final class MediaDownloadProgressSlot {
+    var fraction: Double?
+}
+
+/// Per-clip camera transfer progress (`clip.id` to 0...1) while a clip streams from the camera.
+///
+/// Each clip has its own observable slot, so a view that reads one clip's progress re-renders on
+/// that clip's ticks only (OPENZCINE-IOS-1W: one observed dictionary re-rendered every visible
+/// gallery cell on every transfer tick). `isEmpty` changes only when a transfer starts or ends.
+@MainActor @Observable final class MediaDownloadProgressBoard {
+    /// Slots are kept once made: a view may be observing one that has no reading yet.
+    @ObservationIgnored private var slots: [String: MediaDownloadProgressSlot] = [:]
+    private var running: Set<String> = []
+
+    /// No clip is transferring.
+    var isEmpty: Bool { running.isEmpty }
+
+    subscript(clipID: String) -> Double? {
+        get { slot(clipID).fraction }
+        set {
+            // Every write is a publication, as it was for the shared dictionary: a playback
+            // port waiting on this clip's bytes re-checks the file even when the value repeats.
+            slot(clipID).fraction = newValue
+            if newValue == nil {
+                if running.contains(clipID) { running.remove(clipID) }
+            } else if !running.contains(clipID) {
+                running.insert(clipID)
+            }
+        }
+    }
+
+    /// Ends every reading (a cache clear).
+    func removeAll() {
+        for clipID in running { slots[clipID]?.fraction = nil }
+        if !running.isEmpty { running.removeAll() }
+    }
+
+    private func slot(_ clipID: String) -> MediaDownloadProgressSlot {
+        if let slot = slots[clipID] { return slot }
+        let slot = MediaDownloadProgressSlot()
+        slots[clipID] = slot
+        return slot
+    }
+}
+
 /// Operation counts for the large-card performance tests (Debug only): each counted call is a
 /// whole-catalog cost, so a test can prove an operation's cost follows its own size. Counts land
 /// in the task-local scope a test installs, so concurrently running tests never mix.
 enum MediaPerformanceProbe {
     enum Counter: Hashable, Sendable {
         case indexDecode, directoryListing, recordMapping, projectionPass, fileStamp
+        /// One file-system metadata read of a file (a `stat` or Foundation's attributes).
+        case fileRead
         /// Microseconds spent in the codec's per-page work (captureCatalog, prepareCatalog,
         /// encodeForPersistence), so a test can split app time from shared-library time.
         case captureMicros, prepareMicros, persistMicros
@@ -509,6 +585,7 @@ struct MediaClipStore: @unchecked Sendable {
     /// Bytes written to the local cache for this clip (zero when not present).
     func cachedByteCount(cameraID: String, filename: String) -> UInt64 {
         guard let url = try? localURL(cameraID: cameraID, filename: filename) else { return 0 }
+        MediaPerformanceProbe.count(.fileRead)
         guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
         return fileSize(at: url)
     }
