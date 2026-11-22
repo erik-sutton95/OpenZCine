@@ -86,6 +86,7 @@ import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import com.opencapture.opencine.nikon.UsbPtpTransportReopener
+import com.opencapture.openzcine.transport.openOffMain
 import com.opencapture.openzcine.transport.reopenReadyUsbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -299,7 +300,9 @@ private fun usbCameraSession(
         connectionStrategy = connectionStrategy,
         usbReopener =
             UsbPtpTransportReopener {
-                reopenReadyUsbTransport(source, opened.hostKey)
+                reopenReadyUsbTransport(source, opened.hostKey, onDiagnosticPhase = { phase ->
+                    phaseLogger(phase, "")
+                })
             },
         phaseLogger = phaseLogger,
     )
@@ -627,6 +630,14 @@ internal fun pairingDiscoveredRows(
 internal fun pairingAcceptsSelection(phase: PairingPhase): Boolean = !phase.isBusy()
 
 /**
+ * What tapping a camera that has no USB access yet records. Showing Android's permission prompt
+ * is a step, not an error: logging it as `error.connection.usb.permission` made every first
+ * connect look failed (OPENZCINE-ANDROID-D). Only an access the operator already denied is one.
+ */
+internal fun usbPermissionDiagnosticPhase(access: UsbPtpCameraAccess): String =
+    if (access == UsbPtpCameraAccess.DENIED) "failed.usbPermission" else "usb.permission.requested"
+
+/**
  * The first-pair wizard (iOS `StartupFirstPairWizardView`), hosted in OpenCine's shared pair
  * page through an `IntegrationPairingFlow`: the page's rail shows the wizard's steps, its pane
  * the current step, and a connect in flight takes over the pane (title, detail, live line,
@@ -897,7 +908,7 @@ public fun PairingExperience(
             UsbPtpCameraAccess.NEEDS_PERMISSION,
             UsbPtpCameraAccess.DENIED,
             -> {
-                onDiagnosticPhase("failed.usbPermission")
+                onDiagnosticPhase(usbPermissionDiagnosticPhase(camera.access))
                 source.requestPermission(camera)
             }
             UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> {
@@ -907,44 +918,53 @@ public fun PairingExperience(
                         resources.getString(R.string.pairing_error_usb_identity),
                     )
             }
-            UsbPtpCameraAccess.READY ->
-                when (val opened = source.open(camera)) {
-                    is UsbPtpOpenResult.Opened -> {
-                        val session =
-                            try {
-                                environment.createFirstTimePairingUsbSession(opened)
-                            } catch (_: Exception) {
-                                // The source already claimed a physical
-                                // interface. Do not leave it claimed when the
-                                // Swift session wrapper cannot be created.
-                                opened.transport.close()
-                                onDiagnosticPhase("failed.usb")
-                                phase =
-                                    PairingPhase.Error(
-                                        resources.getString(R.string.pairing_error_usb_session),
-                                    )
-                                return
+            UsbPtpCameraAccess.READY -> {
+                // The open blocks on USB control transfers (seconds on a busy body), so it runs
+                // off the main thread while the card already says Connecting.
+                phase = PairingPhase.Handshaking
+                work.value =
+                    scope.launch {
+                        when (val opened = source.openOffMain(camera)) {
+                            is UsbPtpOpenResult.Opened -> {
+                                val session =
+                                    try {
+                                        environment.createFirstTimePairingUsbSession(opened)
+                                    } catch (_: Exception) {
+                                        // The source already claimed a physical
+                                        // interface. Do not leave it claimed when the
+                                        // Swift session wrapper cannot be created.
+                                        opened.transport.close()
+                                        onDiagnosticPhase("failed.usb")
+                                        phase =
+                                            PairingPhase.Error(
+                                                resources.getString(
+                                                    R.string.pairing_error_usb_session,
+                                                ),
+                                            )
+                                        return@launch
+                                    }
+                                connect(
+                                    session = session,
+                                    savedCamera =
+                                        SavedCameraRecord(
+                                            host = opened.hostKey,
+                                            cameraName = opened.displayName,
+                                            transport = SavedCameraTransport.USB_C,
+                                            lastSeenAtEpochMillis = null,
+                                            wifiSsid = null,
+                                        ),
+                                    unreachableMessage =
+                                        resources.getString(R.string.pairing_error_usb_unreachable),
+                                    firstTimePairing = true,
+                                )
                             }
-                        connect(
-                            session = session,
-                            savedCamera =
-                                SavedCameraRecord(
-                                    host = opened.hostKey,
-                                    cameraName = opened.displayName,
-                                    transport = SavedCameraTransport.USB_C,
-                                    lastSeenAtEpochMillis = null,
-                                    wifiSsid = null,
-                                ),
-                            unreachableMessage =
-                                resources.getString(R.string.pairing_error_usb_unreachable),
-                            firstTimePairing = true,
-                        )
+                            is UsbPtpOpenResult.Rejected -> {
+                                onDiagnosticPhase("failed.usb")
+                                phase = PairingPhase.Error(opened.message)
+                            }
+                        }
                     }
-                    is UsbPtpOpenResult.Rejected -> {
-                        onDiagnosticPhase("failed.usb")
-                        phase = PairingPhase.Error(opened.message)
-                    }
-                }
+            }
         }
     }
 

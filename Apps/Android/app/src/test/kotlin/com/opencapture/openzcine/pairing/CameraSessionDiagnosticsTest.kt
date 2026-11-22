@@ -2,8 +2,11 @@ package com.opencapture.openzcine.pairing
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 
 class CameraSessionDiagnosticsTest {
     @Test
@@ -41,6 +44,19 @@ class CameraSessionDiagnosticsTest {
         assertEquals(
             "propertyWriteSlow: FOCUS_MODE 2100ms",
             cameraSessionDiagnosticMessage("propertyWriteSlow", "FOCUS_MODE 2100ms"),
+        )
+    }
+
+    @Test
+    fun `showing the USB permission prompt is not recorded as a failure`() {
+        // OPENZCINE-ANDROID-D: every first connect logged error.connection.usb.permission
+        // just for asking, which a reporter read as "the permission request fails each time".
+        val asked = usbPermissionDiagnosticPhase(UsbPtpCameraAccess.NEEDS_PERMISSION)
+        assertEquals(AndroidDiagnosticEvent.USB_PERMISSION_REQUESTED, AndroidDiagnosticEvent.fromPhase(asked))
+        assertFalse(AndroidDiagnosticEvent.USB_PERMISSION_REQUESTED.wireValue.startsWith("error."))
+        assertEquals(
+            AndroidDiagnosticEvent.CONNECTION_USB_PERMISSION,
+            AndroidDiagnosticEvent.fromPhase(usbPermissionDiagnosticPhase(UsbPtpCameraAccess.DENIED)),
         )
     }
 

@@ -19,9 +19,16 @@ import java.nio.BufferOverflowException
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import com.opencapture.opencine.nikon.UsbPtpTransport
 
@@ -67,6 +74,7 @@ public data class UsbPtpCamera(
 internal fun reopenReadyUsbTransport(
     source: UsbPtpCameraSource,
     hostKey: String,
+    onDiagnosticPhase: (String) -> Unit = {},
 ): UsbPtpOpenResult {
     val camera =
         source.cameras.value.firstOrNull { candidate ->
@@ -75,8 +83,37 @@ internal fun reopenReadyUsbTransport(
             ?: return UsbPtpOpenResult.Rejected(
                 message = "Connect your USB-C camera and approve access, then try again.",
                 diagnosticPhase = "usb.reconnect.notReady",
-            )
+            ).also {
+                // The source records its own open failures; this one never reaches it, and the
+                // session logs only `failed.usb` for a rejected reopen.
+                onDiagnosticPhase(it.diagnosticPhase)
+            }
     return source.open(camera)
+}
+
+/**
+ * Opens [camera] on [dispatcher], never on the caller's (main) thread.
+ *
+ * [UsbPtpCameraSource.open] blocks on USB control transfers: GET_DEVICE_STATUS, and on a busy body
+ * a Device Reset with its settle polls, seconds in all. Run from a camera-row tap it froze the
+ * pairing screen. The open itself is not cancellable (it claims the interface); a caller that
+ * left while it ran gets a cancellation and the transport it no longer wants is closed.
+ */
+internal suspend fun UsbPtpCameraSource.openOffMain(
+    camera: UsbPtpCamera,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+): UsbPtpOpenResult {
+    var opened: UsbPtpOpenResult? = null
+    try {
+        // withContext drops its result when the caller was cancelled meanwhile, so the result
+        // is kept here, where the cancellation can still close it.
+        withContext(dispatcher + NonCancellable) { opened = open(camera) }
+        currentCoroutineContext().ensureActive()
+    } catch (cancelled: CancellationException) {
+        (opened as? UsbPtpOpenResult.Opened)?.transport?.close()
+        throw cancelled
+    }
+    return checkNotNull(opened)
 }
 
 /**
@@ -341,8 +378,12 @@ public class AndroidUsbPtpCameraSource(
         bulkInAddress: Int,
         bulkOutAddress: Int,
     ) {
-        if (ptpDeviceStatus(connection, interfaceId, timeoutMillis = 500) == PTP_STATUS_OK) return
-        ptpResetAndSettle(connection, interfaceId, bulkInAddress, bulkOutAddress, USB_DIAG_TAG)
+        val status = ptpDeviceStatus(connection, interfaceId, timeoutMillis = 500)
+        onDiagnosticPhase(usbStatusDiagnosticPhase(status))
+        if (status == PTP_STATUS_OK) return
+        val settled =
+            ptpResetAndSettle(connection, interfaceId, bulkInAddress, bulkOutAddress, USB_DIAG_TAG)
+        onDiagnosticPhase(usbResetDiagnosticPhase(settled))
     }
 
 
@@ -535,6 +576,26 @@ private fun copyUsbRequestPayload(buffer: ByteBuffer): ByteArray {
 }
 
 private const val PTP_STATUS_OK: Int = 0x2001
+private const val PTP_STATUS_DEVICE_BUSY: Int = 0x2019
+
+/**
+ * The camera's PTP class status (GET_DEVICE_STATUS) as a closed diagnostic phase, never the raw
+ * code: OK, busy, any other code, or unreadable (the request failed or came back short).
+ */
+internal fun usbStatusDiagnosticPhase(status: Int): String =
+    when (status) {
+        PTP_STATUS_OK -> "usb.status.ok"
+        PTP_STATUS_DEVICE_BUSY -> "usb.status.busy"
+        0 -> "usb.status.unreadable"
+        else -> "usb.status.other"
+    }
+
+/** Whether a PTP Device Reset settled back to OK, as a closed diagnostic phase. */
+internal fun usbResetDiagnosticPhase(settled: Boolean): String =
+    if (settled) "usb.reset.settled" else "usb.reset.notSettled"
+
+/** A dead bulk-out write made the transport reset the interface and retry. */
+internal const val USB_BULK_OUT_RESET_PHASE: String = "usb.bulkOut.reset"
 
 /** Outcome of one bulk-out, including a one-shot reset-and-retry after a dead write. */
 internal data class UsbPtpDeadWriteOutcome(
@@ -595,11 +656,15 @@ internal const val USB_BULK_IN_RECOVERED_PHASE: String = "usb.bulkIn.recovered"
  * covers the kernel's timer granularity; anything shorter failed on its own.
  */
 internal fun classifyBulkInFailure(elapsedMillis: Long, timeoutMillis: Int): UsbBulkInFailure =
-    if (elapsedMillis >= timeoutMillis - BULK_IN_TIMEOUT_SLACK_MILLIS) {
+    if (usedWholeWait(elapsedMillis, timeoutMillis)) {
         UsbBulkInFailure.TIMEOUT
     } else {
         UsbBulkInFailure.ERROR
     }
+
+/** A USB wait that took (nearly) its whole timeout timed out; a shorter one failed on its own. */
+internal fun usedWholeWait(elapsedMillis: Long, timeoutMillis: Int): Boolean =
+    elapsedMillis >= timeoutMillis - BULK_IN_TIMEOUT_SLACK_MILLIS
 
 /** Outcome of one bulk-in read, including a one-shot pipe clear and retry after an early failure. */
 internal data class UsbPtpBulkInReadOutcome(
@@ -695,7 +760,7 @@ private fun ptpDeviceStatus(
  * GET_DEVICE_STATUS until the body reports OK again. The reset is not
  * instant on the ZR — a command sent before it completes is silently
  * dropped, which desyncs every later transaction, so the settle poll is as
- * load-bearing as the reset itself.
+ * load-bearing as the reset itself. Returns whether the body settled to OK.
  */
 private fun ptpResetAndSettle(
     connection: UsbDeviceConnection,
@@ -703,7 +768,7 @@ private fun ptpResetAndSettle(
     bulkInAddress: Int,
     bulkOutAddress: Int,
     tag: String,
-) {
+): Boolean {
     val controlTimeoutMillis = 500
     runCatching {
         connection.controlTransfer(0x21, 0x66, 0, interfaceId, null, 0, controlTimeoutMillis)
@@ -718,10 +783,11 @@ private fun ptpResetAndSettle(
         val status = ptpDeviceStatus(connection, interfaceId, controlTimeoutMillis)
         if (status == PTP_STATUS_OK) {
             android.util.Log.i(tag, "PTP reset settled")
-            return
+            return true
         }
     }
     android.util.Log.i(tag, "PTP reset did not settle to OK")
+    return false
 }
 
 /**
@@ -772,7 +838,11 @@ internal interface UsbInterruptChannel {
  * the process. When the abort cannot be reaped the connection is gone, so the
  * pump retires rather than queue again and its owner closes the session.
  */
-internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
+internal class UsbInterruptEventPump(
+    private val channel: UsbInterruptChannel,
+    /** Monotonic milliseconds, to tell an idle wait from an early failure. */
+    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
+) {
     /** Serializes reads against teardown so nothing can queue behind a close. */
     private val lock = Any()
     /** Non-null exactly while the framework still owns a queued transfer. */
@@ -802,8 +872,17 @@ internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
             if (stopped || retired) return@synchronized null
             val buffer = queuedBuffer ?: queueLocked(maxBytes) ?: return@synchronized null
             try {
+                val start = nowMillis()
                 if (!channel.awaitCompletion(timeoutMillis.toLong())) {
-                    // A null (framework error) or foreign completion leaves our
+                    // Some ROMs (HyperOS on the Snapdragon 8 Elite among the suspects) return
+                    // null from requestWait on an idle timeout instead of throwing: AOSP throws
+                    // only when errno is ETIMEDOUT. A null after the whole wait is that idle
+                    // timeout, so the request stays queued exactly as for a thrown one; ending
+                    // the read here closed every session about a second into live view.
+                    if (usedWholeWait(nowMillis() - start, timeoutMillis)) {
+                        return@synchronized ByteArray(0)
+                    }
+                    // An early null (framework error) or foreign completion leaves our
                     // transfer queued, so it has to be aborted and reaped here.
                     releaseQueuedLocked()
                     return@synchronized null
@@ -973,13 +1052,16 @@ private class AndroidUsbPtpTransport(
                     write = { connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis) },
                     reset = {
                         android.util.Log.i(USB_DIAG_TAG, "USB bulk-out wedged; PTP reset")
-                        ptpResetAndSettle(
-                            connection,
-                            usbInterface.id,
-                            bulkIn.address,
-                            bulkOut.address,
-                            USB_DIAG_TAG,
-                        )
+                        onDiagnosticPhase(USB_BULK_OUT_RESET_PHASE)
+                        val settled =
+                            ptpResetAndSettle(
+                                connection,
+                                usbInterface.id,
+                                bulkIn.address,
+                                bulkOut.address,
+                                USB_DIAG_TAG,
+                            )
+                        onDiagnosticPhase(usbResetDiagnosticPhase(settled))
                     },
                 )
             deadWriteRecoveryDone = outcome.recoveryAttempted
@@ -1051,6 +1133,7 @@ private class AndroidUsbPtpTransport(
     private fun clearBulkInHalt(budgetMillis: Int) {
         val each = (budgetMillis / 2).coerceAtLeast(1)
         val status = ptpDeviceStatus(connection, usbInterface.id, each)
+        onDiagnosticPhase(usbStatusDiagnosticPhase(status))
         val cleared =
             runCatching {
                 connection.controlTransfer(0x02, 0x01, 0, bulkIn.address, null, 0, each)

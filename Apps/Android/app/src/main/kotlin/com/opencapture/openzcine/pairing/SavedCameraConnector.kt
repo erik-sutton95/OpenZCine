@@ -14,6 +14,7 @@ import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.localIPv4Interfaces
+import com.opencapture.openzcine.transport.openOffMain
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -207,7 +208,7 @@ internal class SavedCameraConnector(
                 val camera =
                     usbCameras.value.firstOrNull { it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host }
                         ?: throw SavedCameraConnectException(copy.text(R.string.conn_usb_not_ready))
-                when (val opened = source.open(camera)) {
+                when (val opened = source.openOffMain(camera)) {
                     is UsbPtpOpenResult.Opened -> {
                         host = opened.hostKey
                         session =

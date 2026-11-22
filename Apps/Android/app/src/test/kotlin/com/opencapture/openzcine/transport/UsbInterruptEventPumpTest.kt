@@ -33,6 +33,12 @@ private class FakeInterruptChannel : UsbInterruptChannel {
         /** `requestWait` returned null because the framework reported an error. */
         data object Error : Completion
 
+        /**
+         * `requestWait` returned null after [elapsedMillis]: on some ROMs that is how an idle
+         * timeout comes back, instead of a `TimeoutException`.
+         */
+        class NullAfter(val elapsedMillis: Long) : Completion
+
         /** Nothing completed in time; the transfer stays queued. */
         data object Timeout : Completion
 
@@ -51,6 +57,8 @@ private class FakeInterruptChannel : UsbInterruptChannel {
     private val waitEntered = CountDownLatch(1)
     private val waitReleased = CountDownLatch(1)
 
+    /** The pump's clock; a [Completion.NullAfter] advances it by the time the wait took. */
+    var clockMillis: Long = 0
     var connectionOpen: Boolean = true
     var queueAttempts: Int = 0
         private set
@@ -114,6 +122,10 @@ private class FakeInterruptChannel : UsbInterruptChannel {
                 true
             }
             Completion.Foreign, Completion.Error -> false
+            is Completion.NullAfter -> {
+                clockMillis += completion.elapsedMillis
+                false
+            }
             Completion.Timeout -> throw TimeoutException("no completion")
             Completion.Overflow -> {
                 // `dequeue` clears the framework flag before it throws.
@@ -183,6 +195,45 @@ class UsbInterruptEventPumpTest {
 
         assertEquals(1, channel.queueAttempts)
         assertEquals(0, channel.cancelCount)
+        assertEquals(0, channel.illegalQueueAttempts)
+    }
+
+    @Test
+    fun `a null completion after the whole wait is an idle timeout that keeps the request queued`() {
+        // OPENZCINE-ANDROID-B: a ROM whose requestWait reports an idle timeout as null (AOSP
+        // throws only when errno is ETIMEDOUT) used to end the session about one second after
+        // live view started, every time.
+        val pump = UsbInterruptEventPump(channel, nowMillis = { channel.clockMillis })
+        pump.prime(PRIMED_BYTES)
+        val payload = byteArrayOf(4, 0, 0, 0)
+        channel.script(
+            FakeInterruptChannel.Completion.NullAfter(TIMEOUT_MILLIS.toLong()),
+            FakeInterruptChannel.Completion.NullAfter(TIMEOUT_MILLIS.toLong() - 20),
+            FakeInterruptChannel.Completion.Own(payload),
+        )
+
+        assertContentEquals(ByteArray(0), pump.read(READ_BYTES, TIMEOUT_MILLIS))
+        assertContentEquals(ByteArray(0), pump.read(READ_BYTES, TIMEOUT_MILLIS))
+        assertContentEquals(payload, pump.read(READ_BYTES, TIMEOUT_MILLIS))
+
+        assertEquals(1, channel.queueAttempts)
+        assertEquals(0, channel.cancelCount)
+        assertFalse(pump.isRetired())
+        assertEquals(0, channel.illegalQueueAttempts)
+    }
+
+    @Test
+    fun `an early null completion is still a failed read`() {
+        val pump = UsbInterruptEventPump(channel, nowMillis = { channel.clockMillis })
+        pump.prime(PRIMED_BYTES)
+        channel.script(
+            FakeInterruptChannel.Completion.NullAfter(10),
+            FakeInterruptChannel.Completion.Own(ByteArray(0)),
+        )
+
+        assertNull(pump.read(READ_BYTES, TIMEOUT_MILLIS))
+        assertEquals(1, channel.cancelCount)
+        assertFalse(channel.isQueued)
         assertEquals(0, channel.illegalQueueAttempts)
     }
 
