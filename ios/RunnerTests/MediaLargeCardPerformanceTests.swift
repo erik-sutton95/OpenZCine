@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineMedia
@@ -333,6 +334,73 @@ import Testing
         await model.mediaLibrary?.dispose()
     }
 
+    /// OPENZCINE-IOS-1W (build 338, 71 s hang): every realized gallery cell asked the file system
+    /// whether its clip was cached on every body pass, and every transfer tick re-rendered every
+    /// cell. Rendering the same cells again reads each clip's file once, not once per render.
+    @Test func repeatedCellRendersReadEachClipFileOnce() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let clips = Array(Self.clips().prefix(120))
+        store.upsertBatch(clips, cameraID: Self.bucket)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        model.prepareMediaLibrary(
+            rows: store.list(cameraID: Self.bucket), bucket: Self.bucket, service: nil)
+        let projection = model.mediaGalleryProjection
+        let scope = MediaPerformanceProbe.Scope()
+        MediaPerformanceProbe.$scope.withValue(scope) {
+            for _ in 0..<3 {
+                for clip in clips {
+                    _ = model.mediaCellItem(
+                        clip, list: false, selecting: false, duration: nil, projection: projection)
+                }
+            }
+        }
+        #expect(
+            scope[.fileRead] == clips.count,
+            "\(scope[.fileRead]) file reads for three renders of \(clips.count) cells")
+        await model.mediaLibrary?.dispose()
+    }
+
+    /// A transfer tick for one clip invalidates that clip's cell only; the other realized cells
+    /// keep their render (one shared progress dictionary re-rendered all of them per chunk).
+    @Test func aTransferTickInvalidatesOnlyItsOwnCell() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let clips = Array(Self.clips().suffix(2))
+        store.upsertBatch(clips, cameraID: Self.bucket)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        model.prepareMediaLibrary(
+            rows: store.list(cameraID: Self.bucket), bucket: Self.bucket, service: nil)
+        let projection = model.mediaGalleryProjection
+        let streaming = clips[0]
+        let other = clips[1]
+        model.mediaDownloadProgress[streaming.id] = 0.1
+        let otherChanged = ObservedFlag()
+        let ownChanged = ObservedFlag()
+        withObservationTracking {
+            _ = model.mediaCellItem(
+                other, list: false, selecting: false, duration: nil, projection: projection)
+        } onChange: {
+            otherChanged.set()
+        }
+        withObservationTracking {
+            _ = model.mediaCellItem(
+                streaming, list: false, selecting: false, duration: nil, projection: projection)
+        } onChange: {
+            ownChanged.set()
+        }
+        model.mediaDownloadProgress[streaming.id] = 0.2
+        #expect(ownChanged.value, "the streaming clip's cell shows the new progress")
+        #expect(!otherChanged.value, "a tick for another clip must not re-render this cell")
+        model.mediaDownloadProgress[streaming.id] = nil
+        #expect(!otherChanged.value, "the end of another clip's transfer leaves this cell alone")
+        await model.mediaLibrary?.dispose()
+    }
+
     /// The index memo never hides a change: another store's write, a new disk file, a growing
     /// unindexed file and the encoded-bytes shortcut all match a fresh read.
     /// The one-stat file facts used for index stamps and the downloaded check read the same
@@ -436,6 +504,14 @@ import Testing
         #expect(changed.count == gridCount)
         await model.mediaLibrary?.dispose()
     }
+}
+
+/// Set from an observation change handler, read after the mutation that fires it.
+private final class ObservedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    func set() { lock.withLock { fired = true } }
+    var value: Bool { lock.withLock { fired } }
 }
 
 /// SIMULATED card source: object facts only, no camera IO.

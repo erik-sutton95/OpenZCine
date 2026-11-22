@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### USB-C and Media gallery fixes
+
+- iOS: the Media gallery no longer hangs while a clip downloads on a large card. Each cell reads its
+  clip's file once instead of on every redraw, and a download's progress redraws only that clip's
+  cell (OPENZCINE-IOS-1W).
+- iOS: a USB-C camera with a full CFexpress card connects again. The session open waits as long as
+  the USB connection step allows (120 s instead of 30 s) for the card to be read, and a retry no
+  longer restarts a card read that is still running (OPENZCINE-IOS-16).
+- Android: tapping a USB-C camera no longer freezes the pairing screen while a slow body opens; the
+  open runs off the main thread, and a reconnect that finds no ready camera says so in the
+  diagnostics export (OPENZCINE-ANDROID-C, -D).
+- Android: a USB-C session no longer ends about a second into live view on phones whose USB stack
+  reports an idle event wait as an error; such a wait now counts as "no event yet"
+  (OPENZCINE-ANDROID-B).
+- Android: the diagnostics export now says when a USB-C camera's interface had to be reset, whether
+  the reset settled, and the camera's USB status (OK, busy, other or unreadable), which went only
+  to the system log before (OPENZCINE-ANDROID-C, -D).
+- Android: asking for USB access to a camera is no longer logged as a failed connection; only an
+  access the operator already denied is (OPENZCINE-ANDROID-D).
+
 ### Fixed: first-generation record state and large-card listing
 
 - Z 5, Z 6, Z 7 and Z 50: the record button no longer flips back to standby during a take (their

@@ -51,6 +51,8 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     /** Permission held, but the ROM would not surface a USB serial descriptor. */
     USB_ATTACHED_NO_SERIAL("usb.attached.no-serial"),
     USB_ATTACHED_READY("usb.attached.ready"),
+    /** A camera tap showed Android's USB permission prompt: a step, not a failure. */
+    USB_PERMISSION_REQUESTED("usb.permission.requested"),
 
     // USB open / handshake stages. The generic `error.connection.usb.failed`
     // breadcrumb could not tell a claim failure from a dead interrupt endpoint
@@ -79,6 +81,17 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     USB_BULK_IN_ERROR("usb.bulk-in.error"),
     /** The early failure cleared after the pipe was reset and the read retried. */
     USB_BULK_IN_RECOVERED("usb.bulk-in.recovered"),
+    /** A dead bulk-out write made the transport reset the interface and retry the write. */
+    USB_BULK_OUT_RESET("usb.bulk-out.reset"),
+    // Whether a PTP Device Reset settled back to OK within its polls.
+    USB_RESET_SETTLED("usb.reset.settled"),
+    USB_RESET_NOT_SETTLED("usb.reset.not-settled"),
+    // The camera's PTP class status at open and after an early bulk-in failure, as a closed
+    // set: never the raw code.
+    USB_STATUS_OK("usb.status.ok"),
+    USB_STATUS_BUSY("usb.status.busy"),
+    USB_STATUS_OTHER("usb.status.other"),
+    USB_STATUS_UNREADABLE("usb.status.unreadable"),
     LIVE_VIEW_FAILED("error.live-view.failed"),
     LIVE_VIEW_STALLED("warning.live-view.stalled"),
     // Object star-rating writes. The vocabulary stays closed (no wire code leaks into the log);
@@ -148,6 +161,7 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "usb.attached.permissionDenied" -> USB_ATTACHED_PERMISSION_DENIED
                 "usb.attached.noSerial" -> USB_ATTACHED_NO_SERIAL
                 "usb.attached.ready" -> USB_ATTACHED_READY
+                "usb.permission.requested" -> USB_PERMISSION_REQUESTED
                 "usb.open.detached" -> USB_OPEN_DETACHED
                 "usb.open.noPermission" -> USB_OPEN_NO_PERMISSION
                 "usb.open.noPtpInterface" -> USB_OPEN_NO_PTP_INTERFACE
@@ -168,6 +182,13 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "usb.bulkIn.timeout" -> USB_BULK_IN_TIMEOUT
                 "usb.bulkIn.error" -> USB_BULK_IN_ERROR
                 "usb.bulkIn.recovered" -> USB_BULK_IN_RECOVERED
+                "usb.bulkOut.reset" -> USB_BULK_OUT_RESET
+                "usb.reset.settled" -> USB_RESET_SETTLED
+                "usb.reset.notSettled" -> USB_RESET_NOT_SETTLED
+                "usb.status.ok" -> USB_STATUS_OK
+                "usb.status.busy" -> USB_STATUS_BUSY
+                "usb.status.other" -> USB_STATUS_OTHER
+                "usb.status.unreadable" -> USB_STATUS_UNREADABLE
                 "failed.scannerRecognizer" -> SCANNER_RECOGNIZER_UNAVAILABLE
                 "failed.scannerRecognizerUnsupported" -> SCANNER_RECOGNIZER_UNSUPPORTED
                 "liveViewFailed" -> LIVE_VIEW_FAILED
