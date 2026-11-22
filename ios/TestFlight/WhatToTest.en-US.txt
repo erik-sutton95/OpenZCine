@@ -1,27 +1,16 @@
 New and changed
 
-- Camera setup, settings, View Assist and Media controls are closer to the other OpenCine apps. Cameras > Add setup offers USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
-- DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap a tile to change it; hold and drag to reorder.
-- Media and playback are much faster on large cards. The grid is staggered: portrait photos stand upright and every item fills the space above it. Caching and downloads show a live speed, for example 18% and 42 MB/s. Exit selection closes the simpler selection bar, and pinch zoom now fills the screen past the letterbox. Played clips keep caching and read CACHED.
-- Readouts are clearer: tap storage for free space, percentage or estimated time; SHOTS shows a short count; FPS reads LINK until the first picture; colour sits beside codec in landscape; portrait uses a three-column grid. Press any value and slide to change it, in Photo too. Landscape Photo moves setup values to the top corner so captions fit, and the focus recenter key sits in the picture's corner.
-- Instant review reads the preview inside RAW photos, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
-- Experimental gyro logging adds guided ring calibration, IBIS and Electronic VR setup and restore, mount-move warnings and one shareable Gyroflow log per take.
+- Live stream the monitor picture to YouTube, Twitch, Facebook, Instagram or your own server: Settings > Sharing > Live stream, then Go live under the timecode. Not yet tested on a real stream.
+- Multiview: watch, set and record up to four Z bodies on one screen. Tap the grid icon in Your cameras. Not yet tested on camera hardware.
+- Camera presets in Settings > Controls save and recall exposure and white balance. GUIDES add Action safe and Title safe, and the monitor lock also holds the screen rotation.
 
 Fixes
 
-- Live View stays smooth after connecting, warm restarts and Quality Bias changes, keeping readouts and timecode frames. Diagnostics split video, decoding and display interruptions.
-- Background recovery keeps your stills or video mode and no longer keeps the camera busy.
-- A dozing camera gets a wait of up to about 20 s (half-press the shutter); a silent one says it may be asleep. Connecting no longer freezes on Starting live view, and a connect that never starts live view ends after about 40 s with Try again.
-- Take Over asks first, and the phone that loses the camera stops reconnecting. A refused camera Wi-Fi join offers Settings and a retry; abandoned setup connections stop.
-- Exposure readouts are restored: Auto ISO shows its limit, camera-owned values are dimmed and locked, hold on SHUTTER toggles its lock, and Reading camera settings shows while live view starts.
-- Photo mode turns the LUT and cinema tools off; video restores them. Shots and app-triggered photos follow the stills card; CL/CH tap takes one photo, hold a burst. Wide-clip LUTs and scopes keep correct brightness, including Log3G10 grey.
-- Sharing treats photos as photos and finishes a clip's copy first, even one you left mid-download; leaving the player no longer drops the camera on Wi-Fi, and a camera that stops answering is named. Playback stays paused after Share or app return. Download from RED opens over the clip. The GYRO pill avoids screen lock; focus pulls no longer leave tap-to-focus busy.
-- VoiceOver skips collapsed or covered controls and shutter labels describe the action. Setup asks for Local Network at its own step.
+- In N-Log the highlight zebra can go above 234, for example 245 to match the camera.
+- VoiceOver no longer reads the monitor's header readouts twice.
 
 What to test
 
-- In video, rotate and inspect DISP 3, FPS, timecode frames and readouts. Step through storage; in Photo, check SHOTS and the landscape top corner.
-- Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- On a full card, check the staggered grid and portrait photos, select then Exit selection, and cache clips. Play a wide Log3G10 clip with scopes and pinch zoom. Leave a clip mid-caching, then Share it.
-- Test camera doze/wake, cancelled Wi-Fi retry and two-phone Take Over. Change Quality Bias, background and return; use Share Diagnostics if the picture drops out.
-- Mount the phone rigidly, enable gyro logging and complete ring calibration. Record short and long takes, check mount-move handling, then share logs to Gyroflow and confirm IBIS and Electronic VR restore.
+- Save a stream key, then Go live over USB-C, a shared Wi-Fi network or the phone's hotspot. Check the stream plays and Stop ends it. On the camera's own Wi-Fi, Go live should say why it is off.
+- Join two or more bodies to the phone's network, open Multiview, add them and record. Use Share Diagnostics if a tile drops.
+- Save a camera preset, change those values on the camera, then recall it. Lock the monitor upside down and level the phone: the picture should stay put.

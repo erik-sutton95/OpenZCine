@@ -6,15 +6,43 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-22
+
+Public beta, cumulative since the 2026-10-30 public beta (0.2.8). The operator-facing iOS and
+Android lists are in the [0.3.0 release notes](handbook/src/content/docs/releases/0-3-0.md).
+Live streaming and Multiview are new and have not been tested on camera hardware yet.
+
 ### Live streaming
 
 - iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom
   server (plain `rtmp://` allowed there with a warning, for TikTok LIVE): Settings, Sharing, Live
-  stream, then Go live over the picture. The camera's own Wi-Fi blocks it; USB-C, HDMI capture, a
+  stream, then Go live on the monitor. The camera's own Wi-Fi blocks it; USB-C, HDMI capture, a
   shared Wi-Fi network or the phone's hotspot allows it. While the monitor is closed, a Live pill at
   the top shows the stream with Stop. Untested on hardware.
 - Android: the same, streaming the monitored camera's clean picture (with the monitor LUT, without
   assists) and the phone's microphone, with the same Live pill. Untested on hardware.
+- Go live sits under the timecode at the top right instead of over the middle of the picture. Idle,
+  it is a glass pill; live, a red LIVE pill with the elapsed time, a stop glyph and one status line.
+- When the camera picture is smaller than 1080p, the Live stream card's Quality row offers
+  **1080p upscaled** (the picture scaled to 1920x1080 at about 6 Mbps, with the LUT) beside
+  **Camera feed**, the default. The choice is remembered and locked while live.
+
+### Multiview
+
+- Multiview is now the shared OpenCapture Multiview, the same stage as OpenPocketCine's, on
+  iPhone, iPad and Android. Open it from Your cameras with the grid icon; bodies already on a
+  router or the phone's hotspot are added from a list, with no network setup step. Tiles show
+  picture, battery, card space, timecode and recording state, with a settings popup for the Live
+  View values. Auto LUT follows each body's recording tone, record starts every body or none
+  (following Record confirmation), and a double tap lends a body to Live View without a new
+  connection. See [Multiview](handbook/src/content/docs/guides/multiview.md). Untested on hardware.
+
+### Camera presets
+
+- Settings, Controls opens with a Camera presets card: save the connected camera's exposure and
+  white balance as a named preset, recall it later (values the camera cannot take right now are
+  reported as skipped) or delete it. Presets are kept per camera model. Hidden on a watcher and
+  in the demo.
 
 ### Monitor rotation hold
 
@@ -25,6 +53,22 @@ All notable changes to this project are documented here. The format is based on
 
 - GUIDES options add Action safe and Title safe, each with its own size
   (default 90% and 80%), drawn inside every frame line on live view and playback.
+
+### Zebra highlight above white
+
+- In N-Log, the highlight zebra can be set above the camera's white (for example 245 in 0-255
+  units, to match the camera) instead of stopping at 234, on iOS and Android. Midtone and the IRE
+  scale are unchanged.
+
+### Android USB-C connect
+
+- Android: a USB-C connect whose first read from the camera fails early now clears the stalled
+  connection once and retries, within the same connect time limit. Share Diagnostics records
+  whether the read timed out or failed. Aimed at a Z 6III that failed every USB-C connect.
+
+### Accessibility
+
+- iOS: VoiceOver no longer reads the monitor's header readouts twice.
 
 ## [0.2.8] - 2026-10-30
 
