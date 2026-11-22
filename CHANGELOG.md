@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Android Settings rotation
+
+- Android: turning the phone while Operator Setup is open keeps the app on the selected tab.
+
 ### Live streaming
 
 - iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom
