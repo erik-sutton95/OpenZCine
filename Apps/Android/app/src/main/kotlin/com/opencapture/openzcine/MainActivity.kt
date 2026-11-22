@@ -69,6 +69,10 @@ import com.opencapture.opencine.gyro.GyroCaptureCoordinator
 import com.opencapture.opencine.gyro.GyroNative
 import com.opencapture.opencine.appkitnative.LiveStreamHostEffects
 import com.opencapture.opencine.appkitnative.LiveStreamRootIndicator
+import com.opencapture.opencine.appkitnative.rememberMonitorVoiceTool
+import com.opencapture.opencine.appkit.VoiceControlTarget
+import com.opencapture.opencine.appkit.MonitorVoicePreferences
+import com.opencapture.monitorui.isRunning
 import com.opencapture.opencine.appkitnative.liveStreamSettingsSource
 import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
 import com.opencapture.opencine.cameracontrols.gyro.GyroCopy
@@ -559,6 +563,9 @@ class MainActivity : ComponentActivity() {
                 // settings. Local writes take no dispatch admission, so neither does a recall.
                 val cameraPresets = remember(shell) {
                     CameraSettingsPresetsModel(operatorSettings.cameraPresetStore, shell)
+                }
+                val voicePreferences = remember {
+                    MonitorVoicePreferences(applicationContext)
                 }
                 val shellState by shell.state.collectAsState()
                 var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
@@ -1122,6 +1129,33 @@ class MainActivity : ComponentActivity() {
                             gyroCapture.bind(adapter)
                             gyroCapture.setHostEligible(adapter != null)
                         }
+                        val voice = if (canonicalIncidentConnection && native != null &&
+                            pairingScript == null && demo?.second == null
+                        ) {
+                            val coordinator = liveStream?.coordinator
+                            val streamState = coordinator?.state?.collectAsState()?.value
+                            val commonState by shell.control.state.collectAsState()
+                            val hasAuthority = {
+                                !operatorSession.locked &&
+                                    relayBroadcastUi.controlHolderName == null &&
+                                    !gyroState.logsPresented && gyroState.ring == null && gyroState.setupSteps.isEmpty() &&
+                                    coordinator?.state?.value?.phase?.isRunning != true
+                            }
+                            val canListen = { shell.state.value.cover == null && hasAuthority() }
+                            val settingsOpen = overlay == ShellModel.Cover.SETTINGS
+                            val allowed = (overlay == null || settingsOpen) && hasAuthority() && streamState?.phase?.isRunning != true
+                            rememberMonitorVoiceTool(
+                                target = VoiceControlTarget.from(commonState.snapshot).takeIf { allowed },
+                                stream = coordinator,
+                                preferences = voicePreferences,
+                                settingsOpen = settingsOpen,
+                                canListen = canListen,
+                                execute = { command, armed, armedTarget ->
+                                    executeNikonVoiceCommand(command, native, shellSessions.acquire(active),
+                                        shell.control, cameraPresets, armedTarget) { armed() && canListen() }
+                                },
+                            )
+                        } else null
                         Box {
                             MonitorScreen(
                                 active,
@@ -1188,6 +1222,7 @@ class MainActivity : ComponentActivity() {
                                 clearNote = { if (monitorNote.value == it) monitorNote.value = null },
                                 gyroState = gyroState.takeIf { returnToMulticam == null },
                                 onOpenGyroLogs = gyroCapture::presentLogs,
+                                voice = voice,
                             )
                             relayBroadcastUi.controlHolderName?.let { holder ->
                                 com.opencapture.opencine.cameracontrols.MonitorWatcherControlKey(
@@ -1252,6 +1287,7 @@ class MainActivity : ComponentActivity() {
                                         controlSession = shellSessions.acquire(active),
                                         gyro = gyroSource,
                                         liveStream = liveStreamSource,
+                                        voicePreferences = voicePreferences,
                                         // Left out where common writes are refused: the demo, a
                                         // picture-only (HDMI) monitor, a watcher holding control.
                                         cameraPresets = cameraPresets.takeUnless {
@@ -1413,6 +1449,7 @@ class MainActivity : ComponentActivity() {
                             controlSession = null,
                             gyro = gyroSource,
                             liveStream = liveStreamSource,
+                            voicePreferences = voicePreferences,
                             cameraPresets = cameraPresets,
                             assists = standaloneAssist,
                             operatorSession = standaloneSession,

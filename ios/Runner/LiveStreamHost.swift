@@ -14,8 +14,10 @@ extension NativeAppModel {
                 route: { [weak self] in self?.liveStreamRoute },
                 source: { [weak self] in self?.liveStreamSource },
                 attachPicture: { [weak self] in self?.liveStreamTap = $0 },
-                // No permission gate of its own: the plain system request, after Go live is confirmed.
-                microphoneAccess: LiveStreamHost.systemMicrophoneAccess))
+                microphoneAccess: { [weak self] in
+                    self?.voiceControl.disarm()
+                    return await LiveStreamHost.systemMicrophoneAccess()
+                }))
     }
 
     /// The picture as it arrives: the live view JPEG (up to 1024x768) or the capture card's frame.

@@ -47,6 +47,7 @@ calibration, foreground recording, sharing logs, and the Resolve workflow.
 | --- | --- |
 | **Nearby Wi-Fi devices** or **Location** | See and join Wi-Fi networks, and read which network the phone is on |
 | **Camera** | Only for the Wi-Fi scanner, and for HDMI capture devices |
+| **Microphone** | Only when you arm Voice in the monitor or confirm a live stream |
 | USB device consent | Asked per camera when you connect over USB-C |
 
 The app asks for no Bluetooth or storage permission for the camera link.
@@ -65,6 +66,24 @@ balance, exposure mode, focus and supported audio settings.
 Readouts are authoritative: timecode comes only from the camera frame accepted
 for display, and camera values from the property snapshot. A missing or
 unsupported value shows as unavailable, never as a demo value.
+
+### Voice Control
+
+On Android 12 or later with an on-device English recognizer, open **Settings →
+Controls → Voice Control** to choose whether to allow Start, Stop and Recall
+preset. In the Field Monitor, expand the tools menu and tap **Voice**, the last
+item, to listen. Allow microphone access when asked. If the phone needs the
+English (US) speech model, install it in Android's speech settings first.
+
+- “Camera, start” or “Camera, record” starts a clip.
+- “Camera, stop” ends the current clip.
+- While the camera is idle, say “Camera, load three” to recall **Preset 3**,
+  or say “Camera, load next” or “Camera, load previous” to step through the saved
+  presets in the order shown in Settings.
+
+Voice pauses while Settings is open. It resumes on return to the same camera
+if it was listening before. If the speech service ends a listening session,
+tap **Voice** again.
 
 ### Anamorphic Desqueeze
 

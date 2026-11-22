@@ -929,6 +929,36 @@ final class NativeAppModel {
     /// preferences. Local writes take no dispatch admission, so neither does a recall.
     @ObservationIgnored lazy var cameraPresets = CameraSettingsPresetsModel(
         store: CameraSettingsPresetStore(storage: .standard), shell: shell)
+    let voiceControl = MonitorVoiceControl()
+
+    var voiceControlTarget: VoiceControlTarget? {
+        guard isMonitorPresented, shell.cover == nil, activePanel == nil, !interfaceLocked,
+            cameraPresetsCard != nil, cameraSession != nil, liveStream?.isRunning != true
+        else { return nil }
+        return shell.control.voiceTarget
+    }
+
+    func executeVoiceCommand(
+        _ command: VoiceCommand, arm: VoiceCommandPermit, armedTarget: VoiceControlTarget
+    ) async -> String {
+        guard UIApplication.shared.applicationState == .active, arm.isCurrent,
+            let target = voiceControlTarget, target.session == armedTarget.session,
+            target.epoch == armedTarget.epoch,
+            let source = cameraSession, let owner = source.commandOwner
+        else { return "Camera control is unavailable." }
+        let permit = VoiceCommandPermit {
+            voiceControl.preferences.allows(command) && voiceControlTarget == target
+                && (!command.changesSettings || !shell.control.recordPending)
+        }
+        let native = NikonCommandAdmission(
+            owner: owner, isCurrent: { arm.isCurrent && permit.isCurrent })
+        guard let admission = sharedCommandAdmission(native) else {
+            return "Camera control is unavailable."
+        }
+        return await shell.control.executeVoiceCommand(
+            command, target: target, presets: cameraPresets,
+            admission: admission)
+    }
     /// The presets card, or `nil` while this app refuses common setting writes: a relay watcher,
     /// a watcher holding this broadcast's control, the demo or a picture-only monitor.
     var cameraPresetsCard: CameraSettingsPresetsModel? {
@@ -9416,7 +9446,7 @@ final class NativeAppModel {
                     + pendingCameraWrites.filter {
                         $0.admission.map { !$0.admits(session.commandOwner) } == true
                     }
-                pendingCameraWrites.removeAll {
+                dropPendingCameraWrites {
                     $0.admission.map { !$0.admits(session.commandOwner) } == true
                 }
                 for refusedWrite in refused {
