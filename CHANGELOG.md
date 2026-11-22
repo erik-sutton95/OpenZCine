@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed: first-generation record state and large-card listing
+
+- Z 5, Z 6, Z 7 and Z 50: the record button no longer flips back to standby during a take (their
+  live-view header carries no record state), so the next press stops the take; their record state
+  now comes from the camera's record events or its reply to the record command, and the monitor
+  shows no timecode for them instead of a zero clock (OPENZCINE-IOS-1V; iOS and Android).
+- iOS: listing a large card, or a card swapped for another, no longer freezes the app for seconds:
+  removed objects are looked up in a set and the listing yields between pages
+  (OPENZCINE-IOS-1S, OPENZCINE-IOS-17).
+
 ## [0.3.0] - 2026-11-22
 
 Public beta, cumulative since the 2026-10-30 public beta (0.2.8). The operator-facing iOS and
