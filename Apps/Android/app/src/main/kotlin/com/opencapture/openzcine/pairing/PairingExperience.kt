@@ -307,7 +307,7 @@ private fun usbCameraSession(
         phaseLogger = phaseLogger,
     )
 
-/** Emits only safe connection failures to logcat, never pairing-phase details. */
+/** Emits only safe session diagnostics to logcat, never pairing-phase details. */
 private fun logCameraSessionPhase(phase: String, detail: String) {
     val message = cameraSessionDiagnosticMessage(phase, detail) ?: return
     Log.w(CAMERA_SESSION_LOG_TAG, message)
@@ -331,6 +331,7 @@ internal fun cameraSessionDiagnosticMessage(phase: String, detail: String): Stri
         // no pairing credential can ride it.
         "propertyWriteSlow",
         -> "$phase: $detail"
+        "liveViewPreviewRejected", "liveViewMediaReleased", "liveViewFailed", "liveViewStalled" -> phase
         else ->
             if (phase.startsWith("usb.")) {
                 "$phase: $detail"
