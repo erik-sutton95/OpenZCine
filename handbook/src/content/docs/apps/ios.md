@@ -122,6 +122,12 @@ descriptors. A change counts once the camera reads it back.
 
 Mode-dependent limits are listed under [ZR exposure and focus](../../devices/zr/settings/).
 
+### Camera presets
+
+With a Nikon connected, go to **Settings → Controls → Camera presets** and choose
+**Save current settings** to save its exposure and white balance. Choose **Recall** beside a
+saved preset to restore the settings the camera currently supports. Presets are saved per camera model.
+
 ## Photography mode
 
 Dedicated stills chrome with a real shutter (hold to burst in continuous

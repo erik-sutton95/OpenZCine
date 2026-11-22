@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Camera presets
+
+- iOS and Android use the connected Nikon model to enable saving and recalling camera
+  presets from older saved setups.
+
 ### Live streaming
 
 - iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom
