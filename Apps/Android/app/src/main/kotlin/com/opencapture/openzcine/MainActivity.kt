@@ -134,7 +134,6 @@ import com.opencapture.opencine.appkit.ShellCoverPresentation
 import com.opencapture.opencine.appkit.MonitorSettingsAccountModel
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.core.ConnectedCamera
-import com.opencapture.opencine.core.IntegrationID
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.Lifecycle
@@ -147,6 +146,7 @@ import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonIntegration
 import com.opencapture.opencine.nikon.NikonSavedRecordsV0
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.multiview.ZCineMultiview
 import com.opencapture.openzcine.multiview.ZCineMultiviewScreen
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
@@ -550,6 +550,7 @@ class MainActivity : ComponentActivity() {
                 val monitorNote = remember { mutableStateOf<String?>(null) }
                 val shell = remember(camerasModel, connectionScope) {
                     ShellModel(camerasModel, MonitorControlModel(connectionScope)).also {
+                        camerasModel.onConnected = { camera -> it.present(shellSessions.cameraForMonitor(camera)) }
                         it.control.onNote = { note -> monitorNote.value = note }
                         if (pairingScript != null) it.beginPairing()
                         if (debugInitialSettingsTab != null) it.open(ShellModel.Cover.SETTINGS)
@@ -617,9 +618,11 @@ class MainActivity : ComponentActivity() {
                     val saved = camerasModel.state.value.saved.firstOrNull { camera ->
                         camera.routes.any { it.extras[NikonSavedRecordsV0.Extra.PROFILE_ID] == activeSavedCamera?.profileID }
                     } ?: SavedCamera(
-                        id = "monitor:${common.id}", integration = IntegrationID("nikon"),
+                        id = "monitor:${common.id}", integration = NikonOpenCineSession.INTEGRATION,
                         advertisedName = activeSavedCamera?.cameraName ?: "Monitor", model = "")
-                    val connected = ConnectedCamera(saved, common, shellSessions.services(native, common))
+                    val connected = shellSessions.cameraForMonitor(
+                        ConnectedCamera(saved, common, shellSessions.services(native, common)),
+                    )
                     if (borrowed) {
                         shell.borrow(connected) {
                             monitorSession = null

@@ -13914,11 +13914,27 @@ final class NativeAppModel {
 extension NativeAppModel {
     func makeShellModel() -> ShellModel {
         let shell = ShellModel(cameras: cameras)
+        let present = cameras.onConnected
+        cameras.onConnected = { [weak self] camera in
+            present(self?.cameraWithReportedModel(camera) ?? camera)
+        }
         shell.onSceneActivity = { [weak self] active in
             if active { self?.enterForeground() } else { self?.enterBackground() }
         }
         shell.control.onNote = { [weak self] in self?.showMonitorNotice($0) }
         return shell
+    }
+
+    /// Older saved setups have no model. Use the live session's model for the monitor copy,
+    /// keeping the saved setup, route and service identities intact.
+    private func cameraWithReportedModel(_ connection: ConnectedCamera) -> ConnectedCamera {
+        let reportedModel = cameraSession?.identity.model
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard connection.session.id == controlSession?.id, let reportedModel, !reportedModel.isEmpty
+        else { return connection }
+        var camera = connection
+        camera.saved.model = reportedModel
+        return camera
     }
 
     /// The movie capture values as shown: an unfinished common edit (the shared control's pending
@@ -14014,8 +14030,9 @@ extension NativeAppModel {
             host: cameraSession.host, name: identity.displayName, model: identity.model,
             serial: identity.serialNumber, saved: cameras.saved,
             legacy: NikonSavedRecordsV0.cameras(from: savedCameras))
-        let camera = ConnectedCamera(
-            saved: saved, session: controlSession, services: currentMediaServices())
+        let camera = cameraWithReportedModel(
+            ConnectedCamera(
+                saved: saved, session: controlSession, services: currentMediaServices()))
         if multiviewLentSlot != nil {
             shell.borrow(camera) { [weak self] in self?.returnToMultiview() }
         } else {

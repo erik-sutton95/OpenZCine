@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.core.CameraServices
+import com.opencapture.opencine.core.ConnectedCamera
 import com.opencapture.opencine.media.CameraMediaService
 import com.opencapture.opencine.nikon.NikonMediaCatalogRecordSource
 import com.opencapture.opencine.nikon.NikonMediaService
@@ -23,6 +24,14 @@ internal class NikonShellSessions(private val scope: CoroutineScope) {
 
     fun acquire(native: CameraSession): NikonOpenCineSession =
         sessions.getOrPut(native) { NikonOpenCineSession(native, scope) }
+
+    fun cameraForMonitor(camera: ConnectedCamera): ConnectedCamera {
+        val native = sessions.entries.firstOrNull { it.value === camera.session }?.key
+        val connected = native?.state?.value as? CameraSessionState.Connected ?: return camera
+        val model = connected.identity.model.trim()
+        // Legacy setup records omit the model that the presets card uses as its scope.
+        return if (model.isEmpty()) camera else camera.copy(saved = camera.saved.copy(model = model))
+    }
 
     private data class MediaOwner(val common: NikonOpenCineSession, val service: NikonMediaService)
     private val media = IdentityHashMap<CameraSession, MediaOwner>()

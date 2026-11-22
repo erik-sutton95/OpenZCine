@@ -117,6 +117,8 @@ Build recipes: [Setup](../../guides/setup/#android). Architecture:
 - **Camera control and photography mode** match iOS: pickers from the body's
   own descriptors, the focus dial (off by default), photo chrome, instant
   playback and burst stacks.
+- **Camera presets** in **Settings → Controls** save and recall exposure and white balance
+  for the connected Nikon model.
 - **Media** browses every card, pages newest first across slots, plays
   progressive proxies with assists, and filters by the tab you are on.
 - **Delivery**: native Share, Save to Gallery and Frame.io use only finalized
