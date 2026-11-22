@@ -7226,7 +7226,10 @@ final class NativeAppModel {
             let usbTransport = USBCameraTransport(device: device)
             do {
                 try requireCurrent()
-                try await usbTransport.open()
+                // The USB handshake's whole budget: ImageCaptureCore answers the open only after
+                // reading the card, and a full card takes longer than the open's old 30 s
+                // (OPENZCINE-IOS-16). The phase watchdog still bounds the attempt.
+                try await usbTransport.open(timeout: CameraConnectionTimeout.usbSessionOpen)
                 try requireCurrent()
             } catch {
                 scanTicker.cancel()
@@ -7262,7 +7265,8 @@ final class NativeAppModel {
                 let retryTransport = USBCameraTransport(device: device)
                 do {
                     try requireCurrent()
-                    try await retryTransport.open(recycleFirst: true)
+                    try await retryTransport.open(
+                        timeout: CameraConnectionTimeout.usbSessionOpen, recycleFirst: true)
                     try requireCurrent()
                 } catch let openError {
                     retryTransport.close()

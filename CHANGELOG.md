@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format is based on
 - iOS: the Media gallery no longer hangs while a clip downloads on a large card. Each cell reads its
   clip's file once instead of on every redraw, and a download's progress redraws only that clip's
   cell (OPENZCINE-IOS-1W).
+- iOS: a USB-C camera with a full CFexpress card connects again. The session open waits as long as
+  the USB connection step allows (120 s instead of 30 s) for the card to be read, and a retry no
+  longer restarts a card read that is still running (OPENZCINE-IOS-16).
 
 ## [0.3.0] - 2026-11-22
 
