@@ -2413,7 +2413,8 @@ internal fun MonitorScreen(
                             }
                         }, mirrorX = if (isVerticalFeed) renderedFraming.flipsVertically else renderedFraming.mirrorsHorizontally,
                         mirrorY = if (isVerticalFeed) renderedFraming.mirrorsHorizontally else renderedFraming.flipsVertically,
-                        modifier = Modifier.matchParentSize(), interactive = !locked, splitSide = referenceStore.splitSide)
+                        modifier = Modifier.matchParentSize(), interactive = !locked,
+                        splitSide = referenceStore.splitSide, splitOpacity = referenceStore.splitOpacity)
                     // This body-space chrome stays above the comparison. Its scale and rotation
                     // follow the feed as before; the split divider remains screen-vertical.
                     Box(Modifier.matchParentSize().liveFeedBodyRotation(displayedFeedRotation).graphicsLayer {
