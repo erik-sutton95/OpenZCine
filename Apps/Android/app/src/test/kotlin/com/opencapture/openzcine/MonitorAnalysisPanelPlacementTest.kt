@@ -28,6 +28,40 @@ class MonitorAnalysisPanelPlacementTest {
     }
 
     @Test
+    fun `fractional rotation insets keep the reference inside a Pixel 7a viewport`() {
+        val height = 1080f / (420f / 160f)
+        val top = 1.127182f
+        val viewport = MonitorRect(0f, 0f, 900f, height)
+        val safeBounds = MonitorRect(16f, top, 868f, height - top)
+        val layout = MonitorAnalysisPanelLayout(viewport, safeBounds)
+        assertTrue(layout.safeBounds.maxY <= height)
+
+        val frame = controlSafeFalseColorReferenceDefaultFrame(
+            feed = MonitorRect(0f, 0f, 900f, 339f),
+            layout = layout,
+        )
+        assertTrue(frame.minX >= safeBounds.minX)
+        assertTrue(frame.minY >= top)
+        assertTrue(frame.maxY <= height)
+    }
+
+    @Test
+    fun `bounds during rotation keep their visible intersection`() {
+        val viewport = MonitorRect(0f, 0f, 900f, 411f)
+        val layout = MonitorAnalysisPanelLayout(viewport, MonitorRect(16f, 24f, 868f, 850f))
+
+        assertEquals(MonitorRect(16f, 24f, 868f, 387f), layout.safeBounds)
+    }
+
+    @Test
+    fun `a reference filling fractional safe bounds can still be positioned`() {
+        val safeBounds = MonitorRect(0.1f, 0.2f, 12f, 8f)
+        val panel = MonitorRect(0f, 0f, 264f, 52f)
+
+        assertEquals(safeBounds, clampScopeFrame(panel, safeBounds))
+    }
+
+    @Test
     fun `legacy stores read finite pairs and reconcile out of range values`() {
         val current = TestSharedPreferences()
         val legacyScopes = TestSharedPreferences()
