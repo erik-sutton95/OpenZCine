@@ -145,8 +145,8 @@ private val AndroidThermalTier.scopeMultiplier: Double
 fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
     val width = min(frame.width, bounds.width)
     val height = min(frame.height, bounds.height)
-    val maxX = bounds.x + bounds.width - width
-    val maxY = bounds.y + bounds.height - height
+    val maxX = bounds.x + (bounds.width - width)
+    val maxY = bounds.y + (bounds.height - height)
     return MonitorRect(
         x = frame.x.coerceIn(bounds.x, maxX),
         y = frame.y.coerceIn(bounds.y, maxY),

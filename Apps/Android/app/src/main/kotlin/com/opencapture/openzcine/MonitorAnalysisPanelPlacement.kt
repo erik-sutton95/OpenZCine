@@ -32,25 +32,28 @@ internal enum class LegacyPanelStore { SCOPES, FALSE_COLOR }
  * relative position. [safeBounds] comes only from shared zone-map frames and existing portrait-rail
  * geometry.
  */
-internal data class MonitorAnalysisPanelLayout(
+internal class MonitorAnalysisPanelLayout(
     val viewport: MonitorRect,
-    val safeBounds: MonitorRect,
+    requestedBounds: MonitorRect,
 ) {
+    val safeBounds: MonitorRect
+
     init {
         require(viewport.width >= 0f && viewport.height >= 0f) {
             "monitor analysis viewport must be non-negative"
         }
-        require(safeBounds.width >= 0f && safeBounds.height >= 0f) {
-            "monitor analysis safe bounds must be non-negative"
-        }
-        require(
-            safeBounds.x >= viewport.x &&
-                safeBounds.y >= viewport.y &&
-                safeBounds.x + safeBounds.width <= viewport.x + viewport.width &&
-                safeBounds.y + safeBounds.height <= viewport.y + viewport.height,
-        ) {
-            "monitor analysis safe bounds must remain inside the viewport"
-        }
+        // Animated insets and fractional dp can place an edge outside the new viewport during rotation.
+        val left = requestedBounds.minX.coerceIn(viewport.minX, viewport.maxX)
+        val top = requestedBounds.minY.coerceIn(viewport.minY, viewport.maxY)
+        val right = requestedBounds.maxX.coerceIn(left, viewport.maxX)
+        val bottom = requestedBounds.maxY.coerceIn(top, viewport.maxY)
+        safeBounds = MonitorRect(left, top, containedExtent(left, right), containedExtent(top, bottom))
+    }
+
+    private fun containedExtent(start: Float, end: Float): Float {
+        val extent = end - start
+        // Reconstructing a Float edge can round outside the bound by one step.
+        return if (start + extent > end) Math.nextDown(extent) else extent
     }
 }
 
