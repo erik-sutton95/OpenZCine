@@ -75,6 +75,7 @@ with 1.6× and a custom 1.00× to 2.00× ratio in 0.01 steps. Display only.
 
 Expand the View Assist tray in Live View and tap **REF** to save your first
 live frame. You can also pause a video in Media and choose **Use as Reference**.
+That turns on the comparison when you return to a compatible live picture.
 The app keeps one reference on this phone after a restart or camera reconnect.
 Saving again asks you to replace it.
 

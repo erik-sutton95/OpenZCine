@@ -554,8 +554,10 @@ internal fun MediaBrowseScreen(
 
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
-        // A delivery run belongs to the app, not this gallery: it continues after close (A4-10).
-        library?.close()
+        // Release the camera's media lease before uncovering Live View. Its preview request
+        // can be refused while media still owns the camera.
+        library?.dispose()
+        // A delivery run belongs to the app and continues after the gallery closes (A4-10).
         onClose()
     }
     Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
