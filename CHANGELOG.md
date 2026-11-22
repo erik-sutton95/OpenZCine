@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format is based on
 - Android: tapping a USB-C camera no longer freezes the pairing screen while a slow body opens; the
   open runs off the main thread, and a reconnect that finds no ready camera says so in the
   diagnostics export (OPENZCINE-ANDROID-C, -D).
+- Android: a USB-C session no longer ends about a second into live view on phones whose USB stack
+  reports an idle event wait as an error; such a wait now counts as "no event yet"
+  (OPENZCINE-ANDROID-B).
 
 ## [0.3.0] - 2026-11-22
 

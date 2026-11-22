@@ -632,11 +632,15 @@ internal const val USB_BULK_IN_RECOVERED_PHASE: String = "usb.bulkIn.recovered"
  * covers the kernel's timer granularity; anything shorter failed on its own.
  */
 internal fun classifyBulkInFailure(elapsedMillis: Long, timeoutMillis: Int): UsbBulkInFailure =
-    if (elapsedMillis >= timeoutMillis - BULK_IN_TIMEOUT_SLACK_MILLIS) {
+    if (usedWholeWait(elapsedMillis, timeoutMillis)) {
         UsbBulkInFailure.TIMEOUT
     } else {
         UsbBulkInFailure.ERROR
     }
+
+/** A USB wait that took (nearly) its whole timeout timed out; a shorter one failed on its own. */
+internal fun usedWholeWait(elapsedMillis: Long, timeoutMillis: Int): Boolean =
+    elapsedMillis >= timeoutMillis - BULK_IN_TIMEOUT_SLACK_MILLIS
 
 /** Outcome of one bulk-in read, including a one-shot pipe clear and retry after an early failure. */
 internal data class UsbPtpBulkInReadOutcome(
@@ -809,7 +813,11 @@ internal interface UsbInterruptChannel {
  * the process. When the abort cannot be reaped the connection is gone, so the
  * pump retires rather than queue again and its owner closes the session.
  */
-internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
+internal class UsbInterruptEventPump(
+    private val channel: UsbInterruptChannel,
+    /** Monotonic milliseconds, to tell an idle wait from an early failure. */
+    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
+) {
     /** Serializes reads against teardown so nothing can queue behind a close. */
     private val lock = Any()
     /** Non-null exactly while the framework still owns a queued transfer. */
@@ -839,8 +847,17 @@ internal class UsbInterruptEventPump(private val channel: UsbInterruptChannel) {
             if (stopped || retired) return@synchronized null
             val buffer = queuedBuffer ?: queueLocked(maxBytes) ?: return@synchronized null
             try {
+                val start = nowMillis()
                 if (!channel.awaitCompletion(timeoutMillis.toLong())) {
-                    // A null (framework error) or foreign completion leaves our
+                    // Some ROMs (HyperOS on the Snapdragon 8 Elite among the suspects) return
+                    // null from requestWait on an idle timeout instead of throwing: AOSP throws
+                    // only when errno is ETIMEDOUT. A null after the whole wait is that idle
+                    // timeout, so the request stays queued exactly as for a thrown one; ending
+                    // the read here closed every session about a second into live view.
+                    if (usedWholeWait(nowMillis() - start, timeoutMillis)) {
+                        return@synchronized ByteArray(0)
+                    }
+                    // An early null (framework error) or foreign completion leaves our
                     // transfer queued, so it has to be aborted and reaped here.
                     releaseQueuedLocked()
                     return@synchronized null
