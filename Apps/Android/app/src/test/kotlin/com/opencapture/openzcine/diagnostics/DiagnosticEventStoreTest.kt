@@ -291,16 +291,29 @@ class DiagnosticEventStoreTest {
 
     @Test
     fun `USB handshake stages map to distinct closed codes`() {
+        // Every USB stage token the shared session reports today (OpenCine
+        // `USBHandshakeStage`, `usbHandshakeDiagnosticPhase` and the Kotlin session's
+        // reconnect), plus this app's own open failures, must reach the export
+        // (OPENZCINE-ANDROID-C/-D: "Couldn't reach the USB-C camera" said nothing more).
         val codes =
             listOf(
+                    "usb.open.detached",
+                    "usb.open.noPermission",
+                    "usb.open.noPtpInterface",
+                    "usb.open.device",
                     "usb.open.claim",
                     "usb.open.eventEndpoint",
+                    "usb.open.changed",
                     "usb.reconnect.closedTransport",
+                    "usb.reconnect.notReady",
                     "usb.handshake.deviceInfo",
                     "usb.handshake.openSession",
                     "usb.handshake.appMode",
+                    "usb.handshake.identify",
                     "usb.handshake.write",
                     "usb.handshake.read",
+                    "usb.handshake.timeout",
+                    "usb.handshake.closed",
                 )
                 .map { AndroidDiagnosticEvent.fromPhase(it) }
 

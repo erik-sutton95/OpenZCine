@@ -12,6 +12,7 @@ import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
+import com.opencapture.openzcine.transport.openOffMain
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlinx.coroutines.CancellationException
@@ -296,7 +297,7 @@ internal suspend fun reconnectAfterBodyConfirm(
 }
 
 /** A wireless setup dials [host]; a cable opens its ready attached camera, else null. */
-private fun postConfirmSession(
+private suspend fun postConfirmSession(
     environment: PairingEnvironment,
     record: SavedCameraRecord,
     host: String,
@@ -305,7 +306,7 @@ private fun postConfirmSession(
     if (record.transport != SavedCameraTransport.USB_C) return environment.createSession(host)
     val source = environment.usbCameraSource ?: return null
     val camera = usbCameras.firstOrNull { it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host } ?: return null
-    return when (val opened = source.open(camera)) {
+    return when (val opened = source.openOffMain(camera)) {
         is UsbPtpOpenResult.Opened -> environment.createUsbSession(opened)
         is UsbPtpOpenResult.Rejected -> null
     }

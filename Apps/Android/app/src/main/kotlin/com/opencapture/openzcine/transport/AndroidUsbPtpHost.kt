@@ -19,9 +19,16 @@ import java.nio.BufferOverflowException
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import com.opencapture.opencine.nikon.UsbPtpTransport
 
@@ -67,6 +74,7 @@ public data class UsbPtpCamera(
 internal fun reopenReadyUsbTransport(
     source: UsbPtpCameraSource,
     hostKey: String,
+    onDiagnosticPhase: (String) -> Unit = {},
 ): UsbPtpOpenResult {
     val camera =
         source.cameras.value.firstOrNull { candidate ->
@@ -75,8 +83,37 @@ internal fun reopenReadyUsbTransport(
             ?: return UsbPtpOpenResult.Rejected(
                 message = "Connect your USB-C camera and approve access, then try again.",
                 diagnosticPhase = "usb.reconnect.notReady",
-            )
+            ).also {
+                // The source records its own open failures; this one never reaches it, and the
+                // session logs only `failed.usb` for a rejected reopen.
+                onDiagnosticPhase(it.diagnosticPhase)
+            }
     return source.open(camera)
+}
+
+/**
+ * Opens [camera] on [dispatcher], never on the caller's (main) thread.
+ *
+ * [UsbPtpCameraSource.open] blocks on USB control transfers: GET_DEVICE_STATUS, and on a busy body
+ * a Device Reset with its settle polls, seconds in all. Run from a camera-row tap it froze the
+ * pairing screen. The open itself is not cancellable (it claims the interface); a caller that
+ * left while it ran gets a cancellation and the transport it no longer wants is closed.
+ */
+internal suspend fun UsbPtpCameraSource.openOffMain(
+    camera: UsbPtpCamera,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+): UsbPtpOpenResult {
+    var opened: UsbPtpOpenResult? = null
+    try {
+        // withContext drops its result when the caller was cancelled meanwhile, so the result
+        // is kept here, where the cancellation can still close it.
+        withContext(dispatcher + NonCancellable) { opened = open(camera) }
+        currentCoroutineContext().ensureActive()
+    } catch (cancelled: CancellationException) {
+        (opened as? UsbPtpOpenResult.Opened)?.transport?.close()
+        throw cancelled
+    }
+    return checkNotNull(opened)
 }
 
 /**

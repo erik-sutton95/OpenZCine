@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format is based on
 - iOS: a USB-C camera with a full CFexpress card connects again. The session open waits as long as
   the USB connection step allows (120 s instead of 30 s) for the card to be read, and a retry no
   longer restarts a card read that is still running (OPENZCINE-IOS-16).
+- Android: tapping a USB-C camera no longer freezes the pairing screen while a slow body opens; the
+  open runs off the main thread, and a reconnect that finds no ready camera says so in the
+  diagnostics export (OPENZCINE-ANDROID-C, -D).
 
 ## [0.3.0] - 2026-11-22
 
