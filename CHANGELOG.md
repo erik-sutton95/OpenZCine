@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Offline Voice Control
+
+- In the field monitor on supported iPhones and Android phones, tap Voice in the
+  tools menu to start or stop recording by voice or recall a saved preset while
+  the camera is idle. Start, Stop and Recall preset can be enabled separately
+  under Settings, Controls.
+
 ### Live streaming
 
 - iOS: live streaming of the monitor's camera to Twitch, YouTube, Facebook, Instagram or a Custom

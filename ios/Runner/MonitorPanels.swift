@@ -1186,6 +1186,7 @@ struct OperatorSettingsPanel: View {
                 calibrate: model.gyroCapture.canCalibrate
                     ? { model.gyroCapture.beginCalibration() } : nil)
         ).withCameraPresets(model.cameraPresetsCard)
+            .withVoiceControl(MonitorVoiceControl.supported ? model.voiceControl.preferences : nil)
             .withLiveStream(model.liveStream)
     }
 

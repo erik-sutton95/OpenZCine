@@ -36,8 +36,8 @@
     <!-- Rear camera, used only while the operator explicitly opens the local
       Connection-wizard scanner. OCR stays on device and no frame is stored. -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <!-- Live streaming carries the phone's microphone with the camera picture. Asked only when
-      the operator confirms Go live; the stream runs in the foreground only (no service). -->
+    <!-- The microphone is requested only when the operator confirms Go live or arms Voice
+      in the monitor. Both use the microphone only in the foreground. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- The scanner is optional: pairing and all other app surfaces remain
       usable on devices without a camera. -->
@@ -47,6 +47,12 @@
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:icon="@mipmap/ic_launcher"

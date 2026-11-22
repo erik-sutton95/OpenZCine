@@ -621,7 +621,10 @@ struct NikonMonitorShell: View {
                 if let tool = MonitorAssistTool(rawValue: $0.rawValue) {
                     model.toggleAssist(tool, context: .liveView)
                 }
-            })
+            },
+            voice: .init(
+                control: model.voiceControl, target: model.voiceControlTarget,
+                execute: model.executeVoiceCommand))
     }
     private func bodyViews(_ layout: FieldMonitorLayout) -> MonitorOperatorBodyViews {
         .init(

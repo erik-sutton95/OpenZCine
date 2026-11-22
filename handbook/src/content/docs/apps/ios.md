@@ -122,6 +122,28 @@ descriptors. A change counts once the camera reads it back.
 
 Mode-dependent limits are listed under [ZR exposure and focus](../../devices/zr/settings/).
 
+### Voice Control
+
+On supported iPhones running iOS 26 or later, open **Settings → Controls →
+Voice Control** to choose which commands are allowed. Start, Stop and Recall
+preset have separate switches. In the Field Monitor, expand the tools menu and
+tap **Voice**, the last item, to listen. Allow microphone access when asked.
+Recognition runs on the iPhone after the English speech model downloads.
+
+- “Camera, start” or “Camera, record” starts a clip.
+- “Camera, stop” ends the current clip.
+- “Camera, load three” recalls the saved **Preset 3** while the camera is idle.
+  “Camera, preset three” also works. To use a number, save the preset as
+  **Preset** followed by that number. Leaving the name blank when saving
+  suggests the first unused preset number.
+- “Camera, load next” and “Camera, load previous” follow the order shown in
+  Settings. They move from the last successful recall on this camera, including
+  a recall from Settings. In a fresh session, next starts at the first preset
+  and previous starts at the last. Both stop at the end of the list.
+
+If you open Settings while Voice is listening, tap **Voice** again when you
+return to the monitor.
+
 ## Photography mode
 
 Dedicated stills chrome with a real shutter (hold to burst in continuous

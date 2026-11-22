@@ -177,6 +177,7 @@ internal fun OperatorSettingsScreen(
     liveStream: com.opencapture.opencine.cameracontrols.MonitorSettingsLiveStreamSource? = null,
     /** The Controls tab's camera presets card; `null` leaves it out. */
     cameraPresets: CameraSettingsPresetsModel? = null,
+    voicePreferences: com.opencapture.opencine.appkit.MonitorVoicePreferences? = null,
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
@@ -351,6 +352,7 @@ internal fun OperatorSettingsScreen(
             "Current OpenZCine build from the native project metadata."),
         gyro = gyro,
         cameraPresets = cameraPresets,
+        voicePreferences = voicePreferences,
         liveStream = liveStream,
     )
     // Seeds the session once per requested landing tab, before the first frame draws.

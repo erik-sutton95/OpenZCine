@@ -160,6 +160,7 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplaySection
 import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
+import com.opencapture.opencine.appkit.MonitorVoiceTool
 import com.opencapture.openzcine.wear.AndroidWearPhoneRelay
 import com.opencapture.openzcine.wear.WearRecordCommandSafety
 import com.opencapture.openzcine.wear.androidWatchRelayState
@@ -322,6 +323,7 @@ internal fun MonitorScreen(
     clearNote: (String) -> Unit = {},
     gyroState: GyroCaptureState? = null,
     onOpenGyroLogs: () -> Unit = {},
+    voice: MonitorVoiceTool? = null,
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -2123,7 +2125,7 @@ internal fun MonitorScreen(
             com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
-                    { usage = it; usageStore.value = it }, nikonUsageSeed),
+                    { usage = it; usageStore.value = it }, nikonUsageSeed, voice = voice),
                 MonitorOperatorBodyViews(
                     dashboard = { accepts ->
                         // DISP 3 hero: the header's status, with no hero digits when nothing feeds
