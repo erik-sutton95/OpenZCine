@@ -1,9 +1,12 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.CameraSettingsPresetScope
 import com.opencapture.opencine.core.CameraCommandIntent
 import com.opencapture.opencine.core.CommandRejection
 import com.opencapture.opencine.core.CommandStage
+import com.opencapture.opencine.core.ConnectedCamera
 import com.opencapture.opencine.core.ConnectionState
+import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.core.SessionCloseReason
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.SettingKey
@@ -12,6 +15,7 @@ import com.opencapture.opencine.core.WhiteBalanceValue
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.FakeCameraSession
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -29,6 +33,27 @@ class NikonShellSessionsTest {
         owner.retire(native)
         assertEquals(ConnectionState.Disconnected(SessionCloseReason.REQUESTED), paired.snapshots.value.connection)
         assertNotSame(paired, owner.acquire(native))
+    }
+
+    @Test
+    fun monitorUsesTheConnectedCameraModelForPresetScopeWithoutChangingSavedIdentity() = runTest {
+        val owner = NikonShellSessions(backgroundScope)
+        val zr = owner.acquire(FakeCameraSession(CameraIdentity("SIMULATED ZR", model = "ZR", serialNumber = "zr"), true))
+        val z8 = owner.acquire(FakeCameraSession(CameraIdentity("SIMULATED Z 8", model = "Z 8", serialNumber = "z8"), true))
+        val unknown = owner.acquire(FakeCameraSession())
+        val saved = SavedCamera(id = "legacy-usb", integration = NikonOpenCineSession.INTEGRATION,
+            advertisedName = "Studio camera", model = "")
+        val paired = ConnectedCamera(saved, zr)
+        val monitor = owner.cameraForMonitor(paired)
+
+        assertEquals("org.opencapture.nikon-ptp/ZR", CameraSettingsPresetScope.key(monitor.saved))
+        assertEquals("org.opencapture.nikon-ptp/Z 8",
+            CameraSettingsPresetScope.key(owner.cameraForMonitor(paired.copy(session = z8)).saved))
+        assertEquals(null, CameraSettingsPresetScope.key(owner.cameraForMonitor(paired.copy(session = unknown)).saved))
+        assertEquals(saved, monitor.saved.copy(model = ""))
+        assertEquals("", paired.saved.model)
+        assertSame(zr, monitor.session)
+        assertSame(paired.services, monitor.services)
     }
 
     @Test

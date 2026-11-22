@@ -4,6 +4,7 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineCameraControls
+import OpenCineCore
 import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
@@ -239,6 +240,41 @@ extension SettingsSharedOwnerTests {
         model.isDemoSession = true
         defer { model.isDemoSession = false }
         #expect(model.cameraPresetsCard == nil)
+    }
+
+    @Test(arguments: [true, false])
+    func connectedUSBSetupUsesTheReportedModelForPresets(throughCamerasPage: Bool) async throws {
+        let model = NativeAppModel()
+        let host = "usb:SIMULATED-presets"
+        let native = try await NativeCameraSession.establish(
+            transport: LargeTransferTransport(operations: []),
+            host: host, cameraName: "SIMULATED", requestPairing: false)
+        let runtime = NikonMonitorRuntime(link: native)
+        defer {
+            model.shell.close()
+            model.debugAttachMonitorRuntime(nil)
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        model.debugAdoptEstablishedMediaSession(native)
+        model.debugAttachMonitorRuntime(runtime)
+        let record = PTPIPSavedCameraRecord(
+            host: host, displayName: "SIMULATED", transport: "USB-C", lastSeenAt: nil)
+        model.savedCameras = [record]
+        let saved = try #require(NikonSavedRecordsV0.cameras(from: model.savedCameras).first)
+        #expect(saved.model.isEmpty)
+        if throughCamerasPage {
+            _ = model.shell
+            model.cameras.onConnected(ConnectedCamera(saved: saved, session: runtime.session))
+        } else {
+            model.isMonitorPresented = true
+        }
+
+        let monitor = try #require(model.shell.monitor)
+        #expect(monitor.session.id == runtime.session.id)
+        #expect(monitor.camera.saved.id == saved.id)
+        let integration = NikonCameraSession.integration.rawValue
+        #expect(model.cameraPresets.scope == "\(integration)/\(native.identity.model)")
     }
 }
 
