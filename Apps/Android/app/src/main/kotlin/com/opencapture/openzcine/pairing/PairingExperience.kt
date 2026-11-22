@@ -630,6 +630,14 @@ internal fun pairingDiscoveredRows(
 internal fun pairingAcceptsSelection(phase: PairingPhase): Boolean = !phase.isBusy()
 
 /**
+ * What tapping a camera that has no USB access yet records. Showing Android's permission prompt
+ * is a step, not an error: logging it as `error.connection.usb.permission` made every first
+ * connect look failed (OPENZCINE-ANDROID-D). Only an access the operator already denied is one.
+ */
+internal fun usbPermissionDiagnosticPhase(access: UsbPtpCameraAccess): String =
+    if (access == UsbPtpCameraAccess.DENIED) "failed.usbPermission" else "usb.permission.requested"
+
+/**
  * The first-pair wizard (iOS `StartupFirstPairWizardView`), hosted in OpenCine's shared pair
  * page through an `IntegrationPairingFlow`: the page's rail shows the wizard's steps, its pane
  * the current step, and a connect in flight takes over the pane (title, detail, live line,
@@ -900,7 +908,7 @@ public fun PairingExperience(
             UsbPtpCameraAccess.NEEDS_PERMISSION,
             UsbPtpCameraAccess.DENIED,
             -> {
-                onDiagnosticPhase("failed.usbPermission")
+                onDiagnosticPhase(usbPermissionDiagnosticPhase(camera.access))
                 source.requestPermission(camera)
             }
             UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> {

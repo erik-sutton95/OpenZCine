@@ -23,6 +23,8 @@ All notable changes to this project are documented here. The format is based on
 - Android: the diagnostics export now says when a USB-C camera's interface had to be reset, whether
   the reset settled, and the camera's USB status (OK, busy, other or unreadable), which went only
   to the system log before (OPENZCINE-ANDROID-C, -D).
+- Android: asking for USB access to a camera is no longer logged as a failed connection; only an
+  access the operator already denied is (OPENZCINE-ANDROID-D).
 
 ## [0.3.0] - 2026-11-22
 

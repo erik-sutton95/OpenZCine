@@ -51,6 +51,8 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
     /** Permission held, but the ROM would not surface a USB serial descriptor. */
     USB_ATTACHED_NO_SERIAL("usb.attached.no-serial"),
     USB_ATTACHED_READY("usb.attached.ready"),
+    /** A camera tap showed Android's USB permission prompt: a step, not a failure. */
+    USB_PERMISSION_REQUESTED("usb.permission.requested"),
 
     // USB open / handshake stages. The generic `error.connection.usb.failed`
     // breadcrumb could not tell a claim failure from a dead interrupt endpoint
@@ -159,6 +161,7 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "usb.attached.permissionDenied" -> USB_ATTACHED_PERMISSION_DENIED
                 "usb.attached.noSerial" -> USB_ATTACHED_NO_SERIAL
                 "usb.attached.ready" -> USB_ATTACHED_READY
+                "usb.permission.requested" -> USB_PERMISSION_REQUESTED
                 "usb.open.detached" -> USB_OPEN_DETACHED
                 "usb.open.noPermission" -> USB_OPEN_NO_PERMISSION
                 "usb.open.noPtpInterface" -> USB_OPEN_NO_PTP_INTERFACE
