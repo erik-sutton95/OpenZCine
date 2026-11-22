@@ -73,14 +73,16 @@ with 1.6× and a custom 1.00× to 2.00× ratio in 0.01 steps. Display only.
 
 ## Reference frame
 
-Open **Reference** in Live View and choose **Save Live Frame**, or pause a video
-in Media and choose **Use as Reference**. The app keeps one reference on this
-phone after a restart or camera reconnect. Saving again asks you to replace it.
+Expand the View Assist tray in Live View and tap **REF** to save your first
+live frame. You can also pause a video in Media and choose **Use as Reference**.
+The app keeps one reference on this phone after a restart or camera reconnect.
+Saving again asks you to replace it.
 
-Turn on **Show Reference** and use **Blend** to compare at 50% opacity, or use
-**Split** and drag the divider to reveal either image. If the framing differs,
-match the aspect and desqueeze or replace the reference. The overlay stays on
-the monitor and does not enter recordings or exports.
+Tap **REF** to show or hide a saved reference. Touch and hold it to open the
+options. **Blend** starts at 50% opacity. In **Split**, choose **Left** or
+**Right** for the reference and drag the divider to change how much of each
+image you see. If the framing differs, match the aspect and desqueeze or replace
+the reference. The comparison appears in Live View only.
 
 ## Level
 

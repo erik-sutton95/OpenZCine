@@ -631,10 +631,10 @@ struct NikonMonitorShell: View {
             comparison: LUTResolution.showsSplitComparisonKey(
                 visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison)
                 ? AnyView(SplitComparisonKey()) : nil,
-            reference: AnyView(MonitorReferenceControls(store: model.referenceStore,
+            reference: MonitorReferenceControls(store: model.referenceStore,
                 canCapture: model.referenceLiveAvailable,
                 displayAspect: model.liveFrameAspect.map { model.referenceDisplayAspect(source: $0) },
-                capture: { model.captureLiveReference() })),
+                capture: { model.captureLiveReference() }),
             resetFocus: model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
                 ? (model.resetFocusPoint as () -> Void) : nil,
             // Framing marks ride the picture in the camera's own orientation (FeedAlignedAssists).

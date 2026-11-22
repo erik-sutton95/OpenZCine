@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import com.opencapture.monitorui.MonitorReferenceOverlay
 import com.opencapture.monitorui.monitorReferenceMatches
 import com.opencapture.opencine.appkitnative.LocalMonitorReferenceStore
-import com.opencapture.opencine.appkitnative.MonitorReferenceControls
+import com.opencapture.opencine.appkitnative.rememberMonitorReferencePaletteAction
 import com.opencapture.opencine.runtime.MonitorReferenceCapture
 import com.opencapture.opencine.runtime.MonitorReferenceFrame
 
@@ -1416,6 +1416,14 @@ internal fun MonitorScreen(
         val savedReference = referenceStore?.reference?.takeIf {
             referenceStore.shown && referenceReady && monitorReferenceMatches(it.aspect, liveReferenceAspect)
         }
+        val referenceAction = if (referenceStore != null && referenceCapture != null && isMonitorFront) {
+            rememberMonitorReferencePaletteAction(referenceStore, referenceReady && !locked,
+                liveReferenceAspect.takeIf { it > 0f }) {
+                val captured = referenceCapture
+                if (!currentReferenceReady || activeReferenceCapture !== captured) null
+                else captured.capture()?.takeIf { currentReferenceReady && activeReferenceCapture === captured }
+            }
+        } else null
         // Whether a picture has ever reached the screen on this session. Scoped to the session, not
         // to the source, on purpose: a DISP 3 round trip drops the source and the decoder keeps the
         // last JPEG on screen, so re-arming here would flash "waiting" over a frame that is visibly
@@ -2152,6 +2160,7 @@ internal fun MonitorScreen(
             // The instant review covers the whole monitor (iOS): the floating assist palette moves
             // into this window beneath it rather than staying in its popup window above it.
             com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
+            CompositionLocalProvider(LocalMonitorOperatorPaletteAction provides referenceAction) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
                     { usage = it; usageStore.value = it }, nikonUsageSeed),
@@ -2404,7 +2413,7 @@ internal fun MonitorScreen(
                             }
                         }, mirrorX = if (isVerticalFeed) renderedFraming.flipsVertically else renderedFraming.mirrorsHorizontally,
                         mirrorY = if (isVerticalFeed) renderedFraming.mirrorsHorizontally else renderedFraming.flipsVertically,
-                        modifier = Modifier.matchParentSize(), interactive = !locked)
+                        modifier = Modifier.matchParentSize(), interactive = !locked, splitSide = referenceStore.splitSide)
                     // This body-space chrome stays above the comparison. Its scale and rotation
                     // follow the feed as before; the split divider remains screen-vertical.
                     Box(Modifier.matchParentSize().liveFeedBodyRotation(displayedFeedRotation).graphicsLayer {
@@ -2414,14 +2423,6 @@ internal fun MonitorScreen(
                         translationX = zoom.offsetX
                         translationY = zoom.offsetY
                     }) { drawPictureAnnotations() }
-                }
-                if (referenceStore != null && referenceCapture != null && isMonitorFront) {
-                    MonitorReferenceControls(referenceStore, referenceReady, capture = {
-                        val captured = referenceCapture
-                        if (!currentReferenceReady || activeReferenceCapture !== captured) null
-                        else captured.capture()?.takeIf { currentReferenceReady && activeReferenceCapture === captured }
-                    }, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), live = true,
-                        liveAspect = liveReferenceAspect.takeIf { it > 0f }, enabled = !locked)
                 }
                     // Outside the rotated stack: reads as screen chrome, never sideways text.
                     LiveFeedColorModeNotice(
@@ -2518,6 +2519,7 @@ internal fun MonitorScreen(
                     capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
                     onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
             )
+            }
             }
         }
 
