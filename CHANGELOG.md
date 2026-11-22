@@ -20,6 +20,9 @@ All notable changes to this project are documented here. The format is based on
 - Android: a USB-C session no longer ends about a second into live view on phones whose USB stack
   reports an idle event wait as an error; such a wait now counts as "no event yet"
   (OPENZCINE-ANDROID-B).
+- Android: the diagnostics export now says when a USB-C camera's interface had to be reset, whether
+  the reset settled, and the camera's USB status (OK, busy, other or unreadable), which went only
+  to the system log before (OPENZCINE-ANDROID-C, -D).
 
 ## [0.3.0] - 2026-11-22
 

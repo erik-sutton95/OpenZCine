@@ -1,5 +1,8 @@
 package com.opencapture.openzcine.diagnostics
 
+import com.opencapture.openzcine.transport.USB_BULK_OUT_RESET_PHASE
+import com.opencapture.openzcine.transport.usbResetDiagnosticPhase
+import com.opencapture.openzcine.transport.usbStatusDiagnosticPhase
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.Executors
@@ -323,6 +326,28 @@ class DiagnosticEventStoreTest {
         assertEquals(
             AndroidDiagnosticEvent.USB_HANDSHAKE_WRITE,
             AndroidDiagnosticEvent.fromPhase("usb.handshake.write"),
+        )
+    }
+
+    @Test
+    fun `USB resets and device status reach the export as closed codes`() {
+        // OPENZCINE-ANDROID-C/-D: the dead-write reset, whether it settled and the camera's
+        // class status went to logcat only, which a field report cannot carry.
+        assertEquals(
+            listOf(
+                "usb.status.ok",
+                "usb.status.busy",
+                "usb.status.other",
+                "usb.status.other",
+                "usb.status.unreadable",
+            ),
+            listOf(0x2001, 0x2019, 0x2002, 0x201E, 0).map(::usbStatusDiagnosticPhase)
+                .map { requireNotNull(AndroidDiagnosticEvent.fromPhase(it)).wireValue },
+        )
+        assertEquals(
+            listOf("usb.reset.settled", "usb.reset.not-settled", "usb.bulk-out.reset"),
+            listOf(usbResetDiagnosticPhase(true), usbResetDiagnosticPhase(false), USB_BULK_OUT_RESET_PHASE)
+                .map { requireNotNull(AndroidDiagnosticEvent.fromPhase(it)).wireValue },
         )
     }
 

@@ -378,8 +378,12 @@ public class AndroidUsbPtpCameraSource(
         bulkInAddress: Int,
         bulkOutAddress: Int,
     ) {
-        if (ptpDeviceStatus(connection, interfaceId, timeoutMillis = 500) == PTP_STATUS_OK) return
-        ptpResetAndSettle(connection, interfaceId, bulkInAddress, bulkOutAddress, USB_DIAG_TAG)
+        val status = ptpDeviceStatus(connection, interfaceId, timeoutMillis = 500)
+        onDiagnosticPhase(usbStatusDiagnosticPhase(status))
+        if (status == PTP_STATUS_OK) return
+        val settled =
+            ptpResetAndSettle(connection, interfaceId, bulkInAddress, bulkOutAddress, USB_DIAG_TAG)
+        onDiagnosticPhase(usbResetDiagnosticPhase(settled))
     }
 
 
@@ -572,6 +576,26 @@ private fun copyUsbRequestPayload(buffer: ByteBuffer): ByteArray {
 }
 
 private const val PTP_STATUS_OK: Int = 0x2001
+private const val PTP_STATUS_DEVICE_BUSY: Int = 0x2019
+
+/**
+ * The camera's PTP class status (GET_DEVICE_STATUS) as a closed diagnostic phase, never the raw
+ * code: OK, busy, any other code, or unreadable (the request failed or came back short).
+ */
+internal fun usbStatusDiagnosticPhase(status: Int): String =
+    when (status) {
+        PTP_STATUS_OK -> "usb.status.ok"
+        PTP_STATUS_DEVICE_BUSY -> "usb.status.busy"
+        0 -> "usb.status.unreadable"
+        else -> "usb.status.other"
+    }
+
+/** Whether a PTP Device Reset settled back to OK, as a closed diagnostic phase. */
+internal fun usbResetDiagnosticPhase(settled: Boolean): String =
+    if (settled) "usb.reset.settled" else "usb.reset.notSettled"
+
+/** A dead bulk-out write made the transport reset the interface and retry. */
+internal const val USB_BULK_OUT_RESET_PHASE: String = "usb.bulkOut.reset"
 
 /** Outcome of one bulk-out, including a one-shot reset-and-retry after a dead write. */
 internal data class UsbPtpDeadWriteOutcome(
@@ -736,7 +760,7 @@ private fun ptpDeviceStatus(
  * GET_DEVICE_STATUS until the body reports OK again. The reset is not
  * instant on the ZR — a command sent before it completes is silently
  * dropped, which desyncs every later transaction, so the settle poll is as
- * load-bearing as the reset itself.
+ * load-bearing as the reset itself. Returns whether the body settled to OK.
  */
 private fun ptpResetAndSettle(
     connection: UsbDeviceConnection,
@@ -744,7 +768,7 @@ private fun ptpResetAndSettle(
     bulkInAddress: Int,
     bulkOutAddress: Int,
     tag: String,
-) {
+): Boolean {
     val controlTimeoutMillis = 500
     runCatching {
         connection.controlTransfer(0x21, 0x66, 0, interfaceId, null, 0, controlTimeoutMillis)
@@ -759,10 +783,11 @@ private fun ptpResetAndSettle(
         val status = ptpDeviceStatus(connection, interfaceId, controlTimeoutMillis)
         if (status == PTP_STATUS_OK) {
             android.util.Log.i(tag, "PTP reset settled")
-            return
+            return true
         }
     }
     android.util.Log.i(tag, "PTP reset did not settle to OK")
+    return false
 }
 
 /**
@@ -1027,13 +1052,16 @@ private class AndroidUsbPtpTransport(
                     write = { connection.bulkTransfer(bulkOut, bytes, bytes.size, timeoutMillis) },
                     reset = {
                         android.util.Log.i(USB_DIAG_TAG, "USB bulk-out wedged; PTP reset")
-                        ptpResetAndSettle(
-                            connection,
-                            usbInterface.id,
-                            bulkIn.address,
-                            bulkOut.address,
-                            USB_DIAG_TAG,
-                        )
+                        onDiagnosticPhase(USB_BULK_OUT_RESET_PHASE)
+                        val settled =
+                            ptpResetAndSettle(
+                                connection,
+                                usbInterface.id,
+                                bulkIn.address,
+                                bulkOut.address,
+                                USB_DIAG_TAG,
+                            )
+                        onDiagnosticPhase(usbResetDiagnosticPhase(settled))
                     },
                 )
             deadWriteRecoveryDone = outcome.recoveryAttempted
@@ -1105,6 +1133,7 @@ private class AndroidUsbPtpTransport(
     private fun clearBulkInHalt(budgetMillis: Int) {
         val each = (budgetMillis / 2).coerceAtLeast(1)
         val status = ptpDeviceStatus(connection, usbInterface.id, each)
+        onDiagnosticPhase(usbStatusDiagnosticPhase(status))
         val cleared =
             runCatching {
                 connection.controlTransfer(0x02, 0x01, 0, bulkIn.address, null, 0, each)
