@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorPlaybackInteractionOptions
 import com.opencapture.opencine.appkit.*
+import com.opencapture.opencine.appkitnative.LocalMonitorReferenceStore
+import com.opencapture.opencine.appkitnative.MonitorReferenceControls
 import com.opencapture.opencine.cameracontrols.*
 import com.opencapture.opencine.media.*
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
@@ -124,11 +126,12 @@ internal fun MediaPlaybackScreen(
     val native = playerContext.native
     val emptySource = remember { MutableStateFlow<NikonPlaybackNativePort.Source?>(null) }
     val prepared by (native?.preparedSource ?: emptySource).collectAsState()
+    val referenceStore = LocalMonitorReferenceStore.current
     val source = prepared
     val entry = (source?.preparation as? MediaTransferPreparation.Ready)?.entry
     val picture = if (logical != null && native != null && source != null && entry != null) key(source.token) {
         rememberNikonPlaybackPicture(logical, native, source.token, entry, assists,
-            exposureAssistCameraInput, operatorSettings, lutLibrary, scope)
+            exposureAssistCameraInput, operatorSettings, lutLibrary, scope, referenceEnabled = referenceStore != null)
     } else null
     val cover = deliveryPopup != null
     val usage = remember(context) { MonitorToolUsagePreferences(
@@ -195,6 +198,11 @@ internal fun MediaPlaybackScreen(
             initialChromeVisible = true,
             interaction = picture?.interaction ?: MonitorPlaybackInteractionOptions(
                 doubleTapResetsZoom = true, continuousPanBounds = true, zoomAgainstCanvas = true),
+            referenceAction = {
+                if (referenceStore != null && picture != null && !cover && !closing && !redDownloadPresented) {
+                    MonitorReferenceControls(referenceStore, picture.canCaptureReference, picture.captureReference)
+                }
+            },
             picture = { _, _, geometry -> picture?.picture?.invoke(geometry) })
         MonitorOperatorDeliveryHost(deliveryPopup, onDismissPopup = { deliveryPopup = null }, coordinator)
         if (closing) PlaybackLoading("Closing camera media…")

@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkitnative.LocalMonitorReferenceStore
+import com.opencapture.opencine.appkitnative.MonitorReferenceStore
+
 import com.opencapture.opencine.platform.WifiLowLatencyLock
 import com.opencapture.opencine.appkit.retainedMonitorRoot
 import com.opencapture.opencine.appkit.MonitorActivityLaunch
@@ -249,8 +252,10 @@ class MainActivity : ComponentActivity() {
         // edge to edge with forced-dark transparent bars (the transient overlay is never an opaque
         // white band) and the feed under the punch-hole (the cutout arrives as a safe-area inset
         // for the zone map); the bars themselves are sticky-immersive.
+        val referenceStore = MonitorReferenceStore(applicationContext)
         launch.setContent(this) {
             OpenZCineTheme {
+                LaunchedEffect(referenceStore) { referenceStore.load() }
                 GyroFeatureHost(gyroCapture, ZMediaShare) {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
@@ -258,7 +263,8 @@ class MainActivity : ComponentActivity() {
                 val liveBackdrop = remember { NikonLiveBackdrop(applicationContext) }
                 DisposableEffect(liveBackdrop) { onDispose { liveBackdrop.close() } }
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics,
-                    LocalMonitorBackdrops provides listOf(liveBackdrop.source)) {
+                    LocalMonitorBackdrops provides listOf(liveBackdrop.source),
+                    LocalMonitorReferenceStore provides referenceStore) {
                 Box(Modifier.fillMaxSize().reviewMetadata(localReview)) {
                 // The session, its HDMI feed and its saved profile live in the retained root.
                 var monitorSession by root::monitorSession

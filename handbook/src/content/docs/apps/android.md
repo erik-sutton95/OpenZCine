@@ -71,6 +71,17 @@ unsupported value shows as unavailable, never as a demo value.
 Horizontal and vertical desqueeze scale the picture in live view and playback,
 with 1.6× and a custom 1.00× to 2.00× ratio in 0.01 steps. Display only.
 
+## Reference frame
+
+Open **Reference** in Live View and choose **Save Live Frame**, or pause a video
+in Media and choose **Use as Reference**. The app keeps one reference on this
+phone after a restart or camera reconnect. Saving again asks you to replace it.
+
+Turn on **Show Reference** and use **Blend** to compare at 50% opacity, or use
+**Split** and drag the divider to reveal either image. If the framing differs,
+match the aspect and desqueeze or replace the reference. The overlay stays on
+the monitor and does not enter recordings or exports.
+
 ## Level
 
 The LEVEL overlay prefers the camera's virtual-horizon angles, in Horizon or

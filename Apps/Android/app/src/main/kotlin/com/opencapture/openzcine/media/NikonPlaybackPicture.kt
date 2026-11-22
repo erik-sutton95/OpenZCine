@@ -2,6 +2,7 @@
 
 package com.opencapture.openzcine.media
 
+import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.os.Build
 import android.view.LayoutInflater
@@ -39,6 +40,9 @@ import com.opencapture.opencine.media.MonitorPlaybackMetadata
 import com.opencapture.opencine.media.ScopeAssistBundle
 import com.opencapture.opencine.media3.Media3AudioMeter
 import com.opencapture.opencine.media3.Media3Playback
+import com.opencapture.opencine.media3.Media3ReferenceFrames
+import com.opencapture.opencine.runtime.MonitorReferenceFrame
+import com.opencapture.opencine.runtime.referenceFrame
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedEffectsRenderer
 import com.opencapture.openzcine.FeedEffectsRenderPlan
@@ -58,6 +62,7 @@ import com.opencapture.openzcine.rememberNikonPlaybackScopeConfiguration
 import com.opencapture.openzcine.scopesShown
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonFalseColorReference
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -80,6 +85,8 @@ internal class NikonPlaybackPicture(
     val buffered: Float,
     val error: String?,
     val interaction: MonitorPlaybackInteractionOptions,
+    val canCaptureReference: Boolean,
+    val captureReference: suspend () -> MonitorReferenceFrame?,
     val picture: @Composable (MonitorPlaybackPictureGeometry) -> Unit,
 )
 
@@ -94,13 +101,22 @@ internal fun rememberNikonPlaybackPicture(
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
     scope: CoroutineScope,
+    referenceEnabled: Boolean,
 ): NikonPlaybackPicture {
     val context = LocalContext.current
+    val referenceFrames = remember(entry, itemToken, referenceEnabled) {
+        if (referenceEnabled) Media3ReferenceFrames() else null
+    }
+    val playbackReferenceSource = remember(entry, itemToken, referenceEnabled) {
+        if (referenceEnabled && Build.VERSION.SDK_INT in 29..32) PlaybackReferenceFrameSource() else null
+    }
+    val logicalState by playback.state.collectAsState()
     val audioMeter = remember(entry, itemToken) { Media3AudioMeter() }
     val player =
-        remember(entry, itemToken, audioMeter) {
+        remember(entry, itemToken, audioMeter, referenceFrames) {
             val dataSourceFactory = DataSource.Factory { GrowingFileDataSource(entry) }
             Media3Playback.player(context, audioMeter).apply {
+                referenceFrames?.attach(this)
                 setSeekParameters(SeekParameters.EXACT)
                 val source =
                     ProgressiveMediaSource.Factory(dataSourceFactory)
@@ -119,21 +135,31 @@ internal fun rememberNikonPlaybackPicture(
                 .inflate(R.layout.playback_player_view, null, false) as PlayerView
         }
     val textureView = remember(playerView) { playerView.videoSurfaceView as? TextureView }
+    val hasReferenceTextureUpdate = remember(player, textureView) { AtomicBoolean() }
     var attachment by remember(player, itemToken) {
         mutableStateOf<NikonPlaybackNativePort.Attachment?>(null)
     }
     DisposableEffect(player, playerView, itemToken) {
         playerView.player = player
+        val releaseReferenceObserver = textureView?.takeIf { referenceEnabled }
+            ?.observeReferenceUpdates(hasReferenceTextureUpdate)
         val captured = native.attach(
             player, itemToken,
             beforeRelease = {
+                releaseReferenceObserver?.invoke()
                 if (playerView.player === player) playerView.player = null
+                referenceFrames?.retire()
+                playbackReferenceSource?.clear()
                 audio.close()
                 audioMeter.close()
             },
             seekNative = { target, preview ->
                 player.setSeekParameters(if (preview) SeekParameters.CLOSEST_SYNC else SeekParameters.EXACT)
-                player.seekTo(target)
+                if (player.currentPosition != target) {
+                    playbackReferenceSource?.clear()
+                    hasReferenceTextureUpdate.set(false)
+                }
+                referenceFrames?.seek(player, target) ?: player.seekTo(target)
             },
         )
         attachment = captured
@@ -285,6 +311,7 @@ internal fun rememberNikonPlaybackPicture(
         player,
         playbackFeedEffect,
         playbackScopeFrameSource,
+        playbackReferenceSource,
         fallbackDisplayAssistsActive,
         scopesVisible,
     ) {
@@ -297,7 +324,9 @@ internal fun rememberNikonPlaybackPicture(
                     PlaybackVideoEffectStage.DISPLAY_ASSISTS -> requireNotNull(playbackFeedEffect)
                 }
             }
-        player.setVideoEffects(nextEffects)
+        val referenceEffect = playbackReferenceSource?.effect.takeIf { fallbackDisplayAssistsActive }
+        if (referenceEffect == null) playbackReferenceSource?.clear()
+        player.setVideoEffects(listOfNotNull(referenceEffect) + nextEffects)
         if (shouldRedrawPlaybackVideoEffects(player.playbackState, player.isPlaying)) {
             player.setVideoEffects(VideoFrameProcessor.REDRAW)
         }
@@ -397,6 +426,38 @@ internal fun rememberNikonPlaybackPicture(
             continuousPanBounds = true, zoomAgainstCanvas = true,
             horizontalPresentationScale = playbackFramingConfiguration.horizontalPresentationScale,
             verticalPresentationScale = playbackFramingConfiguration.verticalPresentationScale),
+        canCaptureReference = referenceEnabled && logicalState.ready && !logicalState.scrubbing &&
+            !logicalState.playRequested && playbackError == null,
+        captureReference = capture@{
+            val receipts = referenceFrames ?: return@capture null
+            val admission = attachment ?: return@capture null
+            val texture = textureView ?: return@capture null
+            if (!native.isCurrent(admission) || playback.state.value.scrubbing || !texture.isAvailable) return@capture null
+            val parked = receipts.paused(player) ?: return@capture null
+            val surface = texture.surfaceTexture ?: return@capture null
+            // TextureView sends its update callback before the render thread latches the buffer.
+            // Sample the actual texture timestamp at readback. An update disambiguates zero PTS.
+            val timestamp = surface.timestamp
+            if (timestamp == 0L && !hasReferenceTextureUpdate.get()) return@capture null
+            val receipt = parked.frame(timestamp) ?: return@capture null
+            val video = player.videoSize
+            if (video.width <= 0 || video.height <= 0) return@capture null
+            val aspect = video.width * video.pixelWidthHeightRatio / video.height *
+                playbackFramingConfiguration.horizontalPresentationScale / playbackFramingConfiguration.verticalPresentationScale
+            val capture = if (fallbackDisplayAssistsActive) {
+                val raw = playbackReferenceSource?.frame(receipt.presentationUs) ?: return@capture null
+                withContext(Dispatchers.Default) { raw.referenceFrame(aspect) }
+            } else {
+                val scale = minOf(1f, 1280f / maxOf(video.width, video.height))
+                texture.getBitmap((video.width * scale).roundToInt().coerceAtLeast(1),
+                    (video.height * scale).roundToInt().coerceAtLeast(1))
+                    ?.let { MonitorReferenceFrame(it, aspect) }
+            }
+            capture?.takeIf {
+                native.isCurrent(admission) && !playback.state.value.scrubbing &&
+                    texture.surfaceTexture === surface && surface.timestamp == timestamp && receipts.isCurrent(player, parked)
+            }
+        },
         picture = { geometry ->
             val density = LocalDensity.current.density
             val rawWidth = geometry.feed.width / abs(playbackFramingConfiguration.horizontalPresentationScale).coerceAtLeast(0.001f)
@@ -413,6 +474,35 @@ internal fun rememberNikonPlaybackPicture(
                     translationY = geometry.zoom.offsetY
                 })
         })
+}
+
+/** Observe native texture latches without taking ownership from the player. */
+private fun TextureView.observeReferenceUpdates(updated: AtomicBoolean): () -> Unit {
+    val sdk = surfaceTextureListener ?: return {}
+    val observer = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+            updated.set(false)
+            sdk.onSurfaceTextureAvailable(surface, width, height)
+        }
+
+        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) =
+            sdk.onSurfaceTextureSizeChanged(surface, width, height)
+
+        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+            updated.set(false)
+            return sdk.onSurfaceTextureDestroyed(surface)
+        }
+
+        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+            updated.set(true)
+            sdk.onSurfaceTextureUpdated(surface)
+        }
+    }
+    surfaceTextureListener = observer
+    return {
+        updated.set(false)
+        if (surfaceTextureListener === observer) surfaceTextureListener = sdk
+    }
 }
 
 private fun playbackFailureMessage(

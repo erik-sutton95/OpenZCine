@@ -996,7 +996,7 @@ struct MediaPlayerView: View {
                     reference: menus.falseColorReference),
                 availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
                 initialRatingShadeOpen: DemoHarness.ratingShade == "open",
-                initialChromeVisible: !DemoHarness.playbackCleanView),
+                initialChromeVisible: !DemoHarness.playbackCleanView, referenceStore: model.referenceStore),
             makeSource: { context }, captureSource: { context.sourceAdmission },
             preview: { NikonPlaybackInspectorPreview(tool: $0, host: context.host) },
             lookMenu: { NikonLUTPicker(downloadHost: .playback).environment(model) },

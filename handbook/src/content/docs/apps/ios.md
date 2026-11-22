@@ -58,6 +58,17 @@ Turn the body on its side and the picture follows, in video and photo, with a
 portrait layout built for it. **Settings → Controls → Auto-Rotate Feed** turns
 the upright rotation off. The recording is never affected.
 
+## Reference frame
+
+Open **Reference** in Live View and choose **Save Live Frame**, or pause a video
+in Media and choose **Use as Reference**. The app keeps one reference on this
+phone after a restart or camera reconnect. Saving again asks you to replace it.
+
+Turn on **Show Reference** and use **Blend** to compare at 50% opacity, or use
+**Split** and drag the divider to reveal either image. If the framing differs,
+match the aspect and desqueeze or replace the reference. The overlay stays on
+the monitor and does not enter recordings or exports.
+
 ## Level
 
 The level reads the camera's own virtual-horizon angles from the live-view

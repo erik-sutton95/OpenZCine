@@ -1,5 +1,16 @@
 package com.opencapture.openzcine
 
+import android.graphics.Bitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asImageBitmap
+import com.opencapture.monitorui.MonitorReferenceOverlay
+import com.opencapture.monitorui.monitorReferenceMatches
+import com.opencapture.opencine.appkitnative.LocalMonitorReferenceStore
+import com.opencapture.opencine.appkitnative.MonitorReferenceControls
+import com.opencapture.opencine.runtime.MonitorReferenceCapture
+import com.opencapture.opencine.runtime.MonitorReferenceFrame
+
 import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.media.StorageReadoutCycle
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -1385,6 +1396,26 @@ internal fun MonitorScreen(
         // can hold the shared Swift source open, so its final collector ends
         // live view.
         val monitorFrameSource = monitorPreviewFrameSource(activeFrameSource, isCommand)
+        val referenceStore = LocalMonitorReferenceStore.current.takeIf { !borrowed && availability == MonitorDataAvailability.OWNING }
+        val referenceCapture = remember(referenceStore, monitorFrameSource, sessionState) {
+            referenceStore?.let { MonitorReferenceCapture<MonitorReferenceFrame>() }
+        }
+        var referenceSourceReady by remember(referenceCapture) { mutableStateOf(false) }
+        DisposableEffect(referenceCapture) { onDispose { referenceCapture?.cancel() } }
+        fun referenceAspect(width: Int, height: Int): Float {
+            if (width <= 0 || height <= 0) return 0f
+            val aspect = width.toFloat() / height *
+                localFraming.horizontalPresentationScale / localFraming.verticalPresentationScale
+            return if (isVerticalFeed) 1f / aspect else aspect
+        }
+        val liveReferenceAspect = referenceAspect(liveFeedPresentation.sourceWidth, liveFeedPresentation.sourceHeight)
+        val referenceReady = referenceSourceReady && monitorFrameSource != null && isMonitorFront &&
+            (recoveryStateOverride ?: sessionRecoveryState) == SessionRecoveryUi.Idle
+        val currentReferenceReady by rememberUpdatedState(referenceReady)
+        val activeReferenceCapture by rememberUpdatedState(referenceCapture)
+        val savedReference = referenceStore?.reference?.takeIf {
+            referenceStore.shown && referenceReady && monitorReferenceMatches(it.aspect, liveReferenceAspect)
+        }
         // Whether a picture has ever reached the screen on this session. Scoped to the session, not
         // to the source, on purpose: a DISP 3 round trip drops the source and the decoder keeps the
         // last JPEG on screen, so re-arming here would flash "waiting" over a frame that is visibly
@@ -2204,6 +2235,28 @@ internal fun MonitorScreen(
                         mirrored = renderedFraming.mirrorsHorizontally,
                         flippedVertically = renderedFraming.flipsVertically))
                 }
+                val drawPictureAnnotations: @Composable () -> Unit = {
+                    LocalFramingAssistOverlay(
+                        configuration = renderedFraming,
+                        presentationState = liveFeedPresentation,
+                        aspectFill = portraitRasterFill,
+                        splitComparison = renderedEffects.activeSplitComparison,
+                    )
+                    LiveFrameMetadataOverlay(
+                        presentationState = liveFeedPresentation,
+                        configuration = renderedFraming,
+                        isPortrait = isPortrait,
+                        aspectFill = portraitRasterFill,
+                        gaugeBottomChromeInset = levelGaugeBottomChromeInset,
+                        focusPointLocked = focusPointLocked,
+                        focusLockProgress = focusLockProgress,
+                        focusBoxVisible = mounted(MonitorDisplaySection.FOCUS_BOX),
+                        focusBoxAlpha = 1f,
+                        // The editor's outline, dimming and badge, through the surface's one editor.
+                        focusBoxEditModifier = if (editingDisplay == null) null
+                            else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
+                    )
+                }
                 Box(
                     // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
                     // gestures — lays out in the camera's own frame and rotates upright as one,
@@ -2283,6 +2336,18 @@ internal fun MonitorScreen(
                                 hasPresentedFrame = true
                                 recoveryPictures.notePresented()
                                 inspectorPreview.accept(pictureFrameSource, bitmap)
+                                if (referenceCapture != null && monitorFrameSource != null && isMonitorFront) {
+                                    if (!referenceSourceReady) referenceSourceReady = true
+                                    referenceCapture.offer(frame.timestampNanos) {
+                                        val rotation = frame.rotation.displayed(operatorSettings.autoRotateFeedEnabled.value)
+                                        val aspect = bitmap.width.toFloat() / bitmap.height *
+                                            localFraming.horizontalPresentationScale / localFraming.verticalPresentationScale
+                                        bitmap.copy(Bitmap.Config.ARGB_8888, false)?.let {
+                                            MonitorReferenceFrame(it, if (rotation.isVertical) 1f / aspect else aspect,
+                                                rotation.displayDegreesClockwise.toInt())
+                                        }
+                                    }
+                                }
                                 wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
                                 liveBackdrop?.accept(pictureFrameSource, bitmap, look)
                                 liveStream?.accept(frame, bitmap, look,
@@ -2309,26 +2374,54 @@ internal fun MonitorScreen(
                         // picture carries no texture (A3-04). Without a feed the plate carries the
                         // camera status (MonitorOperatorLivePicture.notice).
                     }
-                    LocalFramingAssistOverlay(
-                        configuration = renderedFraming,
-                        presentationState = liveFeedPresentation,
-                        aspectFill = portraitRasterFill,
-                        splitComparison = renderedEffects.activeSplitComparison,
-                    )
-                    LiveFrameMetadataOverlay(
-                        presentationState = liveFeedPresentation,
-                        configuration = renderedFraming,
-                        isPortrait = isPortrait,
-                        aspectFill = portraitRasterFill,
-                        gaugeBottomChromeInset = levelGaugeBottomChromeInset,
-                        focusPointLocked = focusPointLocked,
-                        focusLockProgress = focusLockProgress,
-                        focusBoxVisible = mounted(MonitorDisplaySection.FOCUS_BOX),
-                        focusBoxAlpha = 1f,
-                        // The editor's outline, dimming and badge, through the surface's one editor.
-                        focusBoxEditModifier = if (editingDisplay == null) null
-                            else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
-                    )
+                    if (savedReference == null) drawPictureAnnotations()
+                }
+                if (savedReference != null) {
+                    MonitorReferenceOverlay(savedReference.bitmap.asImageBitmap(), referenceStore.mode,
+                        referenceStore.opacity, referenceStore.split, { referenceStore.split = it },
+                        imageRect = { well ->
+                            val width = if (isVerticalFeed) well.height else well.width
+                            val height = if (isVerticalFeed) well.width else well.height
+                            val source = liveBackdropImageRect(width, height, liveFeedPresentation.sourceWidth,
+                                liveFeedPresentation.sourceHeight, portraitRasterFill,
+                                localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale)
+                            source?.let {
+                                val zoom = committedZoom
+                                val offset = Offset((it.center.x - width / 2f) * zoom.scale + zoom.offsetX,
+                                    (it.center.y - height / 2f) * zoom.scale + zoom.offsetY)
+                                val rotation = displayedFeedRotation.displayDegreesClockwise.toInt()
+                                val rotatedOffset = when (rotation) {
+                                    90, -270 -> Offset(-offset.y, offset.x)
+                                    -90, 270 -> Offset(offset.y, -offset.x)
+                                    180, -180 -> -offset
+                                    else -> offset
+                                }
+                                val halfWidth = (if (isVerticalFeed) it.height else it.width) * zoom.scale / 2f
+                                val halfHeight = (if (isVerticalFeed) it.width else it.height) * zoom.scale / 2f
+                                val centre = Offset(well.width / 2f, well.height / 2f) + rotatedOffset
+                                Rect(centre.x - halfWidth, centre.y - halfHeight,
+                                    centre.x + halfWidth, centre.y + halfHeight)
+                            }
+                        }, mirrorX = if (isVerticalFeed) renderedFraming.flipsVertically else renderedFraming.mirrorsHorizontally,
+                        mirrorY = if (isVerticalFeed) renderedFraming.mirrorsHorizontally else renderedFraming.flipsVertically,
+                        modifier = Modifier.matchParentSize(), interactive = !locked)
+                    // This body-space chrome stays above the comparison. Its scale and rotation
+                    // follow the feed as before; the split divider remains screen-vertical.
+                    Box(Modifier.matchParentSize().liveFeedBodyRotation(displayedFeedRotation).graphicsLayer {
+                        val zoom = committedZoom
+                        scaleX = zoom.scale
+                        scaleY = zoom.scale
+                        translationX = zoom.offsetX
+                        translationY = zoom.offsetY
+                    }) { drawPictureAnnotations() }
+                }
+                if (referenceStore != null && referenceCapture != null && isMonitorFront) {
+                    MonitorReferenceControls(referenceStore, referenceReady, capture = {
+                        val captured = referenceCapture
+                        if (!currentReferenceReady || activeReferenceCapture !== captured) null
+                        else captured.capture()?.takeIf { currentReferenceReady && activeReferenceCapture === captured }
+                    }, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), live = true,
+                        liveAspect = liveReferenceAspect.takeIf { it > 0f }, enabled = !locked)
                 }
                     // Outside the rotated stack: reads as screen chrome, never sideways text.
                     LiveFeedColorModeNotice(
