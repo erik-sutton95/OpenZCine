@@ -2311,6 +2311,8 @@ final class NativeAppModel {
     @ObservationIgnored private var nativePictureSource: LiveFrameSampleBus.Source?
     @ObservationIgnored private var nativePictureOwner: NativePictureOwner?
     @ObservationIgnored private var nativeInspectorImage: UIImage?
+    @ObservationIgnored private var acceptedReferenceFrameAt: TimeInterval?
+    @ObservationIgnored let referenceStore = MonitorReferenceStore()
     @ObservationIgnored private var nativeInspectorVideoSource: VideoSourceKind?
     @ObservationIgnored lazy var nativeInspectorPreview = NikonLiveInspectorPreview(
         fileStore: lutFileStore)
@@ -2342,6 +2344,35 @@ final class NativeAppModel {
         }
         return (source, image)
     }
+    var referenceLiveAvailable: Bool {
+        videoSource == .cameraLiveView && hasLiveFrameImage && isMonitorPresented
+            && !sessionRecovery.isRecovering && cameraSession != nil
+    }
+
+    var referenceClockwiseTurns: Int { Int(displayedFeedRotation.displayDegreesClockwise) / 90 }
+
+    func referenceDisplayAspect(source: Double) -> Double {
+        let scale = desqueezeScale(liveDesqueeze)
+        let aspect = source * Double(scale.width / scale.height)
+        return displayedFeedRotation.isVertical ? 1 / aspect : aspect
+    }
+
+    func captureLiveReference() -> MonitorReferenceStill? {
+        guard referenceLiveAvailable, !isStreamRecovering, let acceptedReferenceFrameAt,
+            ProcessInfo.processInfo.systemUptime - acceptedReferenceFrameAt < 0.75,
+            let frame = nativeInspectorFrame?.image, let raster = frame.cgImage, frame.size.height > 0
+        else { return nil }
+        let orientation: UIImage.Orientation
+        switch referenceClockwiseTurns {
+        case 1: orientation = .right
+        case -1, 3: orientation = .left
+        case 2, -2: orientation = .down
+        default: orientation = .up
+        }
+        return .init(image: raster, displayAspect: referenceDisplayAspect(
+            source: Double(frame.size.width / frame.size.height)), orientation: orientation)
+    }
+
     private(set) var liveFrameSource: LiveFrameSampleBus.Source?
     /// Picture facts for chrome. Raster replacement is observed only by the feed view.
     private(set) var hasLiveFrameImage = false
@@ -2376,6 +2407,7 @@ final class NativeAppModel {
         nativePictureSource = nil
         nativePictureOwner = nil
         nativeInspectorImage = nil
+        acceptedReferenceFrameAt = nil
         nativeInspectorVideoSource = nil
     }
     /// Retain an accepted held raster through recovery; only a newly admitted picture or clear
@@ -2389,6 +2421,7 @@ final class NativeAppModel {
         if liveFrameSource !== nativePictureSource { liveFrameSource = nativePictureSource }
         if liveFrameImage !== image { liveFrameImage = image }
         nativeInspectorImage = clean
+        acceptedReferenceFrameAt = ProcessInfo.processInfo.systemUptime
         // A running stream takes the clean picture (the LUT, never assists) of every new frame.
         if let tap = liveStreamTap, let picture = clean.cgImage {
             tap.submit(picture, effects: liveStreamEffects, timeNs: nil)

@@ -5,6 +5,7 @@ import OpenCineAppKit
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -186,6 +187,7 @@ struct LiveFeedModule: View {
     /// height, and the derived 16:9 box renders oversized and shifted up — the fill-mode "cropped
     /// on top and right" bug. Nil (landscape) keeps the measured path unchanged.
     var fixedContentHeight: Double? = nil
+    var referenceViewportWidth: Double? = nil
 
     private struct PictureSource: Hashable {
         let monitor: UUID?
@@ -301,7 +303,9 @@ struct LiveFeedModule: View {
                     case .none: break
                     }
                 }
-            }, presentationScale: capturedScale
+            }, presentationScale: capturedScale, pictureOverlay: { zoom in
+                AnyView(referenceOverlay(size: size, zoom: zoom))
+            }
         ) { progress in
             ZStack {
                 LiveFrameRaster(width: width, height: height)
@@ -312,6 +316,28 @@ struct LiveFeedModule: View {
             }
         }
         .overlay { FeedAlignedAssists() }
+    }
+
+    @ViewBuilder private func referenceOverlay(size: CGSize, zoom: MonitorPlaybackZoom) -> some View {
+        if model.referenceLiveAvailable || (DemoHarness.referenceSplitReview && model.isDemoSession),
+            let aspect = model.liveFrameAspect, aspect > 0 {
+            let source = CGSize(width: aspect, height: 1)
+            let bounds = CGRect(origin: .zero, size: size)
+            let base = PlaybackVideoLayout.aspectFitRect(videoSize: source, in: bounds)
+            let scale = desqueezeScale(model.liveDesqueeze)
+            let width = base.width * scale.width * zoom.scale
+            let height = base.height * scale.height * zoom.scale
+            let outerWidth = min(referenceViewportWidth ?? size.width, size.width)
+            let crop = CGRect(x: model.displayedFeedRotation.isVertical ? 0 : (size.width - outerWidth) / 2,
+                y: 0, width: model.displayedFeedRotation.isVertical ? size.width : outerWidth,
+                height: size.height)
+            MonitorReferenceOverlay(store: model.referenceStore,
+                imageRect: CGRect(x: (size.width - width) / 2 + zoom.offset.width,
+                    y: (size.height - height) / 2 + zoom.offset.height, width: width, height: height),
+                viewport: crop, displayAspect: model.referenceDisplayAspect(source: aspect),
+                mirrorHorizontal: model.liveFeedMirrored, mirrorVertical: model.liveFeedMirroredVertically,
+                clockwiseTurns: model.referenceClockwiseTurns, interactive: pictureInteractive)
+        }
     }
 
 }

@@ -101,6 +101,14 @@ enum DemoHarness {
     static let launchSplashHold = value("ZC_DEMO_SPLASH_HOLD_MS").flatMap(Int.init)
         .map { Duration.milliseconds($0) }
 
+    static var referenceSplitReview: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+            review?.screen == .live && review?.state == "reference-split"
+        #else
+            false
+        #endif
+    }
+
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
     #if DEBUG
@@ -355,7 +363,9 @@ enum DemoHarness {
                 // header's 6048×3400 space) so the focus overlay — and the selected eye box — is
                 // visible in the demo. Tapping the feed moves it. ZC_DEMO_FOCUSBOX overrides.
                 model.demoSeedFocusPair()
-                if model.liveFrameImage == nil {
+                if referenceSplitReview {
+                    model.liveFrameImage = UIImage(named: "MockFeed")
+                } else if model.liveFrameImage == nil {
                     model.demoSelectFeedImage(1)
                 }
                 if let raw = env["ZC_DEMO_FEED_ROTATION"].flatMap(UInt8.init),

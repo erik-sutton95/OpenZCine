@@ -391,6 +391,7 @@ import OpenCineMedia
         -> Bool
     {
         guard current(admitted), let item = player.currentItem else { return false }
+        let referenceSeek = feed.beginReferenceSeek()
         let completed = await withCheckedContinuation { continuation in
             player.seek(
                 to: CMTime(seconds: seconds, preferredTimescale: 600),
@@ -400,7 +401,9 @@ import OpenCineMedia
                 continuation.resume(returning: completed)
             }
         }
-        return completed && current(admitted) && player.currentItem === item && !Task.isCancelled
+        let currentSeek = completed && current(admitted) && player.currentItem === item && !Task.isCancelled
+        feed.finishReferenceSeek(referenceSeek, completed: currentSeek)
+        return currentSeek
     }
 
     func setMuted(_ muted: Bool, token admitted: MonitorPlaybackItemToken) {

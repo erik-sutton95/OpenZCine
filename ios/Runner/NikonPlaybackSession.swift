@@ -108,7 +108,11 @@ struct NikonPlaybackTailPresentation {
         let host = NikonPlaybackHost(model: model, delivery: delivery)
         self.host = host
         presentation = .init(
-            makeFeed: { [weak model] in NikonPlaybackFeedSession(model: model) },
+            makeFeed: { [weak model] in
+                let feed = NikonPlaybackFeedSession(model: model)
+                feed.referenceCaptureEnabled = true
+                return feed
+            },
             audioSession: model.playbackAudioSession,
             samples: { host.frameSamples },
             projectEffects: { [weak model] effects in

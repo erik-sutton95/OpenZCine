@@ -26,6 +26,7 @@ final class EVMeterUIFlowTests: OpenCineAppUITesting.EVMeterUIFlowTests {
 }
 final class MotionUIFlowTests: OpenCineAppUITesting.MotionUIFlowTests {}
 final class ShareUIFlowTests: OpenCineAppUITesting.ShareUIFlowTests {}
+final class ReferenceFrameUIFlowTests: OpenCineAppUITesting.ReferenceFrameUIFlowTests {}
 
 // The shared conformance scenarios (OpenCine docs/conformance/SCENARIOS.md), run against the app's
 // own composition through the demo harness's `ReviewLaunch` staging.
