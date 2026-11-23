@@ -1671,7 +1671,7 @@ final class NativeAppModel {
         guard isRelayBroadcasting else { return }
         latestRelayFrameMetadata = MonitorRelayFrameMetadata(
             timecode: frame.timecode,
-            isRecording: frame.isRecording,
+            isRecording: frame.isRecording ?? isRecording,
             focus: frame.focus.map { focus in
                 MonitorRelayFrameMetadata.Focus(
                     coordinateWidth: focus.coordinateWidth,
@@ -2601,6 +2601,13 @@ final class NativeAppModel {
     /// When the app last sent a record start/stop, so the camera-authoritative record state (from the
     /// live-view header) doesn't fight the optimistic flip while the body catches up.
     @ObservationIgnored private var appRecordCommandAt: Date?
+    /// False once a live-view header arrives without record state: first-generation bodies (Z 5,
+    /// Z 6, Z 7, Z 50) send a 512-byte header that has none (OPENZCINE-IOS-1V). Their record state
+    /// comes from the record events and, when none arrives, from the camera's OK to the command.
+    @ObservationIgnored private var liveHeaderReportsRecording = true
+    /// Whether a record event (0xC10A / 0xC108 / 0xC105) arrived since the app queued its last
+    /// record command. Such an event outranks the command's OK reply.
+    @ObservationIgnored private var recordEventSinceCommand = false
     /// Apple Watch companion relay. The phone owns the PTP session and forwards a downscaled feed +
     /// state snapshot to the watch, relaying a Record toggle back. Foreground-only; no-ops when no
     /// watch is paired/reachable.
@@ -8402,6 +8409,7 @@ final class NativeAppModel {
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
+                    recordEventSinceCommand = true
                     gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
                     applyCameraRecordState(isRecording: false, force: true)
                     let error =
@@ -8410,6 +8418,7 @@ final class NativeAppModel {
                     showMonitorNotice("Recording was interrupted by the camera (error \(error)).")
                     await refreshWarningStatus(session: session)
                 } else if let recordState = event.inferredRecordState {
+                    recordEventSinceCommand = true
                     applyCameraRecordState(isRecording: recordState == .recording)
                 } else {
                     noteCameraAnnouncedPropertyChange(event)
@@ -8446,6 +8455,7 @@ final class NativeAppModel {
                 gyroCapture.receive(.recording(false, at: ProcessInfo.processInfo.systemUptime))
             }
             if let state = event.inferredRecordState {
+                recordEventSinceCommand = true
                 applyCameraRecordState(isRecording: state == .recording)
             }
         case .devicePropChanged:
@@ -8670,9 +8680,11 @@ final class NativeAppModel {
             captureRelayFrameMetadata(frame)
             broadcastRelayFrame(image: cleanFrame)
             let watchEffects = image === cleanFrame ? liveImageEffects : nil
+            // A first-generation header carries neither: no timecode, and the current record state.
             watchRelay.ingestFrame(
-                image: image, applying: watchEffects, timecode: frame.timecode,
-                isRecording: frame.isRecording)
+                image: image, applying: watchEffects,
+                timecode: frame.timecode ?? Self.noHeaderTimecode,
+                isRecording: frame.isRecording ?? isRecording)
             sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
         incident?.published()
@@ -9233,7 +9245,11 @@ final class NativeAppModel {
         // flight or briefly after one was sent so the optimistic flip isn't undone before the safe
         // point runs (and while the body catches up).
         // Observed at arrival: decoding must not replay an older REC report after a newer event.
-        applyCameraRecordState(isRecording: frame.isRecording, observeGyro: false)
+        // A first-generation header has no record state: that is unknown, never standby, so it
+        // leaves the button and the reported state alone (OPENZCINE-IOS-1V).
+        liveHeaderReportsRecording = frame.isRecording != nil
+        guard let recording = frame.isRecording else { return }
+        applyCameraRecordState(isRecording: recording, observeGyro: false)
     }
 
     /// Applies camera-authoritative record state from the live-view header or async PTP events.
@@ -9552,7 +9568,12 @@ final class NativeAppModel {
     }
 
     /// Constant camera-header TC sync — every live-view frame updates the hero readout.
-    private func applyLiveViewHeaderTimecode(_ timecode: Timecode) {
+    /// The clock a header without one shows: off, never a frozen or zero running clock.
+    private static let noHeaderTimecode = Timecode(
+        on: false, hour: 0, minute: 0, second: 0, frame: 0)
+
+    private func applyLiveViewHeaderTimecode(_ reported: Timecode?) {
+        let timecode = reported ?? Self.noHeaderTimecode
         if timecode != liveTimecode { liveTimecode = timecode }
         if timecode.on != cameraReportsTimecode { cameraReportsTimecode = timecode.on }
     }
@@ -13978,14 +13999,20 @@ extension NativeAppModel {
                 guard let self, monitorRuntime === runtime else { return }
                 isRecording = start
                 pendingRecordToggle = true
+                recordEventSinceCommand = false
                 appRecordCommandAt = Date()
                 cameraState = cameraState.updating(recordState: start ? .recording : .standby)
                 publishWatchState()
             }
-            runtime.onRecordCommand = { [weak self, weak runtime] _, accepted in
+            runtime.onRecordCommand = { [weak self, weak runtime] start, accepted in
                 guard let self, monitorRuntime === runtime else { return }
                 pendingRecordToggle = false
                 appRecordCommandAt = Date()
+                if accepted, !liveHeaderReportsRecording, !recordEventSinceCommand {
+                    // A first-generation body's header never reports the take, and no record
+                    // event came: the camera's OK is its report, so the next press stops.
+                    applyCameraRecordState(isRecording: start, force: true)
+                }
                 if accepted {
                     applyThermalStreamStepDownIfNeeded()
                 } else if let reportedRecording {

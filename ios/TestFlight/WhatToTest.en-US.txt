@@ -8,9 +8,12 @@ Fixes
 
 - In N-Log the highlight zebra can go above 234, for example 245 to match the camera.
 - VoiceOver no longer reads the monitor's header readouts twice.
+- Z 5, Z 6, Z 7 and Z 50: the record button no longer falls back to standby during a take, so the next press stops it.
+- Opening Media on a large card, or after swapping cards, no longer freezes the app.
 
 What to test
 
 - Save a stream key, then Go live over USB-C, a shared Wi-Fi network or the phone's hotspot. Check the stream plays and Stop ends it. On the camera's own Wi-Fi, Go live should say why it is off.
 - Join two or more bodies to the phone's network, open Multiview, add them and record. Use Share Diagnostics if a tile drops.
+- On a Z 5, Z 6, Z 7 or Z 50, start and stop recording from the phone and from the camera: the record button should follow every time.
 - Save a camera preset, change those values on the camera, then recall it. Lock the monitor upside down and level the phone: the picture should stay put.

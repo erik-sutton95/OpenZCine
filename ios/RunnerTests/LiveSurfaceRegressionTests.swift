@@ -12,6 +12,7 @@ import XCTest
 
 import struct MonitorPresentation.MonitorReadoutInteraction
 
+@testable import OpenCineNikon
 @testable import Runner
 
 /// F03 P1 regressions against the app's own composition: the root, the shell and the shared live
@@ -335,6 +336,43 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         model.applyDemoProperty(.liveViewSelector, data: Data([1]))
         model.remoteShutterToggleRecord()
         XCTAssertTrue(model.isRecording, "an unlocked movie monitor takes the remote press")
+    }
+
+    /// OPENZCINE-IOS-1V: a Z 6 (first generation) sends a 512-byte live-view header with no record
+    /// state and no timecode. Every frame read as standby and flipped the record button back
+    /// mid-take, so the next press started instead of stopping. Such a header leaves the button
+    /// alone and shows no timecode; a header that carries them still drives both.
+    func testAHeaderWithoutRecordStateLeavesTheRecordButtonAlone() async throws {
+        let native = try await NativeCameraSession.establish(
+            transport: LargeTransferTransport(operations: []), host: "tcp:SIMULATED-gen1",
+            cameraName: "SIMULATED", requestPairing: false)
+        let model = NativeAppModel()
+        model.debugAdoptEstablishedMediaSession(native)
+        model.isMonitorPresented = true
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        func header(recording: Bool?, timecode: Timecode?) async -> Bool {
+            await model.consumeCameraFrame(
+                PTPLiveViewFrame(jpeg: Data([1]), timecode: timecode, isRecording: recording),
+                delivery: .init(first: false, headerOnly: true, frameCounter: 1, bodyBusy: false),
+                session: native, incident: nil)
+        }
+        let running = Timecode(on: true, hour: 1, minute: 2, second: 3, frame: 4)
+
+        let fullHeader = await header(recording: true, timecode: running)
+        XCTAssertTrue(fullHeader)
+        XCTAssertTrue(model.isRecording)
+        XCTAssertTrue(model.cameraReportsTimecode)
+
+        let shortHeader = await header(recording: nil, timecode: nil)
+        XCTAssertTrue(shortHeader)
+        XCTAssertTrue(model.isRecording, "a header without record state is not standby")
+        XCTAssertFalse(model.cameraReportsTimecode, "a header without timecode shows none")
+
+        _ = await header(recording: false, timecode: running)
+        XCTAssertFalse(model.isRecording, "a header that carries record state still drives it")
     }
 
     /// A same-host recovery held a stills body but drew video chrome (STBY, red ring, GB) until
