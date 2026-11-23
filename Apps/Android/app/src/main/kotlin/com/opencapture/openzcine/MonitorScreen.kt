@@ -1,10 +1,14 @@
 package com.opencapture.openzcine
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asImageBitmap
 import com.opencapture.monitorui.MonitorReferenceOverlay
+import com.opencapture.monitorui.MonitorReferenceMode
+import com.opencapture.monitorui.MonitorReferenceSplitHandle
 import com.opencapture.monitorui.monitorReferenceMatches
 import com.opencapture.opencine.appkitnative.LocalMonitorReferenceStore
 import com.opencapture.opencine.appkitnative.rememberMonitorReferencePaletteAction
@@ -2156,11 +2160,43 @@ internal fun MonitorScreen(
         val rendered = nikonLiveRenderedTools(liveAssistTools, scopesSampled = scopeSource !== emptyScopes) {
             assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
         }
+        val referenceRect: (Size) -> Rect? = { well ->
+            val width = if (isVerticalFeed) well.height else well.width
+            val height = if (isVerticalFeed) well.width else well.height
+            val source = liveBackdropImageRect(width, height, liveFeedPresentation.sourceWidth,
+                liveFeedPresentation.sourceHeight, portraitRasterFill,
+                localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale)
+            source?.let {
+                val zoom = committedZoom
+                val offset = Offset((it.center.x - width / 2f) * zoom.scale + zoom.offsetX,
+                    (it.center.y - height / 2f) * zoom.scale + zoom.offsetY)
+                val rotation = displayedFeedRotation.displayDegreesClockwise.toInt()
+                val rotatedOffset = when (rotation) {
+                    90, -270 -> Offset(-offset.y, offset.x)
+                    -90, 270 -> Offset(offset.y, -offset.x)
+                    180, -180 -> -offset
+                    else -> offset
+                }
+                val halfWidth = (if (isVerticalFeed) it.height else it.width) * zoom.scale / 2f
+                val halfHeight = (if (isVerticalFeed) it.width else it.height) * zoom.scale / 2f
+                val centre = Offset(well.width / 2f, well.height / 2f) + rotatedOffset
+                Rect(centre.x - halfWidth, centre.y - halfHeight,
+                    centre.x + halfWidth, centre.y + halfHeight)
+            }
+        }
+        val referenceHandle: (@Composable BoxScope.() -> Unit)? =
+            if (savedReference != null && referenceStore.mode == MonitorReferenceMode.SPLIT) {
+                {
+                    MonitorReferenceSplitHandle(referenceStore.split, { referenceStore.split = it },
+                        referenceRect, Modifier.zone(effectiveFeed).clipToBounds())
+                }
+            } else null
         key(session) {
             // The instant review covers the whole monitor (iOS): the floating assist palette moves
             // into this window beneath it rather than staying in its popup window above it.
             com.opencapture.opencine.cameracontrols.MonitorInstantReviewHost(presented = instantReviewState != null) {
-            CompositionLocalProvider(LocalMonitorOperatorPaletteAction provides referenceAction) {
+            CompositionLocalProvider(LocalMonitorOperatorPaletteAction provides referenceAction,
+                LocalMonitorOperatorReferenceHandle provides referenceHandle) {
             MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
                 MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
                     { usage = it; usageStore.value = it }, nikonUsageSeed),
@@ -2388,32 +2424,10 @@ internal fun MonitorScreen(
                 if (savedReference != null) {
                     MonitorReferenceOverlay(savedReference.bitmap.asImageBitmap(), referenceStore.mode,
                         referenceStore.opacity, referenceStore.split, { referenceStore.split = it },
-                        imageRect = { well ->
-                            val width = if (isVerticalFeed) well.height else well.width
-                            val height = if (isVerticalFeed) well.width else well.height
-                            val source = liveBackdropImageRect(width, height, liveFeedPresentation.sourceWidth,
-                                liveFeedPresentation.sourceHeight, portraitRasterFill,
-                                localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale)
-                            source?.let {
-                                val zoom = committedZoom
-                                val offset = Offset((it.center.x - width / 2f) * zoom.scale + zoom.offsetX,
-                                    (it.center.y - height / 2f) * zoom.scale + zoom.offsetY)
-                                val rotation = displayedFeedRotation.displayDegreesClockwise.toInt()
-                                val rotatedOffset = when (rotation) {
-                                    90, -270 -> Offset(-offset.y, offset.x)
-                                    -90, 270 -> Offset(offset.y, -offset.x)
-                                    180, -180 -> -offset
-                                    else -> offset
-                                }
-                                val halfWidth = (if (isVerticalFeed) it.height else it.width) * zoom.scale / 2f
-                                val halfHeight = (if (isVerticalFeed) it.width else it.height) * zoom.scale / 2f
-                                val centre = Offset(well.width / 2f, well.height / 2f) + rotatedOffset
-                                Rect(centre.x - halfWidth, centre.y - halfHeight,
-                                    centre.x + halfWidth, centre.y + halfHeight)
-                            }
-                        }, mirrorX = if (isVerticalFeed) renderedFraming.flipsVertically else renderedFraming.mirrorsHorizontally,
+                        imageRect = referenceRect,
+                        mirrorX = if (isVerticalFeed) renderedFraming.flipsVertically else renderedFraming.mirrorsHorizontally,
                         mirrorY = if (isVerticalFeed) renderedFraming.mirrorsHorizontally else renderedFraming.flipsVertically,
-                        modifier = Modifier.matchParentSize(), interactive = !locked,
+                        modifier = Modifier.matchParentSize(), interactive = false,
                         splitSide = referenceStore.splitSide, splitOpacity = referenceStore.splitOpacity)
                     // This body-space chrome stays above the comparison. Its scale and rotation
                     // follow the feed as before; the split divider remains screen-vertical.
