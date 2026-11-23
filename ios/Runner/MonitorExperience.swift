@@ -319,7 +319,8 @@ struct LiveFeedModule: View {
     }
 
     @ViewBuilder private func referenceOverlay(size: CGSize, zoom: MonitorPlaybackZoom) -> some View {
-        if model.referenceLiveAvailable, let aspect = model.liveFrameAspect, aspect > 0 {
+        if model.referenceLiveAvailable || (DemoHarness.referenceSplitReview && model.isDemoSession),
+            let aspect = model.liveFrameAspect, aspect > 0 {
             let source = CGSize(width: aspect, height: 1)
             let bounds = CGRect(origin: .zero, size: size)
             let base = PlaybackVideoLayout.aspectFitRect(videoSize: source, in: bounds)
