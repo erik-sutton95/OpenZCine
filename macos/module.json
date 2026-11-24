@@ -3,6 +3,6 @@
   "displayName": "Nikon Z",
   "inputName": "OpenCine Nikon Z",
   "version": "0.1.0",
-  "minimumDockVersion": "0.1.0",
+  "minimumDockVersion": "0.2.0",
   "bundleName": "Runner.app"
 }
