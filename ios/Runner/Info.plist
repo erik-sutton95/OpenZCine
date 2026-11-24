@@ -76,7 +76,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenZCine uses the microphone for the sound of a live stream you start.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenZCine uses the camera to scan your camera's Wi-Fi details and to read picture from a selected USB/HDMI video capture device on iPad or Mac.</string>
+	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon camera's screen so it can connect to the camera, and on iPad to read the picture from a connected USB video capture device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenZCine needs access to your Nikon camera over the local Wi-Fi network (when your iPhone is connected to the camera's WiFi hotspot) for live view streaming and camera control.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
