@@ -8,15 +8,15 @@
 The active milestone delivers a production-quality native iOS app that connects to a Nikon ZR
 camera over PTP-IP and provides record control and live-view monitoring.
 
-## Mac Catalyst monitor rebuild (In Progress)
+## Mac camera module for the OpenCine desktop app (In Progress)
 
-- Preserve the Catalyst app with native-buffer HDMI/UVC preview and explicit input selection.
+- Build the iOS app target for Mac Catalyst as the Nikon Z module of the OpenCine dock.
+- HDMI/UVC capture with explicit device and 1080p mode selection, on the iPad frame path.
 - Keep wireless Nikon control independent from the selected HDMI picture source.
-- Provide a signed native virtual webcam with bounded buffers and clean LUT-treated output.
-- Verify actual producer/receiver frames, sustained pacing and source reconnection on hardware.
-- Complete shared-Core consumer verification and reviewed integration before release.
+- Clean, LUT-treated webcam output and live status through the OpenCine module host.
+- Hardware pass with HDMI capture, then Developer ID signing, notarization and the module catalog.
 
-Scope and verification limits: [Mac host guide](macos-host.md). This is a Mac-only
+Scope and verification limits: [Mac camera module](macos-host.md). This is a Mac-only
 platform deliverable; no public release or hardware qualification is implied.
 
 ## Phases

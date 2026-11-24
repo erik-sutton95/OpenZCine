@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added: Mac camera module for the OpenCine desktop app
+
+- Mac: OpenZCine builds for Mac Catalyst as the Nikon Z camera module of the OpenCine desktop app,
+  with HDMI/UVC capture device and 1080p mode selection, a clean LUT-treated webcam output and live
+  status to the dock (`just macos-build`, `macos/module.json`). Local builds only; the iOS app is
+  unchanged.
+
 ### USB-C and Media gallery fixes
 
 - iOS: the Media gallery no longer hangs while a clip downloads on a large card. Each cell reads its
