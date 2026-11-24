@@ -128,7 +128,7 @@
         enum JoinStrategy: Equatable, Sendable {
             /// iOS 18+: AccessorySetupKit picker with `NEHotspotConfiguration` fallback.
             case automatic
-            /// `NEHotspotConfiguration.apply` only — used for proactive launch joins where ASK
+            /// `NEHotspotConfiguration.apply` only, used for proactive launch joins where ASK
             /// often fails to discover Nikon camera soft-APs.
             case hotspotConfigurationOnly
         }
@@ -262,7 +262,7 @@
         }
 
         /// Removes the camera network's hotspot configuration so iOS drops the AP and falls back to a
-        /// preferred network or cellular — the RED LUT "internet hop". The keychain password survives,
+        /// preferred network or cellular (the RED LUT "internet hop"). The keychain password survives,
         /// so a later ``reapplyCameraNetwork(ssid:)`` restores the link (iOS may re-ask to join once,
         /// since removing the configuration forgets the operator's prior approval).
         /// Queued behind a still pending apply, the removal runs only while `isCurrent` holds.
@@ -279,7 +279,7 @@
 
         /// Fire-and-forget re-apply of a known camera network's hotspot config. Pulls the phone back
         /// onto the camera AP after a pairing-triggered AP restart (the camera drops and re-raises its
-        /// Wi‑Fi), when the credentials are already saved. No wait — discovery confirms the return.
+        /// Wi‑Fi), when the credentials are already saved. No wait: discovery confirms the return.
         /// Every apply is operator-visible, so callers pay for cadence: see ``reapplyInFlightSince``.
         /// SSIDs whose re-apply the operator has declined. iOS shows a system "Wants to Join" alert
         /// for every apply, so a re-apply loop that ignores a Cancel becomes the cancel-storm
@@ -304,8 +304,8 @@
             // Discovery is the final arbiter of the return, so there is nothing to do here.
             if await isConnected(toSSID: ssid) { return }
 
-            // An apply aimed at an access point that is not broadcasting yet — a camera still
-            // rebooting after its Confirm — spends around fifteen seconds trying before iOS gives up
+            // An apply aimed at an access point that is not broadcasting yet (a camera still
+            // rebooting after its Confirm) spends around fifteen seconds trying before iOS gives up
             // with "Unable to connect". Applies from a caller's next tick do not shorten that; they
             // queue behind it and each buys the operator another alert and another failure, which is
             // how one rebooting camera produced a run of them. One attempt at a time. The elapsed

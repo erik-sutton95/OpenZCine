@@ -7,9 +7,6 @@ import Observation
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
-#if targetEnvironment(macCatalyst)
-    import OpenCineVirtualCamera
-#endif
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
@@ -39,6 +36,10 @@ import class OpenCineCameraVocabulary.CustomLUTStore
 import class OpenCineCameraVocabulary.LUTPreferences
 import struct OpenCineCameraVocabulary.MonitorLinkMeter
 import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
+
+#if targetEnvironment(macCatalyst)
+    import OpenCineVirtualCamera
+#endif
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -1215,7 +1216,8 @@ final class NativeAppModel {
         var macCaptureDevices: [(id: String, name: String)] {
             UVCVideoSource.availableCaptureDevices.filter {
                 !$0.id.hasPrefix("OpenCine.Camera.")
-                    && !["OpenZCine.VirtualCamera", "99AF34B4-61A6-4B31-A31B-A9808A147FF0"].contains($0.id)
+                    && !["OpenZCine.VirtualCamera", "99AF34B4-61A6-4B31-A31B-A9808A147FF0"]
+                        .contains($0.id)
             }
         }
 
@@ -8110,7 +8112,7 @@ final class NativeAppModel {
             logSubsystem: "com.opencapture.openzcine",
             selectedDeviceID: selectedCaptureID, requestedMode: requestedCaptureMode,
             onStateChange: { [weak self] state in
-                guard let self, self.hdmiCaptureLifetime == captureLifetime else { return }
+                guard let self, self.isCurrentHDMICapture(captureLifetime) else { return }
                 self.applyHDMICaptureState(state)
             })
         // The first frame's claimed colorimetry, appended to the settings readout. One line of
@@ -8118,7 +8120,7 @@ final class NativeAppModel {
         // monitoring LUT, or set the camera's HDMI output to SDR) from "the dongle mis-tags the
         // signal" (our side to correct) — without it both read as "the app shifted my colors".
         source.onSignalColorimetry = { [weak self] summary in
-            guard let self, self.hdmiCaptureLifetime == captureLifetime,
+            guard let self, self.isCurrentHDMICapture(captureLifetime),
                 case .streaming(let name, let format) = self.hdmiCaptureState
             else { return }
             self.applyHDMICaptureState(
@@ -8155,6 +8157,17 @@ final class NativeAppModel {
             }
         }
         Task { await source.start() }
+    }
+
+    /// Whether a capture callback belongs to the running capture. A Mac input or rate change
+    /// restarts capture, so a replaced source's late callback is dropped there. iOS keeps its
+    /// existing behaviour and admits every callback.
+    private func isCurrentHDMICapture(_ lifetime: UUID) -> Bool {
+        #if targetEnvironment(macCatalyst)
+            hdmiCaptureLifetime == lifetime
+        #else
+            true
+        #endif
     }
 
     /// Tears the capture path down. Safe when it was never started.
@@ -8207,19 +8220,19 @@ final class NativeAppModel {
         // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
         publishNativeFrame(
             display, clean: image, owner: .capture(source, generation), timestamp: timestamp)
-            sampleScopesIfDue(clean: image) { [weak self, weak source] in
-                guard let self, let source else { return false }
-                return self.videoSource == .hdmiCapture && self.uvcSource === source
-                    && source.fence.isCurrent(generation)
-            }
-            // The CPU path returns a distinct display-baked image; the Metal path returns the clean
-            // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
-            watchRelay.ingestFrame(
-                image: display,
-                applying: display === image ? liveImageEffects : nil,
-                timecode: liveTimecode,
-                isRecording: isRecording)
-            broadcastRelayFrame(image: image)
+        sampleScopesIfDue(clean: image) { [weak self, weak source] in
+            guard let self, let source else { return false }
+            return self.videoSource == .hdmiCapture && self.uvcSource === source
+                && source.fence.isCurrent(generation)
+        }
+        // The CPU path returns a distinct display-baked image; the Metal path returns the clean
+        // frame because its bake stays GPU-side, so the relay grades its own thumbnail instead.
+        watchRelay.ingestFrame(
+            image: display,
+            applying: display === image ? liveImageEffects : nil,
+            timecode: liveTimecode,
+            isRecording: isRecording)
+        broadcastRelayFrame(image: image)
         if !isMonitorPresented { isMonitorPresented = true }
         if isStreamRecovering { isStreamRecovering = false }
     }

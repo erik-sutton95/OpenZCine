@@ -310,7 +310,7 @@ struct CameraWiFiScannerScreen: View {
             }
 
             // ponytail: accept the first frame that fully validates rather than voting across N
-            // frames — the popup shows the result for the operator to confirm/edit before joining,
+            // frames; the popup shows the result for the operator to confirm/edit before joining,
             // which is the human vote. Add frame-consensus if field glare proves it necessary.
             private func handle(_ items: [RecognizedItem], _ scanner: DataScannerViewController) {
                 guard !didCapture else { return }

@@ -3,9 +3,6 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
-#if targetEnvironment(macCatalyst)
-    import OpenCineVirtualCamera
-#endif
 import OpenCineCameraControls
 import OpenCineMedia
 import OpenCineNikon
@@ -14,6 +11,10 @@ import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+
+#if targetEnvironment(macCatalyst)
+    import OpenCineVirtualCamera
+#endif
 
 /// What a command dashboard tile opens: a Nikon picker on one of its segmented tabs.
 struct NikonCommandRequest: Hashable {
