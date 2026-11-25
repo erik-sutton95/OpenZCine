@@ -14868,6 +14868,8 @@ struct NativeAppRoot: View {
         }
         #if targetEnvironment(macCatalyst)
             .task { DesktopModuleHost.current?.start() }
+            // In the dock: the desktop monitor, with its toolbar and keys.
+            .monitorDesktopCommands(DesktopModuleHost.current?.monitorSink)
         #endif
         .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
@@ -15791,3 +15793,14 @@ struct MediaProjectionMemo {
     let rows: [MediaClip]
     let pass: NikonAppGalleryProjection
 }
+
+#if targetEnvironment(macCatalyst)
+    extension DesktopModuleHost {
+        /// The dock module's commands as the shared live monitor's desktop sink.
+        var monitorSink: MonitorDesktopCommandSink {
+            MonitorDesktopCommandSink(
+                register: commands.register, unregister: commands.unregister,
+                applyLook: commands.applyLook)
+        }
+    }
+#endif

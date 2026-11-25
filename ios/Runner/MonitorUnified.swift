@@ -338,6 +338,7 @@ struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.monitorWindowGeometry) private var windowGeometry
+    @Environment(\.monitorChromeStyle) private var chromeStyle
     let context: LiveViewLayoutContext
     private typealias Section = MonitorDisplayChrome.Section
     private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, Section>
@@ -382,7 +383,8 @@ struct NikonMonitorShell: View {
             showsValues: model.chromeSectionMounts(.cameraValues),
             showsBottomBars: model.chromeSectionMounts(.toolBar)
                 || model.chromeSectionMounts(.cameraValues),
-            topControlInset: context.topControlInset, valueCount: readouts.count)
+            topControlInset: context.topControlInset, valueCount: readouts.count,
+            chrome: chromeStyle)
     }
     private var readouts: [Readout] {
         let values =

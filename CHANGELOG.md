@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added: Mac camera module for the OpenCine desktop app
 
+- Mac: in the dock the camera window works like a desktop app. The title bar is a toolbar with
+  the tabs, the take (STBY or REC and the timecode), and real Media and Settings buttons. One status
+  row under it shows link, battery, card, format, log profile, mode and audio, and the picture starts
+  below it. There is no interface lock on the Mac. Keys: ⌘R record, ⌘, settings, ⌘⇧M media,
+  ⌘1 to ⌘9 a tab, ⌃⇥ and ⌃⇧⇥ the next and previous tab, D the display overlays. The iOS
+  and Android apps are unchanged (OpenCine #403).
 - Mac: OpenZCine builds for Mac Catalyst as the Nikon Z camera module of the OpenCine desktop app,
   with HDMI/UVC capture device and 1080p mode selection, a clean LUT-treated webcam output and live
   status to the dock (`just macos-build`, `macos/module.json`). Its window carries the dock's
