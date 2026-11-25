@@ -1058,6 +1058,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.opencapture.openzcine.module;
+				"TARGETED_DEVICE_FAMILY[sdk=macosx*]" = "2,6";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -1245,6 +1246,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.opencapture.openzcine.module;
+				"TARGETED_DEVICE_FAMILY[sdk=macosx*]" = "2,6";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -1275,6 +1277,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.opencapture.openzcine.module;
+				"TARGETED_DEVICE_FAMILY[sdk=macosx*]" = "2,6";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
 				VERSIONING_SYSTEM = "apple-generic";
