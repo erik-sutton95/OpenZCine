@@ -1286,7 +1286,7 @@ struct OperatorSettingsPanel: View {
                                             .font(.system(size: 11, weight: .semibold))
                                             .foregroundStyle(.secondary)
                                     }
-                                }))))
+                                }.monitorMenuStyle()))))
                 source.append(
                     choice(
                         id: "picture.captureRate", title: "Capture Format",
