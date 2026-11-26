@@ -711,8 +711,8 @@ struct NikonMonitorShell: View {
             if let stream = model.liveStream {
                 let anchor = LiveStreamOverlayPlacement.anchor(
                     status: MonitorRect(
-                        x: live.topDeck.minX, y: live.topDeck.minY,
-                        width: live.topDeck.width, height: live.topDeck.height),
+                        x: live.liveStreamDeck.minX, y: live.liveStreamDeck.minY,
+                        width: live.liveStreamDeck.width, height: live.liveStreamDeck.height),
                     viewportWidth: live.viewport.width, safeTop: live.safeArea.top,
                     safeTrailing: live.safeArea.trailing)
                 LiveStreamMonitorOverlay(coordinator: stream)
