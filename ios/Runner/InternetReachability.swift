@@ -79,10 +79,6 @@ final class InternetReachability {
     }
 
     private static func fetchCurrentSSID() async -> String? {
-        await withCheckedContinuation { continuation in
-            NEHotspotNetwork.fetchCurrent { network in
-                continuation.resume(returning: network?.ssid)
-            }
-        }
+        await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
     }
 }

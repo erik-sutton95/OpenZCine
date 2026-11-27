@@ -338,6 +338,7 @@ struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.monitorWindowGeometry) private var windowGeometry
+    @Environment(\.monitorChromeStyle) private var chromeStyle
     let context: LiveViewLayoutContext
     private typealias Section = MonitorDisplayChrome.Section
     private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, Section>
@@ -382,7 +383,8 @@ struct NikonMonitorShell: View {
             showsValues: model.chromeSectionMounts(.cameraValues),
             showsBottomBars: model.chromeSectionMounts(.toolBar)
                 || model.chromeSectionMounts(.cameraValues),
-            topControlInset: context.topControlInset, valueCount: readouts.count)
+            topControlInset: context.topControlInset, valueCount: readouts.count,
+            chrome: chromeStyle)
     }
     private var readouts: [Readout] {
         let values =
@@ -709,8 +711,8 @@ struct NikonMonitorShell: View {
             if let stream = model.liveStream {
                 let anchor = LiveStreamOverlayPlacement.anchor(
                     status: MonitorRect(
-                        x: live.topDeck.minX, y: live.topDeck.minY,
-                        width: live.topDeck.width, height: live.topDeck.height),
+                        x: live.liveStreamDeck.minX, y: live.liveStreamDeck.minY,
+                        width: live.liveStreamDeck.width, height: live.liveStreamDeck.height),
                     viewportWidth: live.viewport.width, safeTop: live.safeArea.top,
                     safeTrailing: live.safeArea.trailing)
                 LiveStreamMonitorOverlay(coordinator: stream)

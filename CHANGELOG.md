@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added: Mac camera module for the OpenCine desktop app
+
+- Mac: the module runs optimized for Mac, so text and controls show at normal Mac size instead of
+  the whole window scaled to 77 %. In the dock the picture is centred below the status row with no
+  dark band above it, a window stays at least 800 by 600, and the scroll wheel steps ISO, shutter,
+  WB and the other dial settings while the pointer rests on one or its popup is open (a mouse
+  detent is one step, a trackpad steps every short distance, down or right is the next value; a
+  fast spin sends the latest value). The iOS and Android apps are unchanged (OpenCine #403).
+- Mac: in the dock the camera window works like a desktop app. The title bar is a toolbar with
+  the tabs, the take (STBY or REC and the timecode), and real Media and Settings buttons. One status
+  row under it shows link, battery, card, format, log profile, mode and audio, and the picture starts
+  below it. There is no interface lock on the Mac. Keys: ⌘R record, ⌘, settings, ⌘⇧M media,
+  ⌘1 to ⌘9 a tab, ⌃⇥ and ⌃⇧⇥ the next and previous tab, D the display overlays. The iOS
+  and Android apps are unchanged (OpenCine #403).
+- Mac: OpenZCine builds for Mac Catalyst as the Nikon Z camera module of the OpenCine desktop app,
+  with HDMI/UVC capture device and 1080p mode selection, a clean LUT-treated webcam output and live
+  status to the dock (`just macos-build`, `macos/module.json`). Its window carries the dock's
+  camera tabs in the title bar and moves like any Mac window (needs OpenCine 0.2.0). Local builds only; the iOS app is
+  unchanged.
+
 ### USB-C and Media gallery fixes
 
 - iOS: the Media gallery no longer hangs while a clip downloads on a large card. Each cell reads its

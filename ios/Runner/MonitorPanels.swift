@@ -12,6 +12,10 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+#if targetEnvironment(macCatalyst)
+    import OpenCineVirtualCamera
+#endif
+
 /// What a command dashboard tile opens: a Nikon picker on one of its segmented tabs.
 struct NikonCommandRequest: Hashable {
     let picker: CameraPicker
@@ -1256,6 +1260,43 @@ struct OperatorSettingsPanel: View {
                 })
         }
         if model.videoSource == .hdmiCapture {
+            #if targetEnvironment(macCatalyst)
+                source.append(
+                    .init(
+                        id: "picture.captureSelection", title: "HDMI / USB Input",
+                        help:
+                            "Choose the attached capture device. A missing selected device stays disconnected; the app never switches to another camera automatically.",
+                        value: .native(
+                            AnyView(
+                                Menu {
+                                    Button("Choose a device") { model.selectMacCaptureDevice("") }
+                                    ForEach(model.macCaptureDevices, id: \.id) { device in
+                                        Button(device.name) {
+                                            model.selectMacCaptureDevice(device.id)
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Text(
+                                            model.macCaptureDevices.first {
+                                                $0.id == model.macCaptureDeviceID
+                                            }?.name
+                                                ?? "Choose a device")
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }.monitorMenuStyle()))))
+                source.append(
+                    choice(
+                        id: "picture.captureRate", title: "Capture Format",
+                        help:
+                            "Requests the exact advertised 1080p mode. An unsupported mode reports an error so you can select another rate.",
+                        options: ["1080p30", "1080p60"], value: "1080p\(model.macCaptureFrameRate)"
+                    ) {
+                        model.selectMacCaptureFrameRate($0 == "1080p30" ? 30 : 60)
+                    })
+            #endif
             source.append(
                 .init(
                     id: "picture.capture", title: "Capture Device",
@@ -1379,7 +1420,36 @@ struct OperatorSettingsPanel: View {
             browse: model.showSavedCameras,
             passcodeChanged: { model.setRelayWatcherPasscode($0) },
             watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching",
-            unavailableValue: model.cameraState.cameraName)
+            unavailableValue: model.cameraState.cameraName,
+            additionalGroups: platformSharingGroups)
+    }
+
+    private var platformSharingGroups: [MonitorSettingsSourceGroup] {
+        #if targetEnvironment(macCatalyst)
+            guard let host = DesktopModuleHost.current else { return [] }
+            return [
+                .init(
+                    id: "sharing.virtualCamera", title: "Webcam Output",
+                    properties: [
+                        .init(
+                            id: "sharing.virtualCamera.enabled", title: "Send to OpenCine input",
+                            help:
+                                "Shares clean video with the monitor LUT with webcam apps. Monitor overlays stay here.",
+                            value: .toggle(
+                                .init(
+                                    value: Binding(
+                                        get: { host.output.isEnabled },
+                                        set: { host.output.setEnabled($0) }),
+                                    help: "", feedback: settingsFeedback))),
+                        .init(
+                            id: "sharing.virtualCamera.status", title: "Status",
+                            help: "The current camera input state.",
+                            value: .reported(host.output.statusText)),
+                    ])
+            ]
+        #else
+            return []
+        #endif
     }
 
     private var accountActions: MonitorSettingsAccountActions {

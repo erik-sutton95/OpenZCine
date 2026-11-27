@@ -118,6 +118,10 @@ ios-build:
 ios-test *args:
     ./scripts/ios-test.sh {{args}}
 
+# Build the Mac Catalyst camera module for the OpenCine desktop app (MACOS_DERIVED_DATA_PATH sets derived data).
+macos-build *args:
+    ./scripts/macos-build.sh {{args}}
+
 # Build the watchOS companion app for the simulator.
 watch-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch -destination 'generic/platform=watchOS Simulator' CODE_SIGNING_ALLOWED=NO build

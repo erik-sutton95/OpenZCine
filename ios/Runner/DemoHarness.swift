@@ -338,6 +338,9 @@ enum DemoHarness {
             #endif
             model.demoFeedImagePaths = DemoFeedImageDiscovery.launchImagePaths(
                 environment: env, fallbackDirectoryPath: localDemoFallback)
+            #if DEBUG && targetEnvironment(macCatalyst)
+                if env["ZC_DEMO_WEBCAM_TEST"] == "1" { model.startMacWebcamTestFeed() }
+            #endif
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
                 if env["ZC_DEMO_GRAPHICAL_REVIEW"] == "1" {
@@ -886,7 +889,9 @@ enum DemoHarness {
                     case "landscapeLeft": .landscapeLeft
                     default: .portrait
                     }
-                scenes.first?.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+                #if !targetEnvironment(macCatalyst)
+                    scenes.first?.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+                #endif
             }
             if let raw = env["ZC_DEMO_FEED_ASPECT"], env["ZC_DEMO_AUTOSTART"] != "1",
                 let aspect = PortraitFeedAspect(rawValue: raw)
